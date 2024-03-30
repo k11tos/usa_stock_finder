@@ -1,0 +1,17 @@
+pip==24.0
+numpy==1.26.4
+pandas==2.2.1
+python-dateutil==2.9.0.post0
+pytz==2024.1
+six==1.16.0
+tzdata==2024.1
+appdirs==1.4.4
+beautifulsoup4==4.12.3
+frozendict==2.4.0
+html5lib==1.1
+lxml==5.1.1
+multitasking==0.0.11
+peewee==3.17.1
+soupsieve==2.5
+webencodings==0.5.1
+yfinance==0.2.37
