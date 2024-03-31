@@ -67,51 +67,93 @@ class usa_stock_finder:
 
         return is_increasing
 
+    def has_valid_trend_tempate(self):
+        is_above_75_percent_of_high = (
+            self.is_above_75_percent_of_52_week_high()
+        )
+        is_above_low = self.is_above_52_week_low()
+        latest_50_ma = self.get_moving_averages(50)
+        latest_150_ma = self.get_moving_averages(150)
+        latest_200_ma = self.get_moving_averages(200)
+        current_price = self.current_price
+        is_ma_increasing = self.is_200_ma_increasing_recently()
 
-symbols = [
-    "HBB",
-    "DAKT",
-    "DRCT",
-    "EGRX",
-    "VLGEA",
-    "CAAS",
-    "WLFC",
-    "MCS",
-    "VIA",
-    "SND",
-    "BWEN",
-    "VIRC",
-    "FPAY",
-    "VNCE",
-    "PSHG",
-    "JAKK",
-    "UONE",
-    "VTNR",
-    "HNRG",
-    "OPFI",
-]
-finder = usa_stock_finder(symbols)
-if finder.is_data_valid():
-    is_above_75_percent_of_high = finder.is_above_75_percent_of_52_week_high()
-    is_above_low = finder.is_above_52_week_low()
-    latest_50_ma = finder.get_moving_averages(50)
-    latest_150_ma = finder.get_moving_averages(150)
-    latest_200_ma = finder.get_moving_averages(200)
-    current_price = finder.get_current_price()
-    is_ma_increasing = finder.is_200_ma_increasing_recently()
+        valid = {}
+        for symbol in self.symbol_list:
+            if (
+                current_price[symbol] >= latest_150_ma[symbol]
+                and current_price[symbol] >= latest_200_ma[symbol]
+                and latest_150_ma[symbol] >= latest_200_ma[symbol]
+                and is_ma_increasing[symbol]
+                and latest_50_ma[symbol] >= latest_150_ma[symbol]
+                and latest_50_ma[symbol] >= latest_200_ma[symbol]
+                and current_price[symbol] >= latest_50_ma[symbol]
+                and is_above_low[symbol]
+                and is_above_75_percent_of_high[symbol]
+            ):
+                valid[symbol] = True
+            else:
+                valid[symbol] = False
 
-    for symbol in symbols:
-        if (
-            current_price[symbol] >= latest_150_ma[symbol]
-            and current_price[symbol] >= latest_200_ma[symbol]
-            and latest_150_ma[symbol] >= latest_200_ma[symbol]
-            and is_ma_increasing[symbol]
-            and latest_50_ma[symbol] >= latest_150_ma[symbol]
-            and latest_50_ma[symbol] >= latest_200_ma[symbol]
-            and current_price[symbol] >= latest_50_ma[symbol]
-            and is_above_low[symbol]
-            and is_above_75_percent_of_high[symbol]
-        ):
-            print("Buy " + symbol)
-        else:
-            print("Don't buy " + symbol)
+        return valid
+
+    def is_in_phase_2(self, recent_days):
+        total_price_volume = {}
+        for symbol in self.symbol_list:
+            period_data = self.stock_data.tail(recent_days)
+            price_diff = period_data["Close"][symbol].diff()
+            volume_diff = period_data["Volume"][symbol].diff()
+            positive_price_volume = (
+                period_data[(price_diff >= 0) & (volume_diff >= 0)].shape[0]
+                / period_data.shape[0]
+                * 100
+            )
+            negative_price_volume = (
+                period_data[(price_diff < 0) & (volume_diff < 0)].shape[0]
+                / period_data.shape[0]
+                * 100
+            )
+            total_price_volume[symbol] = (
+                positive_price_volume + negative_price_volume
+            )
+        return total_price_volume
+
+
+def main():
+    symbols = [
+        "HBB",
+        "DAKT",
+        "DRCT",
+        "EGRX",
+        "VLGEA",
+        "CAAS",
+        "WLFC",
+        "MCS",
+        "VIA",
+        "SND",
+        "BWEN",
+        "VIRC",
+        "FPAY",
+        "VNCE",
+        "PSHG",
+        "JAKK",
+        "UONE",
+        "VTNR",
+        "HNRG",
+        "OPFI",
+    ]
+    finder = usa_stock_finder(symbols)
+    if finder.is_data_valid():
+        has_valid_trend = finder.has_valid_trend_tempate()
+        check_phase_2 = finder.is_in_phase_2(200)
+        for symbol in symbols:
+            if has_valid_trend[symbol]:
+                print("Buy " + symbol + " : " + str(check_phase_2[symbol]))
+            else:
+                print(
+                    "Don't buy " + symbol + " : " + str(check_phase_2[symbol])
+                )
+
+
+if __name__ == "__main__":
+    main()
