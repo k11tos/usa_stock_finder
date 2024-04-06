@@ -117,120 +117,123 @@ class usa_stock_finder:
                 positive_price_volume + negative_price_volume
             )
         return total_price_volume
-    
+
     def compare_volume_price_movement(self, recent_days):
         period_data = self.stock_data.tail(recent_days)
+        comparison_result = {}
         for symbol in self.symbol_list:
             average_volume = period_data["Volume"][symbol].mean()
             volume_data = period_data["Volume"][symbol]
             price_diff_data = period_data["Close"][symbol].diff()
-            volume_up_days = volume_data[volume_data > average_volume].shape[0]
-            price_up_days = volume_up_days[price_diff_data >= 0].shape[0]
+            volume_up_days = volume_data[volume_data > average_volume]
+            price_up_days = volume_up_days[(price_diff_data >= 0)].shape[0]
             price_down_days = volume_up_days[price_diff_data < 0].shape[0]
+            comparison_result[symbol] = price_up_days >= price_down_days
+        return comparison_result
 
 
 def main():
     symbols = [
-  "CINT",
- "SIGA",
- "TAST",
- "EGRX",
- "AMLX",
- "BRY",
- "SHIP",
- "BWEN",
- "PPIH",
- "KTCC",
- "CMPO",
- "GLDD",
- "VNCE",
- "AP",
- "CVGI",
- "PSHG",
- "PBYI",
- "CRWS",
- "CRCT",
- "DCGO",
- "ESOA",
- "MNTX",
- "SRTS",
- "FF",
- "ULBI",
- "FTK",
- "TZOO",
- "BRLT",
- "STGW",
- "HLLY",
- "STKS",
- "PFIE",
- "HGBL",
- "LINC",
- "GAMB",
- "CAAS",
- "DXLG",
- "OIS",
- "JVA",
- "AGS",
- "GLBS",
- "TORO",
- "STCN",
- "SGMA",
- "SWAG",
- "CTRM",
- "ARBB",
- "VMEO",
- "TK",
- "DHX",
- "MNDO",
- "RAYA",
- "VMD",
- "CACO",
- "GDHG",
- "MHUA",
- "LICN",
- "EDUC",
- "CHGG",
- "GASS",
- "VCIG",
- "TSRI",
- "HLP",
- "LOCO",
- "SB",
- "JYD",
- "GPRK",
- "OPXS",
- "RTC",
- "SLNG",
- "STBX",
- "SOI",
- "FPAY",
- "JCTCF",
- "ITI",
- "APWC",
- "SOTK",
- "GILT",
- "STRR",
- "PAYS",
- "MRAM",
- "CTLP",
- "EGAN",
- "WILC",
- "UG",
- "OPAL",
- "PXS",
- "ISSC",
- "PANL",
- "PCYO",
- "IMPP",
- "TLF",
- "ELSE",
- "KODK",
- "DSX",
- "AGMH",
- "ADTH",
- "OSUR",
- "DENN",
- "TTSH",
+        "CINT",
+        "SIGA",
+        "TAST",
+        "EGRX",
+        "AMLX",
+        "BRY",
+        "SHIP",
+        "BWEN",
+        "PPIH",
+        "KTCC",
+        "CMPO",
+        "GLDD",
+        "VNCE",
+        "AP",
+        "CVGI",
+        "PSHG",
+        "PBYI",
+        "CRWS",
+        "CRCT",
+        "DCGO",
+        "ESOA",
+        "MNTX",
+        "SRTS",
+        "FF",
+        "ULBI",
+        "FTK",
+        "TZOO",
+        "BRLT",
+        "STGW",
+        "HLLY",
+        "STKS",
+        "PFIE",
+        "HGBL",
+        "LINC",
+        "GAMB",
+        "CAAS",
+        "DXLG",
+        "OIS",
+        "JVA",
+        "AGS",
+        "GLBS",
+        "TORO",
+        "STCN",
+        "SGMA",
+        "SWAG",
+        "CTRM",
+        "ARBB",
+        "VMEO",
+        "TK",
+        "DHX",
+        "MNDO",
+        "RAYA",
+        "VMD",
+        "CACO",
+        "GDHG",
+        "MHUA",
+        "LICN",
+        "EDUC",
+        "CHGG",
+        "GASS",
+        "VCIG",
+        "TSRI",
+        "HLP",
+        "LOCO",
+        "SB",
+        "JYD",
+        "GPRK",
+        "OPXS",
+        "RTC",
+        "SLNG",
+        "STBX",
+        "SOI",
+        "FPAY",
+        "JCTCF",
+        "ITI",
+        "APWC",
+        "SOTK",
+        "GILT",
+        "STRR",
+        "PAYS",
+        "MRAM",
+        "CTLP",
+        "EGAN",
+        "WILC",
+        "UG",
+        "OPAL",
+        "PXS",
+        "ISSC",
+        "PANL",
+        "PCYO",
+        "IMPP",
+        "TLF",
+        "ELSE",
+        "KODK",
+        "DSX",
+        "AGMH",
+        "ADTH",
+        "OSUR",
+        "DENN",
+        "TTSH",
     ]
     finder = usa_stock_finder(symbols)
     if finder.is_data_valid():
@@ -238,13 +241,23 @@ def main():
         strong_in_200 = finder.price_volume_correlation_percent(200)
         strong_in_100 = finder.price_volume_correlation_percent(100)
         strong_in_50 = finder.price_volume_correlation_percent(50)
+        price_up_with_volume = finder.compare_volume_price_movement(200)
         for symbol in symbols:
-            if has_valid_trend[symbol] and strong_in_50[symbol] >= 50:
-                print("Buy " + symbol + " : " + str(strong_in_200[symbol]) + " : " + str(strong_in_100[symbol]) + " : " + str(strong_in_50[symbol]))
-            # else:
-            #     print(
-            #         "Don't buy " + symbol + " : " + str(check_phase_2[symbol])
-            #     )
+            if (
+                has_valid_trend[symbol]
+                and strong_in_50[symbol] >= 50
+                and price_up_with_volume[symbol]
+            ):
+                print(
+                    "Buy "
+                    + symbol
+                    + " : "
+                    + str(strong_in_200[symbol])
+                    + " : "
+                    + str(strong_in_100[symbol])
+                    + " : "
+                    + str(strong_in_50[symbol])
+                )
 
 
 if __name__ == "__main__":
