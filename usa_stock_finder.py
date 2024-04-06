@@ -80,7 +80,7 @@ class usa_stock_finder:
 
         valid = {}
         for symbol in self.symbol_list:
-            if (
+            valid[symbol] = (
                 current_price[symbol] >= latest_150_ma[symbol]
                 and current_price[symbol] >= latest_200_ma[symbol]
                 and latest_150_ma[symbol] >= latest_200_ma[symbol]
@@ -90,10 +90,7 @@ class usa_stock_finder:
                 and current_price[symbol] >= latest_50_ma[symbol]
                 and is_above_low[symbol]
                 and is_above_75_percent_of_high[symbol]
-            ):
-                valid[symbol] = True
-            else:
-                valid[symbol] = False
+            )
 
         return valid
 
