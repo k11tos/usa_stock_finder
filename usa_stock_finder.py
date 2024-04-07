@@ -1,4 +1,6 @@
 import yfinance as yf
+import os.path
+import csv
 
 
 class usa_stock_finder:
@@ -133,109 +135,24 @@ class usa_stock_finder:
         return comparison_result
 
 
+def read_first_column(file_path):
+    data = []
+    with open(file_path, newline="") as csvfile:
+        csv_reader = csv.reader(csvfile)
+        first_row = next(csv_reader)  # 첫 번째 행을 읽어옴
+        if first_row[0] == "Code":  # "Code" 행인 경우 pass
+            next(csv_reader)
+        for row in csv_reader:
+            code = row[0].split("-")[0]  # '-' 이전의 문자열만 선택
+            data.append(code)
+    return data
+
+
 def main():
-    symbols = [
-        "CINT",
-        "SIGA",
-        "TAST",
-        "EGRX",
-        "AMLX",
-        "BRY",
-        "SHIP",
-        "BWEN",
-        "PPIH",
-        "KTCC",
-        "CMPO",
-        "GLDD",
-        "VNCE",
-        "AP",
-        "CVGI",
-        "PSHG",
-        "PBYI",
-        "CRWS",
-        "CRCT",
-        "DCGO",
-        "ESOA",
-        "MNTX",
-        "SRTS",
-        "FF",
-        "ULBI",
-        "FTK",
-        "TZOO",
-        "BRLT",
-        "STGW",
-        "HLLY",
-        "STKS",
-        "PFIE",
-        "HGBL",
-        "LINC",
-        "GAMB",
-        "CAAS",
-        "DXLG",
-        "OIS",
-        "JVA",
-        "AGS",
-        "GLBS",
-        "TORO",
-        "STCN",
-        "SGMA",
-        "SWAG",
-        "CTRM",
-        "ARBB",
-        "VMEO",
-        "TK",
-        "DHX",
-        "MNDO",
-        "RAYA",
-        "VMD",
-        "CACO",
-        "GDHG",
-        "MHUA",
-        "LICN",
-        "EDUC",
-        "CHGG",
-        "GASS",
-        "VCIG",
-        "TSRI",
-        "HLP",
-        "LOCO",
-        "SB",
-        "JYD",
-        "GPRK",
-        "OPXS",
-        "RTC",
-        "SLNG",
-        "STBX",
-        "SOI",
-        "FPAY",
-        "JCTCF",
-        "ITI",
-        "APWC",
-        "SOTK",
-        "GILT",
-        "STRR",
-        "PAYS",
-        "MRAM",
-        "CTLP",
-        "EGAN",
-        "WILC",
-        "UG",
-        "OPAL",
-        "PXS",
-        "ISSC",
-        "PANL",
-        "PCYO",
-        "IMPP",
-        "TLF",
-        "ELSE",
-        "KODK",
-        "DSX",
-        "AGMH",
-        "ADTH",
-        "OSUR",
-        "DENN",
-        "TTSH",
-    ]
+    file_directory = "/Users/k11tos/Downloads"
+    file_name = "예시) 무작정따라하기_성장가치(소형주,미국)_portfolio_result (1).csv"
+    file_path = os.path.join(file_directory, file_name)
+    symbols = read_first_column(file_path)
     finder = usa_stock_finder(symbols)
     if finder.is_data_valid():
         has_valid_trend = finder.has_valid_trend_tempate()
