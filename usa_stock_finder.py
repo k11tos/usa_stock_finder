@@ -1,6 +1,16 @@
 import yfinance as yf
 import os.path
 import csv
+import json
+import requests
+import telegram
+import asyncio
+from dotenv import load_dotenv
+
+
+def send_telegram_message(bot_token, chat_id, message):
+    bot = telegram.Bot(bot_token)
+    asyncio.run(bot.sendMessage(chat_id=chat_id, text=message))
 
 
 class usa_stock_finder:
@@ -148,7 +158,24 @@ def read_first_column(file_path):
     return data
 
 
+# 리스트를 JSON 파일로 저장하는 함수
+def save_to_json(data, file_path):
+    with open(file_path, "w") as json_file:
+        json.dump(data, json_file)
+
+
+# JSON 파일을 읽어 리스트로 반환하는 함수
+def load_from_json(file_path):
+    with open(file_path, "r") as json_file:
+        data = json.load(json_file)
+    return data
+
+
 def main():
+    load_dotenv()
+    telegram_api_key = os.getenv("telegram_api_key")
+    telegram_manager_id = os.getenv("telegram_manager_id")
+    previous_selected_items = load_from_json("data.json")
     file_directory = "/Users/k11tos/Downloads"
     file_name = "예시) 무작정따라하기_성장가치(소형주,미국)_portfolio_result (1).csv"
     file_path = os.path.join(file_directory, file_name)
@@ -159,18 +186,36 @@ def main():
         strong_in_200 = finder.price_volume_correlation_percent(200)
         strong_in_100 = finder.price_volume_correlation_percent(100)
         strong_in_50 = finder.price_volume_correlation_percent(50)
+        selected_items = []
         for symbol in symbols:
             if has_valid_trend[symbol] and strong_in_50[symbol] >= 50:
-                print(
+                selected_items.append(symbol)
+                send_string = (
                     "Buy "
                     + symbol
                     + " : "
                     + str(strong_in_200[symbol])
-                    + " : "
+                    + " -> "
                     + str(strong_in_100[symbol])
-                    + " : "
+                    + " -> "
                     + str(strong_in_50[symbol])
                 )
+                print(send_string)
+                send_telegram_message(
+                    bot_token=telegram_api_key,
+                    chat_id=telegram_manager_id,
+                    message=send_string,
+                )
+        save_to_json(selected_items, "data.json")
+
+        for item in selected_items:
+            if item not in previous_selected_items:
+                send_string = "Please buy " + item
+                print(send_string)
+        for item in previous_selected_items:
+            if item not in selected_items:
+                send_string = "Please sell " + item
+                print(send_string)
 
 
 if __name__ == "__main__":
