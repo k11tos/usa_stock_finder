@@ -77,6 +77,9 @@ class usa_stock_finder:
         latest_200_ma = self.get_moving_averages(200)
         current_price = self.current_price
         is_ma_increasing = self.is_200_ma_increasing_recently()
+        is_increasing_with_volume_and_price = (
+            self.compare_volume_price_movement(200)
+        )
 
         valid = {}
         for symbol in self.symbol_list:
@@ -90,6 +93,7 @@ class usa_stock_finder:
                 and current_price[symbol] >= latest_50_ma[symbol]
                 and is_above_low[symbol]
                 and is_above_75_percent_of_high[symbol]
+                and is_increasing_with_volume_and_price[symbol]
             )
 
         return valid
@@ -238,13 +242,8 @@ def main():
         strong_in_200 = finder.price_volume_correlation_percent(200)
         strong_in_100 = finder.price_volume_correlation_percent(100)
         strong_in_50 = finder.price_volume_correlation_percent(50)
-        price_up_with_volume = finder.compare_volume_price_movement(200)
         for symbol in symbols:
-            if (
-                has_valid_trend[symbol]
-                and strong_in_50[symbol] >= 50
-                and price_up_with_volume[symbol]
-            ):
+            if has_valid_trend[symbol] and strong_in_50[symbol] >= 50:
                 print(
                     "Buy "
                     + symbol
