@@ -2,10 +2,10 @@ import yfinance as yf
 import os.path
 import csv
 import json
-import requests
 import telegram
 import asyncio
 from dotenv import load_dotenv
+from datetime import date
 
 
 def send_telegram_message(bot_token, chat_id, message):
@@ -153,7 +153,7 @@ def read_first_column(file_path):
         if first_row[0] == "Code":  # "Code" 행인 경우 pass
             next(csv_reader)
         for row in csv_reader:
-            if row == "":
+            if row[0] == "":
                 continue
             code = row[0].split("-")[0]  # '-' 이전의 문자열만 선택
             data.append(code)
@@ -193,8 +193,7 @@ def main():
             if has_valid_trend[symbol] and strong_in_50[symbol] >= 50:
                 selected_items.append(symbol)
                 send_string = (
-                    "Buy "
-                    + symbol
+                    symbol
                     + " : "
                     + str(strong_in_200[symbol])
                     + " -> "
@@ -203,21 +202,34 @@ def main():
                     + str(strong_in_50[symbol])
                 )
                 print(send_string)
-                send_telegram_message(
-                    bot_token=telegram_api_key,
-                    chat_id=telegram_manager_id,
-                    message=send_string,
-                )
         save_to_json(selected_items, "data.json")
+
+        today_string = str(date.today())
+        print(today_string)
+        send_telegram_message(
+            bot_token=telegram_api_key,
+            chat_id=telegram_manager_id,
+            message=today_string,
+        )
 
         for item in selected_items:
             if item not in previous_selected_items:
                 send_string = "Please buy " + item
                 print(send_string)
+                send_telegram_message(
+                    bot_token=telegram_api_key,
+                    chat_id=telegram_manager_id,
+                    message=send_string,
+                )
         for item in previous_selected_items:
             if item not in selected_items:
                 send_string = "Please sell " + item
                 print(send_string)
+                send_telegram_message(
+                    bot_token=telegram_api_key,
+                    chat_id=telegram_manager_id,
+                    message=send_string,
+                )
 
 
 if __name__ == "__main__":
