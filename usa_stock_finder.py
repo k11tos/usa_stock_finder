@@ -153,6 +153,8 @@ def read_first_column(file_path):
         if first_row[0] == "Code":  # "Code" 행인 경우 pass
             next(csv_reader)
         for row in csv_reader:
+            if row == "":
+                continue
             code = row[0].split("-")[0]  # '-' 이전의 문자열만 선택
             data.append(code)
     return data
