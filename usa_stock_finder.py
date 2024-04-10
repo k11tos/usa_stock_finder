@@ -1,11 +1,11 @@
-import yfinance as yf
 import os.path
 import csv
 import json
-import telegram
 import asyncio
-from dotenv import load_dotenv
 from datetime import date
+from dotenv import load_dotenv
+import telegram
+import yfinance as yf
 
 
 def send_telegram_message(bot_token, chat_id, message):
@@ -13,7 +13,7 @@ def send_telegram_message(bot_token, chat_id, message):
     asyncio.run(bot.sendMessage(chat_id=chat_id, text=message))
 
 
-class usa_stock_finder:
+class UsaStockFinder:
     def __init__(self, symbols):
         self.stock_data = yf.download(symbols, period="1y", interval="1d")
         self.symbol_list = symbols
@@ -182,7 +182,7 @@ def main():
     file_name = "portfolio.csv"
     file_path = os.path.join(file_directory, file_name)
     symbols = read_first_column(file_path)
-    finder = usa_stock_finder(symbols)
+    finder = UsaStockFinder(symbols)
     telegram_send_string = []
     if finder.is_data_valid():
         has_valid_trend = finder.has_valid_trend_tempate()
