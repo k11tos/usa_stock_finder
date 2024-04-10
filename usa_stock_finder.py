@@ -176,8 +176,8 @@ def main():
     telegram_api_key = os.getenv("telegram_api_key")
     telegram_manager_id = os.getenv("telegram_manager_id")
     previous_selected_items = load_from_json("data.json")
-    file_directory = "/Users/k11tos/Downloads"
-    file_name = "예시) 무작정따라하기_성장가치(소형주,미국)_portfolio_result (1).csv"
+    file_directory = "."
+    file_name = "portfolio.csv"
     file_path = os.path.join(file_directory, file_name)
     symbols = read_first_column(file_path)
     finder = usa_stock_finder(symbols)
