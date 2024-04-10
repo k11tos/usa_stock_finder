@@ -183,6 +183,7 @@ def main():
     file_path = os.path.join(file_directory, file_name)
     symbols = read_first_column(file_path)
     finder = usa_stock_finder(symbols)
+    telegram_send_string = []
     if finder.is_data_valid():
         has_valid_trend = finder.has_valid_trend_tempate()
         strong_in_200 = finder.price_volume_correlation_percent(200)
@@ -205,31 +206,22 @@ def main():
         save_to_json(selected_items, "data.json")
 
         today_string = str(date.today())
-        print(today_string)
-        send_telegram_message(
-            bot_token=telegram_api_key,
-            chat_id=telegram_manager_id,
-            message=today_string,
-        )
+        telegram_send_string.append(today_string)
 
         for item in selected_items:
             if item not in previous_selected_items:
-                send_string = "Please buy " + item
-                print(send_string)
-                send_telegram_message(
-                    bot_token=telegram_api_key,
-                    chat_id=telegram_manager_id,
-                    message=send_string,
-                )
+                send_string = "Buy " + item
+                telegram_send_string.append(send_string)
         for item in previous_selected_items:
             if item not in selected_items:
-                send_string = "Please sell " + item
-                print(send_string)
-                send_telegram_message(
-                    bot_token=telegram_api_key,
-                    chat_id=telegram_manager_id,
-                    message=send_string,
-                )
+                send_string = "Sell " + item
+                telegram_send_string.append(send_string)
+        if len(telegram_send_string) > 1:
+            send_telegram_message(
+                bot_token=telegram_api_key,
+                chat_id=telegram_manager_id,
+                message="\n".join(telegram_send_string),
+            )
 
 
 if __name__ == "__main__":
