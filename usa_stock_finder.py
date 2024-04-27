@@ -234,23 +234,26 @@ def main():
                     + str(strong_in_50[symbol])
                 )
                 logging.debug(send_string)
-        # save_to_json(selected_items, "data.json")
 
         today_string = str(date.today())
         telegram_send_string.append(today_string)
 
+        final_items = previous_selected_items.copy()
         
         for item in selected_buy_items:
             if item not in previous_selected_items:
                 send_string = "Buy " + item
                 telegram_send_string.append(send_string)
+                final_items.append(item)
+                
+        keep_items = list(set(selected_buy_items) | set(selected_not_sell_items))
         
-        selected_not_sell_items = list(set(selected_not_sell_items) | set(selected_buy_items))        
-        joined_list = list(set(previous_selected_items) | set(selected_buy_items))
-        for item in joined_list:
-            if item not in selected_not_sell_items:
+        for item in previous_selected_items:
+            if item not in keep_items:
                 send_string = "Sell " + item
                 telegram_send_string.append(send_string)
+                final_items.remove(item)
+                
         if len(telegram_send_string) > 1:
             send_telegram_message(
                 bot_token=telegram_api_key,
@@ -258,6 +261,8 @@ def main():
                 message="\n".join(telegram_send_string),
             )
             logging.debug(telegram_send_string)
+            
+        save_to_json(final_items, "data.json")
 
 
 if __name__ == "__main__":
