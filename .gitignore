@@ -1,6 +1,6 @@
 env
 .env
-*.json
+data.json
 *.ipynb
 *.csv
 run.sh

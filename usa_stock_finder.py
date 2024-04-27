@@ -4,9 +4,27 @@ import json
 import asyncio
 from datetime import date
 from dotenv import load_dotenv
+import atexit
+import logging.config
+import logging.handlers
+import pathlib
 import telegram
 import yfinance as yf
 
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    config_file = pathlib.Path("logging_config/logging_config.json")
+    with open(config_file) as f_in:
+        config = json.load(f_in)
+
+    logging.config.dictConfig(config)
+    queue_handler = logging.getHandlerByName("queue_handler")
+    if queue_handler is not None:
+        queue_handler.listener.start()
+        atexit.register(queue_handler.listener.stop)
 
 def send_telegram_message(bot_token, chat_id, message):
     bot = telegram.Bot(bot_token)
@@ -189,10 +207,11 @@ def main():
         strong_in_200 = finder.price_volume_correlation_percent(200)
         strong_in_100 = finder.price_volume_correlation_percent(100)
         strong_in_50 = finder.price_volume_correlation_percent(50)
-        selected_items = []
+        selected_buy_items = []
+        selected_not_sell_items = []
         for symbol in symbols:
             if has_valid_trend[symbol] and strong_in_50[symbol] >= 50:
-                selected_items.append(symbol)
+                selected_buy_items.append(symbol)
                 send_string = (
                     symbol
                     + " : "
@@ -202,18 +221,34 @@ def main():
                     + " -> "
                     + str(strong_in_50[symbol])
                 )
-                print(send_string)
-        save_to_json(selected_items, "data.json")
+                logging.debug(send_string)
+            elif has_valid_trend[symbol] and strong_in_50[symbol] >= 40:
+                selected_not_sell_items.append(symbol)
+                send_string = (
+                    symbol
+                    + " : "
+                    + str(strong_in_200[symbol])
+                    + " -> "
+                    + str(strong_in_100[symbol])
+                    + " -> "
+                    + str(strong_in_50[symbol])
+                )
+                logging.debug(send_string)
+        # save_to_json(selected_items, "data.json")
 
         today_string = str(date.today())
         telegram_send_string.append(today_string)
 
-        for item in selected_items:
+        
+        for item in selected_buy_items:
             if item not in previous_selected_items:
                 send_string = "Buy " + item
                 telegram_send_string.append(send_string)
-        for item in previous_selected_items:
-            if item not in selected_items:
+        
+        selected_not_sell_items = list(set(selected_not_sell_items) | set(selected_buy_items))        
+        joined_list = list(set(previous_selected_items) | set(selected_buy_items))
+        for item in joined_list:
+            if item not in selected_not_sell_items:
                 send_string = "Sell " + item
                 telegram_send_string.append(send_string)
         if len(telegram_send_string) > 1:
@@ -222,6 +257,7 @@ def main():
                 chat_id=telegram_manager_id,
                 message="\n".join(telegram_send_string),
             )
+            logging.debug(telegram_send_string)
 
 
 if __name__ == "__main__":
