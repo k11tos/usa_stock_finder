@@ -97,7 +97,7 @@ class UsaStockFinder:
 
         return is_increasing
 
-    def has_valid_trend_tempate(self):
+    def has_valid_trend_tempate(self, margin):
         is_above_75_percent_of_high = (
             self.is_above_75_percent_of_52_week_high()
         )
@@ -114,13 +114,13 @@ class UsaStockFinder:
         valid = {}
         for symbol in self.symbol_list:
             valid[symbol] = (
-                current_price[symbol] >= latest_150_ma[symbol]
-                and current_price[symbol] >= latest_200_ma[symbol]
-                and latest_150_ma[symbol] >= latest_200_ma[symbol]
+                current_price[symbol] >= latest_150_ma[symbol] * (1 - margin)
+                and current_price[symbol] >= latest_200_ma[symbol] * (1 - margin)
+                and latest_150_ma[symbol] >= latest_200_ma[symbol] * (1 - margin)
                 and is_ma_increasing[symbol]
-                and latest_50_ma[symbol] >= latest_150_ma[symbol]
-                and latest_50_ma[symbol] >= latest_200_ma[symbol]
-                and current_price[symbol] >= latest_50_ma[symbol]
+                and latest_50_ma[symbol] >= latest_150_ma[symbol] * (1 - margin)
+                and latest_50_ma[symbol] >= latest_200_ma[symbol] * (1 - margin)
+                and current_price[symbol] >= latest_50_ma[symbol] * (1 - margin)
                 and is_above_low[symbol]
                 and is_above_75_percent_of_high[symbol]
                 and is_increasing_with_volume_and_price[symbol]
@@ -203,7 +203,8 @@ def main():
     finder = UsaStockFinder(symbols)
     telegram_send_string = []
     if finder.is_data_valid():
-        has_valid_trend = finder.has_valid_trend_tempate()
+        has_valid_trend = finder.has_valid_trend_tempate(0)
+        has_valid_trend_w_margin = finder.has_valid_trend_tempate(0.1)
         strong_in_200 = finder.price_volume_correlation_percent(200)
         strong_in_100 = finder.price_volume_correlation_percent(100)
         strong_in_50 = finder.price_volume_correlation_percent(50)
@@ -222,7 +223,7 @@ def main():
                     + str(strong_in_50[symbol])
                 )
                 logging.debug(send_string)
-            elif has_valid_trend[symbol] and strong_in_50[symbol] >= 40:
+            elif has_valid_trend_w_margin[symbol] and strong_in_50[symbol] >= 40:
                 selected_not_sell_items.append(symbol)
                 send_string = (
                     symbol
