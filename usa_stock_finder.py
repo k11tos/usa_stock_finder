@@ -1,3 +1,13 @@
+"""
+usa_stock_finder.py
+
+This module provides functionalities to find and analyze USA stock data.
+It includes functions to fetch stock prices, analyze trends, and generate
+reports for better investment decisions.
+
+Author: Breadpig based on the theory from Mark Minervini
+Date: 2024.05.19
+"""
 import os.path
 import csv
 import json
