@@ -79,14 +79,6 @@ class UsaStockFinder:
         """
         return not self.stock_data.empty
 
-    def get_current_price(self):
-        """Returns the current price.
-
-        Returns:
-            dictionary: Dictionary with the given ticker and the current price.
-        """
-        return self.current_price
-
     def is_above_75_percent_of_52_week_high(self, margin):
         """Checks if the current price is higher than 75% of the 52-week high.
 
@@ -317,48 +309,44 @@ def load_from_json(file_path):
 def main():
     """Main function."""
     load_dotenv()
-    telegram_api_key = os.getenv("telegram_api_key")
-    telegram_manager_id = os.getenv("telegram_manager_id")
     previous_selected_items = load_from_json("data.json")
-    file_directory = "."
-    file_name = "portfolio.csv"
-    file_path = os.path.join(file_directory, file_name)
-    symbols = read_first_column(file_path)
+    symbols = read_first_column(os.path.join(".", "portfolio.csv"))
     finder = UsaStockFinder(symbols)
     telegram_send_string = []
+    strong_in = {}
     if finder.is_data_valid():
         has_valid_trend = finder.has_valid_trend_tempate(0)
         has_valid_trend_w_margin = finder.has_valid_trend_tempate(0.1)
-        strong_in_200 = finder.price_volume_correlation_percent(200)
-        strong_in_100 = finder.price_volume_correlation_percent(100)
-        strong_in_50 = finder.price_volume_correlation_percent(50)
+        strong_in["200"] = finder.price_volume_correlation_percent(200)
+        strong_in["100"] = finder.price_volume_correlation_percent(100)
+        strong_in["50"] = finder.price_volume_correlation_percent(50)
         selected_buy_items = []
         selected_not_sell_items = []
         for symbol in symbols:
-            if has_valid_trend[symbol] and strong_in_50[symbol] >= 50:
+            if has_valid_trend[symbol] and strong_in["50"][symbol] >= 50:
                 selected_buy_items.append(symbol)
                 send_string = (
                     symbol
                     + " : "
-                    + str(strong_in_200[symbol])
+                    + str(strong_in["200"][symbol])
                     + " -> "
-                    + str(strong_in_100[symbol])
+                    + str(strong_in["100"][symbol])
                     + " -> "
-                    + str(strong_in_50[symbol])
+                    + str(strong_in["50"][symbol])
                 )
                 logging.debug(send_string)
             elif (
-                has_valid_trend_w_margin[symbol] and strong_in_50[symbol] >= 40
+                has_valid_trend_w_margin[symbol] and strong_in["50"][symbol] >= 40
             ):
                 selected_not_sell_items.append(symbol)
                 send_string = (
                     symbol
                     + " : "
-                    + str(strong_in_200[symbol])
+                    + str(strong_in["200"][symbol])
                     + " -> "
-                    + str(strong_in_100[symbol])
+                    + str(strong_in["100"][symbol])
                     + " -> "
-                    + str(strong_in_50[symbol])
+                    + str(strong_in["50"][symbol])
                 )
                 logging.debug(send_string)
 
@@ -385,8 +373,8 @@ def main():
 
         if len(telegram_send_string) > 1:
             send_telegram_message(
-                bot_token=telegram_api_key,
-                chat_id=telegram_manager_id,
+                bot_token=os.getenv("telegram_api_key"),
+                chat_id=os.getenv("telegram_manager_id"),
                 message="\n".join(telegram_send_string),
             )
             logging.debug(telegram_send_string)
