@@ -89,9 +89,9 @@ class UsaStockFinder:
         """
         is_above_75_percent_of_high = {}
         for symbol in self.symbol_list:
-            is_above_75_percent_of_high[symbol] = self.current_price[
-                symbol
-            ] > self.last_high[symbol] * 0.75 * (1 - margin)
+            is_above_75_percent_of_high[symbol] = self.current_price[symbol] > self.last_high[symbol] * 0.75 * (
+                1 - margin
+            )
 
         return is_above_75_percent_of_high
 
@@ -106,11 +106,7 @@ class UsaStockFinder:
         """
         is_above_low = {}
         for symbol in self.symbol_list:
-            increase_percentage = (
-                (self.current_price[symbol] - self.last_low[symbol])
-                / self.last_low[symbol]
-                * 100
-            )
+            increase_percentage = (self.current_price[symbol] - self.last_low[symbol]) / self.last_low[symbol] * 100
             is_above_low[symbol] = increase_percentage >= 30 * (1 - margin)
         return is_above_low
 
@@ -168,9 +164,7 @@ class UsaStockFinder:
         latest_200_ma = self.get_moving_averages(200)
         current_price = self.current_price
         is_ma_increasing = self.is_200_ma_increasing_recently(margin)
-        is_increasing_with_volume_and_price = self.compare_volume_price_movement(
-            200, margin
-        )
+        is_increasing_with_volume_and_price = self.compare_volume_price_movement(200, margin)
 
         valid = {}
         for symbol in self.symbol_list:
@@ -204,14 +198,10 @@ class UsaStockFinder:
             price_diff = period_data["Close"][symbol].diff()
             volume_diff = period_data["Volume"][symbol].diff()
             positive_price_volume = (
-                period_data[(price_diff >= 0) & (volume_diff >= 0)].shape[0]
-                / period_data.shape[0]
-                * 100
+                period_data[(price_diff >= 0) & (volume_diff >= 0)].shape[0] / period_data.shape[0] * 100
             )
             negative_price_volume = (
-                period_data[(price_diff < 0) & (volume_diff < 0)].shape[0]
-                / period_data.shape[0]
-                * 100
+                period_data[(price_diff < 0) & (volume_diff < 0)].shape[0] / period_data.shape[0] * 100
             )
             total_price_volume[symbol] = positive_price_volume + negative_price_volume
         return total_price_volume
