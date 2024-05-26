@@ -29,3 +29,4 @@ mccabe==0.7.0
 platformdirs==4.2.2
 pylint==3.2.1
 tomlkit==0.12.5
+ruff==0.4.5
