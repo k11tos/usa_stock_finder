@@ -8,19 +8,20 @@ reports for better investment decisions.
 Author: Breadpig based on the theory from Mark Minervini
 Date: 2024.05.19
 """
-import os.path
+
+import asyncio
+import atexit
 import csv
 import json
-import asyncio
-from datetime import date
-import atexit
 import logging.config
 import logging.handlers
+import os.path
 import pathlib
-from dotenv import load_dotenv
+from datetime import date
+
 import telegram
 import yfinance as yf
-
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,7 @@ class UsaStockFinder:
         self.current_price = {}
         for symbol in self.symbol_list:
             self.last_high[symbol] = self.stock_data["High"][symbol].max()
-            self.current_price[symbol] = self.stock_data["Close"][symbol].iloc[
-                -1
-            ]
+            self.current_price[symbol] = self.stock_data["Close"][symbol].iloc[-1]
             self.last_low[symbol] = self.stock_data["Low"][symbol].min()
 
     def is_data_valid(self):
@@ -126,9 +125,7 @@ class UsaStockFinder:
         """
         latest_ma = {}
         for symbol in self.symbol_list:
-            hist_data = (
-                self.stock_data["Close"][symbol].rolling(window=days).mean()
-            )
+            hist_data = self.stock_data["Close"][symbol].rolling(window=days).mean()
             latest_ma[symbol] = hist_data.iloc[-1]
 
         return latest_ma
@@ -145,17 +142,13 @@ class UsaStockFinder:
         is_increasing = {}
         for symbol in self.symbol_list:
             # Calculate 200-day moving average
-            ma_200 = (
-                self.stock_data["Close"][symbol].rolling(window=200).mean()
-            )
+            ma_200 = self.stock_data["Close"][symbol].rolling(window=200).mean()
 
             current_data = ma_200.iloc[-1]
             one_month_ago_data = ma_200.iloc[-21]
 
             # Check if current moving average is higher than one month ago
-            is_increasing[symbol] = current_data >= one_month_ago_data * (
-                1 - margin
-            )
+            is_increasing[symbol] = current_data >= one_month_ago_data * (1 - margin)
 
         return is_increasing
 
@@ -168,34 +161,27 @@ class UsaStockFinder:
         Returns:
             bool: True means the current price meets the trend template.
         """
-        is_above_75_percent_of_high = self.is_above_75_percent_of_52_week_high(
-            margin
-        )
+        is_above_75_percent_of_high = self.is_above_75_percent_of_52_week_high(margin)
         is_above_low = self.is_above_52_week_low(margin)
         latest_50_ma = self.get_moving_averages(50)
         latest_150_ma = self.get_moving_averages(150)
         latest_200_ma = self.get_moving_averages(200)
         current_price = self.current_price
         is_ma_increasing = self.is_200_ma_increasing_recently(margin)
-        is_increasing_with_volume_and_price = (
-            self.compare_volume_price_movement(200, margin)
+        is_increasing_with_volume_and_price = self.compare_volume_price_movement(
+            200, margin
         )
 
         valid = {}
         for symbol in self.symbol_list:
             valid[symbol] = (
                 current_price[symbol] >= latest_150_ma[symbol] * (1 - margin)
-                and current_price[symbol]
-                >= latest_200_ma[symbol] * (1 - margin)
-                and latest_150_ma[symbol]
-                >= latest_200_ma[symbol] * (1 - margin)
+                and current_price[symbol] >= latest_200_ma[symbol] * (1 - margin)
+                and latest_150_ma[symbol] >= latest_200_ma[symbol] * (1 - margin)
                 and is_ma_increasing[symbol]
-                and latest_50_ma[symbol]
-                >= latest_150_ma[symbol] * (1 - margin)
-                and latest_50_ma[symbol]
-                >= latest_200_ma[symbol] * (1 - margin)
-                and current_price[symbol]
-                >= latest_50_ma[symbol] * (1 - margin)
+                and latest_50_ma[symbol] >= latest_150_ma[symbol] * (1 - margin)
+                and latest_50_ma[symbol] >= latest_200_ma[symbol] * (1 - margin)
+                and current_price[symbol] >= latest_50_ma[symbol] * (1 - margin)
                 and is_above_low[symbol]
                 and is_above_75_percent_of_high[symbol]
                 and is_increasing_with_volume_and_price[symbol]
@@ -227,9 +213,7 @@ class UsaStockFinder:
                 / period_data.shape[0]
                 * 100
             )
-            total_price_volume[symbol] = (
-                positive_price_volume + negative_price_volume
-            )
+            total_price_volume[symbol] = positive_price_volume + negative_price_volume
         return total_price_volume
 
     def compare_volume_price_movement(self, recent_days, margin):
@@ -252,9 +236,7 @@ class UsaStockFinder:
             volume_up_days = volume_data[volume_data > average_volume]
             price_up_days = volume_up_days[(price_diff_data >= 0)].shape[0]
             price_down_days = volume_up_days[price_diff_data < 0].shape[0]
-            comparison_result[symbol] = price_up_days >= price_down_days * (
-                1 - margin
-            )
+            comparison_result[symbol] = price_up_days >= price_down_days * (1 - margin)
         return comparison_result
 
 
@@ -335,9 +317,7 @@ def main():
                     + str(strong_in["50"][symbol])
                 )
                 logging.debug(send_string)
-            elif (
-                has_valid_trend_w_margin[symbol] and strong_in["50"][symbol] >= 40
-            ):
+            elif has_valid_trend_w_margin[symbol] and strong_in["50"][symbol] >= 40:
                 selected_not_sell_items.append(symbol)
                 send_string = (
                     symbol
@@ -361,9 +341,7 @@ def main():
                 telegram_send_string.append(send_string)
                 final_items.append(item)
 
-        keep_items = list(
-            set(selected_buy_items) | set(selected_not_sell_items)
-        )
+        keep_items = list(set(selected_buy_items) | set(selected_not_sell_items))
 
         for item in previous_selected_items:
             if item not in keep_items:
