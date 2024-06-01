@@ -4,3 +4,4 @@ data.json
 *.ipynb
 *.csv
 run.sh
+token.dat

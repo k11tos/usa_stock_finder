@@ -19,6 +19,8 @@ import os.path
 import pathlib
 from datetime import date
 
+import jmespath
+import mojito
 import telegram
 import yfinance as yf
 from dotenv import load_dotenv
@@ -278,10 +280,31 @@ def load_from_json(file_path):
     return data
 
 
+def get_stock_tickers():
+    """get stock tickers from stock account
+
+    Returns:
+        list: ticker list of stock
+    """
+    load_dotenv()
+
+    broker = mojito.KoreaInvestment(
+        api_key=os.getenv("ki_app_key"),
+        api_secret=os.getenv("ki_app_secret_key"),
+        acc_no=os.getenv("account_number"),
+        exchange="나스닥",
+    )
+    balance = broker.fetch_present_balance()
+    previous_selected_items = jmespath.search("output1[*].pdno", balance)
+    return previous_selected_items
+
+
 def main():
     """Main function."""
     load_dotenv()
-    previous_selected_items = load_from_json("data.json")
+
+    previous_selected_items = get_stock_tickers()
+
     symbols = read_first_column(os.path.join(".", "portfolio.csv"))
     finder = UsaStockFinder(symbols)
     telegram_send_string = []
