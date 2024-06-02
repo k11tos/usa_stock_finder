@@ -29,10 +29,10 @@
       },
       "file_json": {
         "class": "logging.handlers.RotatingFileHandler",
-        "level": "DEBUG",
+        "level": "INFO",
         "formatter": "json",
         "filename": "log.json",
-        "maxBytes": 10000,
+        "maxBytes": 10000000,
         "backupCount": 3
       },
       "queue_handler": {

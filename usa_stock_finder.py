@@ -301,6 +301,7 @@ def get_stock_tickers():
 
 def main():
     """Main function."""
+    setup_logging()
     load_dotenv()
 
     previous_selected_items = get_stock_tickers()

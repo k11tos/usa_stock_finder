@@ -5,3 +5,5 @@ data.json
 *.csv
 run.sh
 token.dat
+log.json*
+__pycache__
