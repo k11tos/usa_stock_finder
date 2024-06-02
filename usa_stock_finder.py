@@ -295,6 +295,11 @@ def get_stock_tickers():
         exchange="나스닥",
     )
     balance = broker.fetch_present_balance()
+    if balance["rt_cd"] != "0":
+        logger.error("Failed to get stock tickers from stock account")
+        logger.error(balance["msg1"])
+        return None
+
     previous_selected_items = jmespath.search("output1[*].pdno", balance)
     return previous_selected_items
 
@@ -305,6 +310,9 @@ def main():
     load_dotenv()
 
     previous_selected_items = get_stock_tickers()
+    if previous_selected_items is None:
+        logger.error("Failed to get stock tickers from stock account")
+        return
 
     symbols = read_first_column(os.path.join(".", "portfolio.csv"))
     finder = UsaStockFinder(symbols)
