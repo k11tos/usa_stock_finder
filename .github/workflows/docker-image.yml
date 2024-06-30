@@ -10,9 +10,12 @@ jobs:
 
   build:
 
-    runs-on: debian-latest
-
+    runs-on: ubuntu-latest    
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag usa_stock_finder:$(date +%s) --platform linux/arm/v7
+      - uses: actions/checkout@v4
+      - name: Build the Docker image
+        uses: cross-platform-actions/action@v0.23.0
+        with:
+          operating_system: freebsd
+          version: '14.0'
+          run: docker build . --file Dockerfile --tag usa_stock_finder:$(date +%s) --platform linux/arm/v7
