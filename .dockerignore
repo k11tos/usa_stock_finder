@@ -1,0 +1,12 @@
+Dockerfile
+.git
+.github
+.gitignore
+.pre-commit-config.yaml
+.pylintrc
+.ruff_cache
+.venv
+__pycache__
+log.json
+test.ipynb
+token.dat
