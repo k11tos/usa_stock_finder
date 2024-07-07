@@ -250,7 +250,7 @@ def read_first_column(file_path):
         for row in csv_reader:
             if row[0] == "":
                 continue
-            code = row[0].split("-US")[0]  # '-' 이전의 문자열만 선택
+            code = row[0].replace("-US", "").replace("/", "-")
             data.append(code)
     return data
 
