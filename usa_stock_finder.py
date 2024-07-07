@@ -17,6 +17,7 @@ import logging.config
 import logging.handlers
 import os.path
 import pathlib
+import re
 from datetime import date
 
 import jmespath
@@ -250,7 +251,9 @@ def read_first_column(file_path):
         for row in csv_reader:
             if row[0] == "":
                 continue
-            code = row[0].replace("-US", "").replace("/", "-")
+            # code = row[0].replace("-US", "").replace("/", "-")
+            code = re.sub("-US$", "", row[0])
+            code = code.replace("/", "-")
             data.append(code)
     return data
 
