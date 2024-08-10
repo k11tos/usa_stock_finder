@@ -1,10 +1,8 @@
-FROM arm32v7/python:3.12-alpine
+FROM python:3.12-alpine
 
 RUN apk update && \
         apk add --no-cache \
         bash
-
-RUN apk add --update build-base python3-dev py-pip cmake
 
 WORKDIR /py_app
 
