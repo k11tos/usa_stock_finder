@@ -7,3 +7,4 @@ run.sh
 token.dat
 log.json*
 __pycache__
+env
