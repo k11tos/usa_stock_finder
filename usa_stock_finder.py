@@ -317,7 +317,7 @@ def main():
         logger.error("Failed to get stock tickers from stock account")
         return
 
-    symbols = read_first_column(os.path.join(".", "portfolio.csv"))
+    symbols = read_first_column(os.path.join(".", "portfolio/portfolio.csv"))
     finder = UsaStockFinder(symbols)
     telegram_send_string = []
     strong_in = {}
