@@ -291,19 +291,22 @@ def get_stock_tickers():
     """
     load_dotenv()
 
-    broker = mojito.KoreaInvestment(
-        api_key=os.getenv("ki_app_key"),
-        api_secret=os.getenv("ki_app_secret_key"),
-        acc_no=os.getenv("account_number"),
-        exchange="나스닥",
-    )
-    balance = broker.fetch_present_balance()
-    if balance["rt_cd"] != "0":
-        logger.error("Failed to get stock tickers from stock account")
-        logger.error(balance["msg1"])
-        return None
+    exchanges = ["나스닥", "뉴욕"]
+    previous_selected_items = []
+    for exchange in exchanges:
+        broker = mojito.KoreaInvestment(
+            api_key=os.getenv("ki_app_key"),
+            api_secret=os.getenv("ki_app_secret_key"),
+            acc_no=os.getenv("account_number"),
+            exchange=exchange,
+        )
+        balance = broker.fetch_present_balance()
+        if balance["rt_cd"] != "0":
+            logger.error("Failed to get stock tickers from stock account")
+            logger.error(balance["msg1"])
+            return None
 
-    previous_selected_items = jmespath.search("output1[*].pdno", balance)
+        previous_selected_items = previous_selected_items + jmespath.search("output1[*].pdno", balance)
     return previous_selected_items
 
 
