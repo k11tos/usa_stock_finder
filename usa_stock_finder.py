@@ -319,8 +319,7 @@ def get_stock_tickers():
         if restart:
             restart = False
             continue
-        else:
-            break
+        break
     return previous_selected_items
 
 
