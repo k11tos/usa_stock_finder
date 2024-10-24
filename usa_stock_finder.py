@@ -293,25 +293,34 @@ def get_stock_tickers():
 
     exchanges = ["나스닥", "뉴욕"]
     previous_selected_items = []
-    for exchange in exchanges:
-        broker = mojito.KoreaInvestment(
-            api_key=os.getenv("ki_app_key"),
-            api_secret=os.getenv("ki_app_secret_key"),
-            acc_no=os.getenv("account_number"),
-            exchange=exchange,
-        )
-        balance = broker.fetch_present_balance()
-        if balance["rt_cd"] != "0":
-            logger.error("Failed to get stock tickers from stock account")
-            logger.error(balance["msg1"])
-            send_telegram_message(
-                bot_token=os.getenv("telegram_api_key"),
-                chat_id=os.getenv("telegram_manager_id"),
-                message=f"Failed to get stock tickers from stock account. {balance["msg1"]}",
+    count = 5
+    restart = False
+    while count > 0:
+        for exchange in exchanges:
+            broker = mojito.KoreaInvestment(
+                api_key=os.getenv("ki_app_key"),
+                api_secret=os.getenv("ki_app_secret_key"),
+                acc_no=os.getenv("account_number"),
+                exchange=exchange,
             )
-            return None
-
-        previous_selected_items = previous_selected_items + jmespath.search("output1[*].pdno", balance)
+            balance = broker.fetch_present_balance()
+            if balance["rt_cd"] != "0":
+                logger.error(balance["msg1"])
+                send_telegram_message(
+                    bot_token=os.getenv("telegram_api_key"),
+                    chat_id=os.getenv("telegram_manager_id"),
+                    message=balance["msg1"],
+                )
+                os.remove("token.dat")
+                restart = True
+                count = count - 1
+                break
+            previous_selected_items = previous_selected_items + jmespath.search("output1[*].pdno", balance)
+        if restart:
+            restart = False
+            continue
+        else:
+            break
     return previous_selected_items
 
 
@@ -321,7 +330,7 @@ def main():
     load_dotenv()
 
     previous_selected_items = get_stock_tickers()
-    if previous_selected_items is None:
+    if len(previous_selected_items) == 0:
         logger.error("Failed to get stock tickers from stock account")
         return
 
