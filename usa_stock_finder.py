@@ -304,6 +304,11 @@ def get_stock_tickers():
         if balance["rt_cd"] != "0":
             logger.error("Failed to get stock tickers from stock account")
             logger.error(balance["msg1"])
+            send_telegram_message(
+                bot_token=os.getenv("telegram_api_key"),
+                chat_id=os.getenv("telegram_manager_id"),
+                message=f"Failed to get stock tickers from stock account. {balance["msg1"]}",
+            )
             return None
 
         previous_selected_items = previous_selected_items + jmespath.search("output1[*].pdno", balance)
