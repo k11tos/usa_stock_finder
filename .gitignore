@@ -8,3 +8,4 @@ token.dat
 log.json*
 __pycache__
 env
+.DS_Store
