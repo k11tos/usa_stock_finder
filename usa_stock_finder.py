@@ -81,6 +81,10 @@ class UsaStockFinder:
         """
         return not self.stock_data.empty
 
+    def _compare_with_threshold(self, metric, threshold, comparison_func, margin):
+        """Generic method for comparing a metric with a threshold."""
+        return {symbol: comparison_func(metric[symbol], threshold[symbol], margin) for symbol in self.symbol_list}
+
     def is_above_75_percent_of_52_week_high(self, margin):
         """Checks if the current price is higher than 75% of the 52-week high.
 
@@ -90,13 +94,12 @@ class UsaStockFinder:
         Returns:
             bool: True means the current price is higher than 75% of the 52-week high.
         """
-        is_above_75_percent_of_high = {}
-        for symbol in self.symbol_list:
-            is_above_75_percent_of_high[symbol] = self.current_price[symbol] > self.last_high[symbol] * 0.75 * (
-                1 - margin
-            )
-
-        return is_above_75_percent_of_high
+        return self._compare_with_threshold(
+            self.current_price,
+            {symbol: self.last_high[symbol] * 0.75 for symbol in self.symbol_list},
+            lambda x, y, m: x > y * (1 - m),
+            margin,
+        )
 
     def is_above_52_week_low(self, margin):
         """Checks if the current price is higher than the 52-week low.
@@ -107,11 +110,9 @@ class UsaStockFinder:
         Returns:
             bool: True means the current price has increased over 30% compared to the lowest price.
         """
-        is_above_low = {}
-        for symbol in self.symbol_list:
-            increase_percentage = (self.current_price[symbol] - self.last_low[symbol]) / self.last_low[symbol] * 100
-            is_above_low[symbol] = increase_percentage >= 30 * (1 - margin)
-        return is_above_low
+        return self._compare_with_threshold(
+            self.current_price, self.last_low, lambda x, y, m: (x - y) / y * 100 >= 30 * (1 - m), margin
+        )
 
     def get_moving_averages(self, days):
         """Gets the moving average price of the given period.
@@ -122,12 +123,9 @@ class UsaStockFinder:
         Returns:
             float: The moving averaged price with the given window.
         """
-        latest_ma = {}
-        for symbol in self.symbol_list:
-            hist_data = self.stock_data["Close"][symbol].rolling(window=days).mean()
-            latest_ma[symbol] = hist_data.iloc[-1]
-
-        return latest_ma
+        return {
+            symbol: self.stock_data["Close"][symbol].rolling(window=days).mean().iloc[-1] for symbol in self.symbol_list
+        }
 
     def is_200_ma_increasing_recently(self, margin):
         """Checks if the latest 200 days moving average has increased recently.
@@ -138,18 +136,13 @@ class UsaStockFinder:
         Returns:
             bool: True means 200 moving averaged prices have increased recently.
         """
-        is_increasing = {}
-        for symbol in self.symbol_list:
-            # Calculate 200-day moving average
-            ma_200 = self.stock_data["Close"][symbol].rolling(window=200).mean()
-
-            current_data = ma_200.iloc[-1]
-            one_month_ago_data = ma_200.iloc[-21]
-
-            # Check if current moving average is higher than one month ago
-            is_increasing[symbol] = current_data >= one_month_ago_data * (1 - margin)
-
-        return is_increasing
+        ma_200 = {symbol: self.stock_data["Close"][symbol].rolling(window=200).mean() for symbol in self.symbol_list}
+        return self._compare_with_threshold(
+            {symbol: ma_200[symbol].iloc[-1] for symbol in self.symbol_list},
+            {symbol: ma_200[symbol].iloc[-21] for symbol in self.symbol_list},
+            lambda x, y, m: x >= y * (1 - m),
+            margin,
+        )
 
     def has_valid_trend_tempate(self, margin):
         """Checks if the price of the ticker meets the trend template.
@@ -186,6 +179,22 @@ class UsaStockFinder:
 
         return valid
 
+    def _calculate_price_volume_correlation(self, period_data, symbol):
+        """Calculate the correlations between price and volume changes.
+
+        Args:
+            period_data (pd.DataFrame): DataFrame containing price and volume data for the specified period
+            symbol (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        price_diff = period_data["Close"][symbol].diff()
+        volume_diff = period_data["Volume"][symbol].diff()
+        positive_correlation = ((price_diff >= 0) & (volume_diff >= 0)).mean() * 100
+        negative_correlation = ((price_diff < 0) & (volume_diff < 0)).mean() * 100
+        return positive_correlation + negative_correlation
+
     def price_volume_correlation_percent(self, recent_days):
         """Gets the correlation value to decide if it is a bull market or bear market.
 
@@ -195,19 +204,28 @@ class UsaStockFinder:
         Returns:
             float: Percent with the positive correlation between the price and the volume.
         """
-        total_price_volume = {}
         period_data = self.stock_data.tail(recent_days)
-        for symbol in self.symbol_list:
-            price_diff = period_data["Close"][symbol].diff()
-            volume_diff = period_data["Volume"][symbol].diff()
-            positive_price_volume = (
-                period_data[(price_diff >= 0) & (volume_diff >= 0)].shape[0] / period_data.shape[0] * 100
-            )
-            negative_price_volume = (
-                period_data[(price_diff < 0) & (volume_diff < 0)].shape[0] / period_data.shape[0] * 100
-            )
-            total_price_volume[symbol] = positive_price_volume + negative_price_volume
-        return total_price_volume
+        return {symbol: self._calculate_price_volume_correlation(period_data, symbol) for symbol in self.symbol_list}
+
+    def _compare_volume_price(self, period_data, symbol, margin):
+        """
+        Compare volume and price movements to identify potential bullish signals.
+
+        Args:
+            period_data (pandas.DataFrame): Historical price and volume data for multiple symbols.
+            symbol (str): The stock symbol to analyze.
+            margin (float): A tolerance factor for comparing price up days to down days.
+
+        Returns:
+            bool: True if the stock shows a bullish signal based on volume and price comparison, False otherwise.
+        """
+        average_volume = period_data["Volume"][symbol].mean()
+        volume_data = period_data["Volume"][symbol]
+        price_diff_data = period_data["Close"][symbol].diff()
+        volume_up_days = volume_data > average_volume
+        price_up_days = (price_diff_data[volume_up_days] >= 0).sum()
+        price_down_days = (price_diff_data[volume_up_days] < 0).sum()
+        return price_up_days >= price_down_days * (1 - margin)
 
     def compare_volume_price_movement(self, recent_days, margin):
         """Checks if the price goes high when the volume is higher than average volume.
@@ -221,16 +239,7 @@ class UsaStockFinder:
                         which means up days is longer than down days.
         """
         period_data = self.stock_data.tail(recent_days)
-        comparison_result = {}
-        for symbol in self.symbol_list:
-            average_volume = period_data["Volume"][symbol].mean()
-            volume_data = period_data["Volume"][symbol]
-            price_diff_data = period_data["Close"][symbol].diff()
-            volume_up_days = volume_data[volume_data > average_volume]
-            price_up_days = volume_up_days[(price_diff_data >= 0)].shape[0]
-            price_down_days = volume_up_days[price_diff_data < 0].shape[0]
-            comparison_result[symbol] = price_up_days >= price_down_days * (1 - margin)
-        return comparison_result
+        return {symbol: self._compare_volume_price(period_data, symbol, margin) for symbol in self.symbol_list}
 
 
 def read_first_column(file_path):
