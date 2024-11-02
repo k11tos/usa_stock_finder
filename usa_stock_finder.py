@@ -314,7 +314,7 @@ def get_stock_tickers():
             return previous_selected_items
 
         except ValueError(balance["msg1"]) as e:
-            logger.error("Error fetching stock tickers: %s" + str(e))
+            logger.error("Error fetching stock tickers: %s", str(e))
             send_telegram_message(
                 bot_token=os.getenv("telegram_api_key"),
                 chat_id=os.getenv("telegram_manager_id"),
