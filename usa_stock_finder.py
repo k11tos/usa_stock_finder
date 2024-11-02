@@ -293,34 +293,38 @@ def get_stock_tickers():
 
     exchanges = ["나스닥", "뉴욕"]
     previous_selected_items = []
-    count = 5
-    restart = False
-    while count > 0:
-        for exchange in exchanges:
-            broker = mojito.KoreaInvestment(
-                api_key=os.getenv("ki_app_key"),
-                api_secret=os.getenv("ki_app_secret_key"),
-                acc_no=os.getenv("account_number"),
-                exchange=exchange,
-            )
-            balance = broker.fetch_present_balance()
-            if balance["rt_cd"] != "0":
-                logger.error(balance["msg1"])
-                send_telegram_message(
-                    bot_token=os.getenv("telegram_api_key"),
-                    chat_id=os.getenv("telegram_manager_id"),
-                    message=balance["msg1"],
+    max_attempts = 5
+
+    for _ in range(max_attempts):
+        try:
+            for exchange in exchanges:
+                broker = mojito.KoreaInvestment(
+                    api_key=os.getenv("ki_app_key"),
+                    api_secret=os.getenv("ki_app_secret_key"),
+                    acc_no=os.getenv("account_number"),
+                    exchange=exchange,
                 )
+                balance = broker.fetch_present_balance()
+
+                if balance["rt_cd"] != "0":
+                    raise Exception(balance["msg1"])
+
+                previous_selected_items.extend(jmespath.search("output1[*].pdno", balance))
+
+            return previous_selected_items
+
+        except Exception as e:
+            logger.error(f"Error fetching stock tickers: {str(e)}")
+            send_telegram_message(
+                bot_token=os.getenv("telegram_api_key"),
+                chat_id=os.getenv("telegram_manager_id"),
+                message=str(e),
+            )
+            if os.path.exists("token.dat"):
                 os.remove("token.dat")
-                restart = True
-                count = count - 1
-                break
-            previous_selected_items = previous_selected_items + jmespath.search("output1[*].pdno", balance)
-        if restart:
-            restart = False
-            continue
-        break
-    return previous_selected_items
+
+    logger.error("Failed to get stock tickers from stock account after multiple attempts")
+    return []
 
 
 def main():
