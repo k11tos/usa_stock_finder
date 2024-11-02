@@ -307,14 +307,14 @@ def get_stock_tickers():
                 balance = broker.fetch_present_balance()
 
                 if balance["rt_cd"] != "0":
-                    raise Exception(balance["msg1"])
+                    raise ValueError(balance["msg1"])
 
                 previous_selected_items.extend(jmespath.search("output1[*].pdno", balance))
 
             return previous_selected_items
 
-        except Exception as e:
-            logger.error(f"Error fetching stock tickers: {str(e)}")
+        except ValueError(balance["msg1"]) as e:
+            logger.error("Error fetching stock tickers: %s" + str(e))
             send_telegram_message(
                 bot_token=os.getenv("telegram_api_key"),
                 chat_id=os.getenv("telegram_manager_id"),
