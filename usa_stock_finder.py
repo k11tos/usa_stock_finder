@@ -64,11 +64,11 @@ class UsaStockFinder:
             symbols (string): Ticker symbols from the USA stock market.
         """
         self.stock_data = yf.download(symbols, period="1y", interval="1d")
-        self.symbol_list = symbols
+        self.symbols = symbols
         self.last_high = {}
         self.last_low = {}
         self.current_price = {}
-        for symbol in self.symbol_list:
+        for symbol in self.symbols:
             self.last_high[symbol] = self.stock_data["High"][symbol].max()
             self.current_price[symbol] = self.stock_data["Close"][symbol].iloc[-1]
             self.last_low[symbol] = self.stock_data["Low"][symbol].min()
@@ -83,7 +83,7 @@ class UsaStockFinder:
 
     def _compare_with_threshold(self, metric, threshold, comparison_func, margin):
         """Generic method for comparing a metric with a threshold."""
-        return {symbol: comparison_func(metric[symbol], threshold[symbol], margin) for symbol in self.symbol_list}
+        return {symbol: comparison_func(metric[symbol], threshold[symbol], margin) for symbol in self.symbols}
 
     def is_above_75_percent_of_52_week_high(self, margin):
         """Checks if the current price is higher than 75% of the 52-week high.
@@ -96,7 +96,7 @@ class UsaStockFinder:
         """
         return self._compare_with_threshold(
             self.current_price,
-            {symbol: self.last_high[symbol] * 0.75 for symbol in self.symbol_list},
+            {symbol: self.last_high[symbol] * 0.75 for symbol in self.symbols},
             lambda x, y, m: x > y * (1 - m),
             margin,
         )
@@ -124,7 +124,7 @@ class UsaStockFinder:
             float: The moving averaged price with the given window.
         """
         return {
-            symbol: self.stock_data["Close"][symbol].rolling(window=days).mean().iloc[-1] for symbol in self.symbol_list
+            symbol: self.stock_data["Close"][symbol].rolling(window=days).mean().iloc[-1] for symbol in self.symbols
         }
 
     def is_200_ma_increasing_recently(self, margin):
@@ -136,10 +136,10 @@ class UsaStockFinder:
         Returns:
             bool: True means 200 moving averaged prices have increased recently.
         """
-        ma_200 = {symbol: self.stock_data["Close"][symbol].rolling(window=200).mean() for symbol in self.symbol_list}
+        ma_200 = {symbol: self.stock_data["Close"][symbol].rolling(window=200).mean() for symbol in self.symbols}
         return self._compare_with_threshold(
-            {symbol: ma_200[symbol].iloc[-1] for symbol in self.symbol_list},
-            {symbol: ma_200[symbol].iloc[-21] for symbol in self.symbol_list},
+            {symbol: ma_200[symbol].iloc[-1] for symbol in self.symbols},
+            {symbol: ma_200[symbol].iloc[-21] for symbol in self.symbols},
             lambda x, y, m: x >= y * (1 - m),
             margin,
         )
@@ -163,7 +163,7 @@ class UsaStockFinder:
         is_increasing_with_volume_and_price = self.compare_volume_price_movement(200, margin)
 
         valid = {}
-        for symbol in self.symbol_list:
+        for symbol in self.symbols:
             valid[symbol] = (
                 current_price[symbol] >= latest_150_ma[symbol] * (1 - margin)
                 and current_price[symbol] >= latest_200_ma[symbol] * (1 - margin)
@@ -205,7 +205,7 @@ class UsaStockFinder:
             float: Percent with the positive correlation between the price and the volume.
         """
         period_data = self.stock_data.tail(recent_days)
-        return {symbol: self._calculate_price_volume_correlation(period_data, symbol) for symbol in self.symbol_list}
+        return {symbol: self._calculate_price_volume_correlation(period_data, symbol) for symbol in self.symbols}
 
     def _compare_volume_price(self, period_data, symbol, margin):
         """
@@ -239,7 +239,7 @@ class UsaStockFinder:
                         which means up days is longer than down days.
         """
         period_data = self.stock_data.tail(recent_days)
-        return {symbol: self._compare_volume_price(period_data, symbol, margin) for symbol in self.symbol_list}
+        return {symbol: self._compare_volume_price(period_data, symbol, margin) for symbol in self.symbols}
 
 
 def read_first_column(file_path):
@@ -254,16 +254,13 @@ def read_first_column(file_path):
     data = []
     with open(file_path, newline="", encoding="utf-8") as csvfile:
         csv_reader = csv.reader(csvfile)
-        first_row = next(csv_reader)  # 첫 번째 행을 읽어옴
-        if first_row[0] == "Code":  # "Code" 행인 경우 pass
-            next(csv_reader)
+        next(csv_reader)  # Skip the header row
+
         for row in csv_reader:
-            if row[0] == "":
-                continue
-            # code = row[0].replace("-US", "").replace("/", "-")
-            code = re.sub("-US$", "", row[0])
-            code = code.replace("/", "-")
-            data.append(code)
+            if row and row[0]:
+                code = re.sub("-US$", "", row[0]).replace("/", "-")
+                data.append(code)
+
     return data
 
 
@@ -342,76 +339,139 @@ def main():
     load_dotenv()
 
     previous_selected_items = get_stock_tickers()
-    if len(previous_selected_items) == 0:
+    if not previous_selected_items:
         logger.error("Failed to get stock tickers from stock account")
         return
 
     symbols = read_first_column(os.path.join(".", "portfolio/portfolio.csv"))
     finder = UsaStockFinder(symbols)
-    telegram_send_string = []
-    strong_in = {}
-    if finder.is_data_valid():
-        has_valid_trend = finder.has_valid_trend_tempate(0)
-        has_valid_trend_w_margin = finder.has_valid_trend_tempate(0.1)
-        strong_in["200"] = finder.price_volume_correlation_percent(200)
-        strong_in["100"] = finder.price_volume_correlation_percent(100)
-        strong_in["50"] = finder.price_volume_correlation_percent(50)
-        selected_buy_items = []
-        selected_not_sell_items = []
-        for symbol in symbols:
-            if has_valid_trend[symbol] and strong_in["50"][symbol] >= 50:
-                selected_buy_items.append(symbol)
-                send_string = (
-                    symbol
-                    + " : "
-                    + str(strong_in["200"][symbol])
-                    + " -> "
-                    + str(strong_in["100"][symbol])
-                    + " -> "
-                    + str(strong_in["50"][symbol])
-                )
-                logging.debug(send_string)
-            elif has_valid_trend_w_margin[symbol] and strong_in["50"][symbol] >= 40:
-                selected_not_sell_items.append(symbol)
-                send_string = (
-                    symbol
-                    + " : "
-                    + str(strong_in["200"][symbol])
-                    + " -> "
-                    + str(strong_in["100"][symbol])
-                    + " -> "
-                    + str(strong_in["50"][symbol])
-                )
-                logging.debug(send_string)
 
-        today_string = str(date.today())
-        telegram_send_string.append(today_string)
+    if not finder.is_data_valid():
+        logger.error("Invalid data in UsaStockFinder")
+        return
 
-        final_items = previous_selected_items.copy()
+    strong_in = calculate_price_volume_correlations(finder)
+    selected_buy_items, selected_not_sell_items = select_stocks(finder, strong_in)
 
-        for item in selected_buy_items:
-            if item not in previous_selected_items:
-                send_string = "Buy " + item
-                telegram_send_string.append(send_string)
-                final_items.append(item)
+    telegram_send_string = generate_telegram_message(
+        previous_selected_items, selected_buy_items, selected_not_sell_items
+    )
 
-        keep_items = list(set(selected_buy_items) | set(selected_not_sell_items))
+    if len(telegram_send_string) > 1:
+        send_telegram_message(
+            bot_token=os.getenv("telegram_api_key"),
+            chat_id=os.getenv("telegram_manager_id"),
+            message="\n".join(telegram_send_string),
+        )
+        logging.debug(telegram_send_string)
 
-        for item in previous_selected_items:
-            if item not in keep_items:
-                send_string = "Sell " + item
-                telegram_send_string.append(send_string)
-                final_items.remove(item)
+    final_items = update_final_items(previous_selected_items, selected_buy_items, selected_not_sell_items)
+    save_to_json(final_items, "data.json")
 
-        if len(telegram_send_string) > 1:
-            send_telegram_message(
-                bot_token=os.getenv("telegram_api_key"),
-                chat_id=os.getenv("telegram_manager_id"),
-                message="\n".join(telegram_send_string),
-            )
-            logging.debug(telegram_send_string)
 
-        save_to_json(final_items, "data.json")
+def calculate_price_volume_correlations(finder):
+    """
+    Calculate price-volume correlations for different time periods.
+
+    This function computes the price-volume correlation percentages
+    for 200, 100, and 50-day periods using the provided finder object.
+
+    Args:
+        finder (UsaStockFinder): An instance of the UsaStockFinder class with
+                              methods to calculate price-volume correlations.
+
+    Returns:
+        dict: A dictionary containing price-volume correlation percentages
+              for 200, 100, and 50-day periods.
+    """
+    return {
+        "200": finder.price_volume_correlation_percent(200),
+        "100": finder.price_volume_correlation_percent(100),
+        "50": finder.price_volume_correlation_percent(50),
+    }
+
+
+def select_stocks(finder, strong_in):
+    """
+    Select stocks based on trend validity and strength criteria.
+
+    Args:
+        finder (UsaStockFinder): An instance of the UsaStockFinder class containing stock data and analysis methods.
+        strong_in (dict): A dictionary containing strength indicators for different time periods.
+
+    Returns:
+        tuple: Two lists - selected buy items and selected not-sell items.
+    """
+    has_valid_trend = finder.has_valid_trend_tempate(0)
+    has_valid_trend_w_margin = finder.has_valid_trend_tempate(0.1)
+    selected_buy_items = []
+    selected_not_sell_items = []
+
+    for symbol in finder.symbols:
+        if has_valid_trend[symbol] and strong_in["50"][symbol] >= 50:
+            selected_buy_items.append(symbol)
+        elif has_valid_trend_w_margin[symbol] and strong_in["50"][symbol] >= 40:
+            selected_not_sell_items.append(symbol)
+
+        log_stock_info(symbol, strong_in)
+
+    return selected_buy_items, selected_not_sell_items
+
+
+def log_stock_info(symbol, strong_in):
+    """Log debug information about a stock's moving averages.
+
+    Args:
+        symbol (str): The stock symbol.
+        strong_in (dict): Dictionary containing moving average data for the stock.
+    """
+    send_string = (
+        f"{symbol} : {strong_in['200'][symbol]} -> " f"{strong_in['100'][symbol]} -> {strong_in['50'][symbol]}"
+    )
+    logging.debug(send_string)
+
+
+def generate_telegram_message(previous_selected_items, selected_buy_items, selected_not_sell_items):
+    """Generate a Telegram message with buy and sell recommendations.
+
+    This function compares the current selection of stocks with the previous selection
+    to determine which stocks should be bought or sold.
+
+    Args:
+        previous_selected_items (list): List of previously selected stock symbols.
+        selected_buy_items (list): List of stock symbols recommended for buying.
+        selected_not_sell_items (list): List of stock symbols not recommended for selling.
+
+    Returns:
+        list: A list of strings containing the date and buy/sell recommendations.
+    """
+    keep_items = set(selected_buy_items) | set(selected_not_sell_items)
+    telegram_send_string = [str(date.today())]
+
+    telegram_send_string.extend(f"Buy {item}" for item in selected_buy_items if item not in previous_selected_items)
+    telegram_send_string.extend(f"Sell {item}" for item in previous_selected_items if item not in keep_items)
+
+    return telegram_send_string
+
+
+def update_final_items(previous_selected_items, selected_buy_items, selected_not_sell_items):
+    """
+    Update the final list of items based on previous selections and new buy/not sell decisions.
+
+    Args:
+        previous_selected_items (list): List of items previously selected.
+        selected_buy_items (list): List of items selected to buy.
+        selected_not_sell_items (list): List of items selected not to sell.
+
+    Returns:
+        list: Updated final list of items to keep.
+    """
+    keep_items = set(selected_buy_items) | set(selected_not_sell_items)
+
+    new_items = [item for item in selected_buy_items if item not in previous_selected_items]
+    final_items = [item for item in previous_selected_items + new_items if item in keep_items]
+
+    return final_items
 
 
 if __name__ == "__main__":
