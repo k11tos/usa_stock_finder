@@ -4,6 +4,7 @@ on:
  push:
   paths:
   - '**.py'
+  - .github/workflows/pylint.yml
  workflow_dispatch:
 
 jobs:
@@ -30,4 +31,4 @@ jobs:
       uses: rtCamp/action-slack-notify@v2
       env:
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        SLACK_USERNAME: $SLACK_USERNAME
+        SLACK_USERNAME: ${{ vars.SLACK_USERNAME }}
