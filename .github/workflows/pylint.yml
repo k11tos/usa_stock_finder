@@ -27,6 +27,6 @@ jobs:
       run: |
         pylint $(git ls-files '*.py')
     - name: Slack Notification
-      uses: rtCamp/action-slack-notify@main
+      uses: rtCamp/action-slack-notify@v2
       env:
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
