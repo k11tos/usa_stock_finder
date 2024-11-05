@@ -1,6 +1,0 @@
-pip==24.0
-jmespath==1.0.1
-mojito2==0.1.6
-python-telegram-bot==21.0.1
-yfinance==0.2.37
-python-dotenv==1.0.1

@@ -11,3 +11,7 @@ log.json
 test.ipynb
 token.dat
 portfolio/*
+*.pyc
+*.pyo
+*.pyd
+.vscode
