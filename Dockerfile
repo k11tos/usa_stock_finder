@@ -8,7 +8,7 @@ WORKDIR /py_app
 
 COPY . /py_app
 
-RUN pip install --no-cache-dir -r requirements_common1.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 ENTRYPOINT [ "python" ]
 CMD ["./usa_stock_finder.py"]
