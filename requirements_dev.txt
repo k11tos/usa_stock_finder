@@ -81,3 +81,4 @@ wcwidth==0.2.13
 webcolors==1.13
 websocket-client==1.8.0
 widgetsnbextension==4.0.11
+pylint==3.2.1
