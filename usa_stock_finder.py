@@ -102,7 +102,7 @@ def fetch_stock_tickers():
     exchanges = ["나스닥", "뉴욕"]
     selected_items = []
 
-    for attempt in range(5):
+    for _ in range(5):
         try:
             for exchange in exchanges:
                 broker = mojito.KoreaInvestment(
