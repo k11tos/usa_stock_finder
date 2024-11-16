@@ -8,4 +8,4 @@ WORKDIR /py_app
 COPY --from=build /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY . /py_app
 ENTRYPOINT [ "python" ]
-CMD ["./usa_stock_finder.py"]
+CMD ["./main.py"]

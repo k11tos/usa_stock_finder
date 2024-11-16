@@ -10,128 +10,20 @@ Date: 2024.05.19
 """
 
 import asyncio
-import atexit
-import csv
-import json
 import logging.config
 import logging.handlers
 import os.path
-import pathlib
-import re
 from datetime import date
 
-import jmespath
-import mojito
-import telegram
 from dotenv import load_dotenv
 
+from file_utils import read_csv_first_column, save_json
+from logging_setup import setup_logging
 from stock_analysis import UsaStockFinder
+from stock_operations import fetch_stock_tickers
+from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
-
-
-def setup_logging():
-    """Initializes logging configuration."""
-    config_file = pathlib.Path("logging_config/logging_config.json")
-    with open(config_file, encoding="utf-8") as f_in:
-        config = json.load(f_in)
-
-    logging.config.dictConfig(config)
-    queue_handler = logging.getHandlerByName("queue_handler")
-    if queue_handler is not None:
-        queue_handler.listener.start()
-        atexit.register(queue_handler.listener.stop)
-
-
-async def send_telegram_message(bot_token, chat_id, message):
-    """Sends a telegram message to a pre-defined user.
-
-    Args:
-        bot_token (string): Unique key for telegram account.
-        chat_id (string): Unique key for telegram user.
-        message (string): The content to send via telegram.
-    """
-    bot = telegram.Bot(bot_token)
-    await bot.sendMessage(chat_id=chat_id, text=message)
-
-
-def read_csv_first_column(file_path):
-    """Reads the symbol from quantus.kr.
-
-    Args:
-        file_path (string): File path for the given csv file from quantus.
-
-    Returns:
-        list: List of ticker. The number of the list is 100.
-    """
-    with open(file_path, newline="", encoding="utf-8") as csvfile:
-        return [re.sub("-US$", "", row[0]).replace("/", "-") for row in csv.reader(csvfile)][1:]
-
-
-def save_json(data, file_path):
-    """Saves the chosen tickers to a JSON file.
-
-    Args:
-        data (list): The list containing the chosen tickers.
-        file_path (string): The location of the JSON file to save the list.
-    """
-    with open(file_path, "w", encoding="utf-8") as json_file:
-        json.dump(data, json_file)
-
-
-def load_json(file_path):
-    """Reads the tickers from the saved JSON file.
-
-    Args:
-        file_path (string): The location of the JSON file to retrieve the list.
-
-    Returns:
-        list: The list containing the chosen tickers.
-    """
-    with open(file_path, "r", encoding="utf-8") as json_file:
-        return json.load(json_file)
-
-
-def fetch_stock_tickers():
-    """get stock tickers from stock account
-
-    Returns:
-        list: ticker list of stock
-    """
-    load_dotenv()
-    exchanges = ["나스닥", "뉴욕"]
-    selected_items = []
-
-    for _ in range(5):
-        try:
-            for exchange in exchanges:
-                broker = mojito.KoreaInvestment(
-                    api_key=os.getenv("ki_app_key"),
-                    api_secret=os.getenv("ki_app_secret_key"),
-                    acc_no=os.getenv("account_number"),
-                    exchange=exchange,
-                )
-                balance = broker.fetch_present_balance()
-
-                if balance["rt_cd"] != "0":
-                    raise ValueError(balance["msg1"])
-
-                selected_items.extend(jmespath.search("output1[*].pdno", balance))
-            return selected_items
-        except ValueError as e:
-            logger.error("Error fetching stock tickers: %s", str(e))
-            asyncio.run(
-                send_telegram_message(
-                    bot_token=os.getenv("telegram_api_key"),
-                    chat_id=os.getenv("telegram_manager_id"),
-                    message=str(e),
-                )
-            )
-            if os.path.exists("token.dat"):
-                os.remove("token.dat")
-
-    logger.error("Failed to get stock tickers after multiple attempts")
-    return []
 
 
 def calculate_correlations(finder):
@@ -175,8 +67,12 @@ def log_stock_info(symbol, correlations):
         symbol (str): The stock symbol.
         correlations (dict): Dictionary containing moving average data for the stock.
     """
-    logging.debug(
-        f"{symbol} : {correlations['200'][symbol]} -> {correlations['100'][symbol]} -> {correlations['50'][symbol]}"
+    logger.debug(
+        "%s : %s -> %s -> %s",
+        symbol,
+        correlations["200"][symbol],
+        correlations["100"][symbol],
+        correlations["50"][symbol],
     )
 
 
@@ -248,7 +144,7 @@ def main():
                 message="\n".join(telegram_message),
             )
         )
-        logging.debug(telegram_message)
+        logger.debug(telegram_message)
 
     final_items = update_final_items(prev_items, buy_items, not_sell_items)
     save_json(final_items, "data.json")
