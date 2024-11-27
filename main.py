@@ -94,7 +94,10 @@ def generate_telegram_message(prev_items, buy_items, not_sell_items):
     message = [str(date.today())]
     message.extend(f"Buy {item}" for item in buy_items if item not in prev_items)
     message.extend(f"Sell {item}" for item in prev_items if item not in keep_items)
-    return message
+
+    if len(message) > 1:
+        return message
+    return None
 
 
 def update_final_items(prev_items, buy_items, not_sell_items):
