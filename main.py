@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from file_utils import read_csv_first_column, save_json
 from logging_setup import setup_logging
 from stock_analysis import UsaStockFinder
-from stock_operations import fetch_stock_tickers
+from stock_operations import fetch_us_stock_holdings
 from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -122,13 +122,13 @@ def main():
     setup_logging()
     load_dotenv()
 
-    prev_items = fetch_stock_tickers()
-    if not prev_items:
+    us_stock_holdings = fetch_us_stock_holdings()
+    if not us_stock_holdings:
         logger.error("Failed to get stock tickers from stock account")
         return
 
-    symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
-    finder = UsaStockFinder(symbols)
+    candidate_stocks = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
+    finder = UsaStockFinder(candidate_stocks)
 
     if not finder.is_data_valid():
         logger.error("Invalid data in UsaStockFinder")
@@ -137,7 +137,7 @@ def main():
     correlation = calculate_correlations(finder)
     buy_items, not_sell_items = select_stocks(finder, correlation)
 
-    telegram_message = generate_telegram_message(prev_items, buy_items, not_sell_items)
+    telegram_message = generate_telegram_message(us_stock_holdings, buy_items, not_sell_items)
 
     if telegram_message:
         asyncio.run(
@@ -149,7 +149,7 @@ def main():
         )
         logger.debug(telegram_message)
 
-    final_items = update_final_items(prev_items, buy_items, not_sell_items)
+    final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items)
     save_json(final_items, "data.json")
 
 

@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
-def fetch_stock_tickers():
+def fetch_us_stock_holdings():
     """Fetch stock tickers from stock account."""
     load_dotenv()
     exchanges = ["나스닥", "뉴욕"]

@@ -17,4 +17,7 @@ import telegram
 async def send_telegram_message(bot_token, chat_id, message):
     """Sends a telegram message to a pre-defined user."""
     bot = telegram.Bot(bot_token)
-    await bot.sendMessage(chat_id=chat_id, text=message)
+    try:
+        await bot.sendMessage(chat_id=chat_id, text=message)
+    except telegram.error.NetworkError:
+        print("Network error occurred while sending the message.")
