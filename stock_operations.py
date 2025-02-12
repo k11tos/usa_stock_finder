@@ -34,7 +34,7 @@ def fetch_us_stock_holdings():
     """Fetch stock tickers from stock account."""
     load_dotenv()
     exchanges = ["나스닥", "뉴욕"]
-    selected_items = []
+    selected_items = set()
 
     for _ in range(5):
         try:
@@ -50,8 +50,8 @@ def fetch_us_stock_holdings():
                 if balance["rt_cd"] != "0":
                     raise ValueError(balance["msg1"])
 
-                selected_items.extend(jmespath.search("output1[*].pdno", balance))
-            return selected_items
+                selected_items.update(jmespath.search("output1[*].pdno", balance))
+            return list(selected_items)
         except ValueError as e:
             logger.error("Error fetching stock tickers: %s", str(e))
             if os.path.exists("token.dat"):
