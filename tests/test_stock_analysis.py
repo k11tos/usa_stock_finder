@@ -14,38 +14,35 @@ from stock_analysis import UsaStockFinder
 class TestUsaStockFinder(unittest.TestCase):
     """Test UsaStockFinder class"""
 
-    @patch("yfinance.download")
-    def setUp(self, mock_download):
-        """set up test function
+    def setUp(self):
+        """Set up test fixtures, if any."""
+        # Mock download inside the setUp using a context manager
+        with patch("yfinance.download") as mock_download:
+            # Simulate 250 days of data
+            periods = 250
+            index = pd.date_range(start="2023-01-01", periods=periods, freq="D")
 
-        Args:
-            mock_download (_type_): _description_
-        """
-        # Simulate 250 days of data
-        periods = 250
-        index = pd.date_range(start="2023-01-01", periods=periods, freq="D")
+            # Generate more data for testing moving averages
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "AAPL"): np.random.random(periods) * 100 + 150,
+                    ("Low", "AAPL"): np.random.random(periods) * 100 + 145,
+                    ("Close", "AAPL"): np.random.random(periods) * 100 + 148,
+                    ("Volume", "AAPL"): np.random.randint(1000, 2000, periods),
+                    ("High", "MSFT"): np.random.random(periods) * 100 + 300,
+                    ("Low", "MSFT"): np.random.random(periods) * 100 + 290,
+                    ("Close", "MSFT"): np.random.random(periods) * 100 + 295,
+                    ("Volume", "MSFT"): np.random.randint(1500, 2500, periods),
+                },
+                index=index,
+            )
 
-        # Generate more data for testing moving averages
-        mock_data = pd.DataFrame(
-            {
-                ("High", "AAPL"): np.random.random(periods) * 100 + 150,  # Random data for approximation
-                ("Low", "AAPL"): np.random.random(periods) * 100 + 145,
-                ("Close", "AAPL"): np.random.random(periods) * 100 + 148,
-                ("Volume", "AAPL"): np.random.randint(1000, 2000, periods),
-                ("High", "MSFT"): np.random.random(periods) * 100 + 300,
-                ("Low", "MSFT"): np.random.random(periods) * 100 + 290,
-                ("Close", "MSFT"): np.random.random(periods) * 100 + 295,
-                ("Volume", "MSFT"): np.random.randint(1500, 2500, periods),
-            },
-            index=index,
-        )
+            # Set MultiIndex to mock returned DataFrame
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
 
-        # Set MultiIndex to mock returned DataFrame
-        mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
-        mock_download.return_value = mock_data
-
-        self.symbols = ["AAPL", "MSFT"]
-        self.finder = UsaStockFinder(self.symbols)
+            self.symbols = ["AAPL", "MSFT"]
+            self.finder = UsaStockFinder(self.symbols)
 
     def test_is_data_valid(self):
         """check is_data_valid function"""
@@ -92,6 +89,4 @@ class TestUsaStockFinder(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    """main function"""
-
     unittest.main()
