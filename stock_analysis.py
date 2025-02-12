@@ -97,7 +97,7 @@ class UsaStockFinder:
             margin,
         )
 
-    def has_valid_trend_tempate(self, margin):
+    def has_valid_trend_template(self, margin):
         """Checks if the price of the ticker meets the trend template.
 
         Args:

@@ -47,8 +47,8 @@ def calculate_correlations(finder):
 def select_stocks(finder, correlations):
     """Select stocks based on trend validity and strength criteria."""
     selected_buy, selected_not_sell = [], []
-    valid_trend = finder.has_valid_trend_tempate(0)
-    valid_trend_margin = finder.has_valid_trend_tempate(0.1)
+    valid_trend = finder.has_valid_trend_template(0)
+    valid_trend_margin = finder.has_valid_trend_template(0.1)
 
     for symbol in finder.symbols:
         if valid_trend[symbol] and correlations["50"][symbol] >= 50:
