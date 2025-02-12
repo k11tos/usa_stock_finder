@@ -1,3 +1,7 @@
+"""
+test function to test UsaStockFinder class
+"""
+
 import unittest
 from unittest.mock import patch
 
@@ -8,9 +12,15 @@ from stock_analysis import UsaStockFinder
 
 
 class TestUsaStockFinder(unittest.TestCase):
+    """Test UsaStockFinder class"""
 
     @patch("yfinance.download")
     def setUp(self, mock_download):
+        """set up test function
+
+        Args:
+            mock_download (_type_): _description_
+        """
         # Simulate 250 days of data
         periods = 250
         index = pd.date_range(start="2023-01-01", periods=periods, freq="D")
@@ -38,40 +48,50 @@ class TestUsaStockFinder(unittest.TestCase):
         self.finder = UsaStockFinder(self.symbols)
 
     def test_is_data_valid(self):
+        """check is_data_valid function"""
         self.assertTrue(self.finder.is_data_valid())
 
     def test_is_above_75_percent_of_52_week_high(self):
+        """check is_above_75_percent_of_52_week_high function"""
         result = self.finder.is_above_75_percent_of_52_week_high(margin=0.01)
         self.assertIsInstance(result, dict)
         # Add specific assertions once data is stable.
 
     def test_is_above_52_week_low(self):
+        """check is_above_52_week_low function"""
         result = self.finder.is_above_52_week_low(margin=0.01)
         self.assertIsInstance(result, dict)
         # Add specific assertions once data is stable.
 
     def test_get_moving_averages(self):
+        """check get_moving_averages function"""
         ma = self.finder.get_moving_averages(2)
         self.assertIsInstance(ma, dict)
         for symbol in self.symbols:
             self.assertIn(symbol, ma)
 
     def test_is_200_ma_increasing_recently(self):
+        """check is_200_ma_increasing_recently function"""
         result = self.finder.is_200_ma_increasing_recently(margin=0.01)
         self.assertIsInstance(result, dict)
 
     def test_has_valid_trend_template(self):
+        """check has_valid_trend_template function"""
         result = self.finder.has_valid_trend_template(margin=0.01)
         self.assertIsInstance(result, dict)
 
     def test_price_volume_correlation_percent(self):
+        """check price_volume_correlation_percent function"""
         correlation = self.finder.price_volume_correlation_percent(recent_days=10)
         self.assertIsInstance(correlation, dict)
 
     def test_compare_volume_price_movement(self):
+        """check compare_volume_price_movement function"""
         result = self.finder.compare_volume_price_movement(recent_days=10, margin=0.01)
         self.assertIsInstance(result, dict)
 
 
 if __name__ == "__main__":
+    """main function"""
+
     unittest.main()

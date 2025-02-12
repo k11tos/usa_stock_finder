@@ -1,3 +1,7 @@
+"""
+test function to test stock_operations function
+"""
+
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -6,10 +10,12 @@ from stock_operations import fetch_us_stock_holdings
 
 
 class TestStockOperations(unittest.TestCase):
+    """Test stock_operations class"""
 
     @patch("stock_operations.mojito.KoreaInvestment")
     @patch("stock_operations.load_dotenv")
     def test_fetch_us_stock_holdings_success(self, mock_load_dotenv, mock_KoreaInvestment):
+        """Check fetch_us_stock_holdings success"""
         os.environ["ki_app_key"] = "test_key"
         os.environ["ki_app_secret_key"] = "test_secret"
         os.environ["account_number"] = "test_account"
@@ -28,6 +34,7 @@ class TestStockOperations(unittest.TestCase):
     @patch("stock_operations.mojito.KoreaInvestment")
     @patch("stock_operations.load_dotenv")
     def test_fetch_us_stock_holdings_fail(self, mock_load_dotenv, mock_KoreaInvestment):
+        """Check fetch_us_stock_holdings fail"""
         os.environ["ki_app_key"] = "test_key"
         os.environ["ki_app_secret_key"] = "test_secret"
         os.environ["account_number"] = "test_account"
@@ -44,4 +51,5 @@ class TestStockOperations(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    """main function"""
     unittest.main()
