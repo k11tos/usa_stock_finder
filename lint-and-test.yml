@@ -1,4 +1,4 @@
-name: Pylint
+name: Lint and Test
 
 on:
  push:
@@ -27,12 +27,14 @@ jobs:
     - name: Analysing the code with pylint
       run: |
         pylint $(git ls-files '*.py')
+    - name: Run tests
+      run: python -m unittest discover -s tests
     - name: Slack Notification
       uses: rtCamp/action-slack-notify@v2
       env:
         SLACK_COLOR: ${{ job.status }}
         SLACK_MESSAGE: Workflow ${{ job.status }}
-        SLACK_MESSAGE_ON_SUCCESS: '✅ 워크플로우가 성공적으로 완료되었습니다.'
+        SLACK_MESSAGE_ON_SUCCESS: '✅ 워크플로우가 성공적으로 완료되었습니다. (Pylint, Unittest)'
         SLACK_MESSAGE_ON_FAILURE: '❌ 워크플로우 실행 중 오류가 발생했습니다.'
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         SLACK_USERNAME: ${{ vars.SLACK_USERNAME }}
