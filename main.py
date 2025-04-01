@@ -1,9 +1,26 @@
 """
-usa_stock_finder.py
+main.py
 
-This module provides functionalities to find and analyze USA stock data.
-It includes functions to fetch stock prices, analyze trends, and generate
-reports for better investment decisions.
+This module implements the main functionality for the USA Stock Finder application.
+It provides a comprehensive system for analyzing US stocks, generating trading signals,
+and sending notifications via Telegram. The system is based on Mark Minervini's
+trading principles and includes technical analysis features.
+
+Key Features:
+    - Stock data fetching and analysis
+    - Price-volume correlation calculations
+    - Trend analysis and stock selection
+    - Telegram notifications for trading signals
+    - Portfolio management and tracking
+
+Dependencies:
+    - asyncio: For asynchronous operations
+    - logging: For structured logging
+    - dotenv: For environment variable management
+    - file_utils: For file operations
+    - stock_analysis: For stock data analysis
+    - stock_operations: For stock account operations
+    - telegram_utils: For Telegram notifications
 
 Author: Breadpig based on the theory from Mark Minervini
 Date: 2024.05.19
@@ -26,26 +43,43 @@ from telegram_utils import send_telegram_message
 logger = logging.getLogger(__name__)
 
 
-def calculate_correlations(finder):
+def calculate_correlations(finder: UsaStockFinder) -> dict[str, dict[str, float]]:
     """
     Calculate price-volume correlations for different time periods.
 
     This function computes the price-volume correlation percentages
     for 200, 100, and 50-day periods using the provided finder object.
+    The correlation helps identify the strength of price-volume relationships
+    in different timeframes.
 
     Args:
         finder (UsaStockFinder): An instance of the UsaStockFinder class with
                               methods to calculate price-volume correlations.
 
     Returns:
-        dict: A dictionary containing price-volume correlation percentages
-              for 200, 100, and 50-day periods.
+        dict[str, dict[str, float]]: A dictionary containing price-volume correlation percentages
+              for 200, 100, and 50-day periods, organized by period and symbol.
     """
     return {str(days): finder.price_volume_correlation_percent(days) for days in [200, 100, 50]}
 
 
-def select_stocks(finder, correlations):
-    """Select stocks based on trend validity and strength criteria."""
+def select_stocks(finder: UsaStockFinder, correlations: dict[str, dict[str, float]]) -> tuple[list[str], list[str]]:
+    """
+    Select stocks based on trend validity and strength criteria.
+
+    This function analyzes stocks using two main criteria:
+    1. Trend validity (with and without margin)
+    2. Price-volume correlation strength
+
+    Args:
+        finder (UsaStockFinder): Instance containing stock analysis methods
+        correlations (dict[str, dict[str, float]]): Price-volume correlations for different periods
+
+    Returns:
+        tuple[list[str], list[str]]: Two lists containing:
+            - List of stocks recommended for buying
+            - List of stocks recommended to hold (not sell)
+    """
     selected_buy, selected_not_sell = [], []
     valid_trend = finder.has_valid_trend_template(0)
     valid_trend_margin = finder.has_valid_trend_template(0.1)
@@ -60,12 +94,14 @@ def select_stocks(finder, correlations):
     return selected_buy, selected_not_sell
 
 
-def log_stock_info(symbol, correlations):
-    """Log debug information about a stock's moving averages.
+def log_stock_info(symbol: str, correlations: dict[str, dict[str, float]]) -> None:
+    """
+    Log debug information about a stock's price-volume correlations.
 
     Args:
-        symbol (str): The stock symbol.
-        correlations (dict): Dictionary containing moving average data for the stock.
+        symbol (str): The stock symbol to log information for
+        correlations (dict[str, dict[str, float]]): Dictionary containing correlation data
+            for different time periods (200, 100, 50 days)
     """
     logger.debug(
         "%s : %s -> %s -> %s",
@@ -76,19 +112,24 @@ def log_stock_info(symbol, correlations):
     )
 
 
-def generate_telegram_message(prev_items, buy_items, not_sell_items):
-    """Generate a Telegram message with buy and sell recommendations.
+def generate_telegram_message(
+    prev_items: list[str], buy_items: list[str], not_sell_items: list[str]
+) -> list[str] | None:
+    """
+    Generate a Telegram message with buy and sell recommendations.
 
     This function compares the current selection of stocks with the previous selection
-    to determine which stocks should be bought or sold.
+    to determine which stocks should be bought or sold. It generates a message that
+    includes the current date and specific buy/sell recommendations.
 
     Args:
-        prev_items (list): List of previously selected stock symbols.
-        buy_items (list): List of stock symbols recommended for buying.
-        not_sell_items (list): List of stock symbols not recommended for selling.
+        prev_items (list[str]): List of previously selected stock symbols
+        buy_items (list[str]): List of stock symbols recommended for buying
+        not_sell_items (list[str]): List of stock symbols not recommended for selling
 
     Returns:
-        list: A list of strings containing the date and buy/sell recommendations.
+        list[str] | None: A list of strings containing the date and buy/sell recommendations,
+                         or None if there are no changes to report
     """
     keep_items = set(buy_items) | set(not_sell_items)
     message = [str(date.today())]
@@ -100,25 +141,44 @@ def generate_telegram_message(prev_items, buy_items, not_sell_items):
     return None
 
 
-def update_final_items(prev_items, buy_items, not_sell_items):
+def update_final_items(prev_items: list[str], buy_items: list[str], not_sell_items: list[str]) -> list[str]:
     """
     Update the final list of items based on previous selections and new buy/not sell decisions.
 
+    This function combines the previous portfolio with new selections, maintaining
+    stocks that meet the criteria for holding while adding new stocks that meet
+    the buying criteria.
+
     Args:
-        prev_items (list): List of items previously selected.
-        buy_items (list): List of items selected to buy.
-        not_sell_items (list): List of items selected not to sell.
+        prev_items (list[str]): List of items previously selected
+        buy_items (list[str]): List of items selected to buy
+        not_sell_items (list[str]): List of items selected not to sell
 
     Returns:
-        list: Updated final list of items to keep.
+        list[str]: Updated final list of items to keep in the portfolio
     """
     keep_items = set(buy_items) | set(not_sell_items)
     new_items = [item for item in buy_items if item not in prev_items]
     return [item for item in prev_items + new_items if item in keep_items]
 
 
-def main():
-    """Main function."""
+def main() -> None:
+    """
+    Main function that orchestrates the stock analysis and notification process.
+
+    This function:
+    1. Sets up logging and loads environment variables
+    2. Fetches current stock holdings
+    3. Analyzes candidate stocks
+    4. Generates trading signals
+    5. Sends notifications via Telegram
+    6. Updates the portfolio data
+
+    Note:
+        - Requires environment variables for Telegram API and account information
+        - Expects a portfolio.csv file in the portfolio directory
+        - Saves the final portfolio to data.json
+    """
     setup_logging()
     load_dotenv()
 

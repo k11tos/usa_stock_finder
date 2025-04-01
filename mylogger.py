@@ -1,8 +1,18 @@
 """
 mylogger.py
 
-from
-https://github.com/mCodingLLC/VideosSampleCode/tree/d8bff554ae7b5931e3ee922587a21f39525986f8/videos/135_modern_logging
+This module provides custom logging formatters and filters for structured JSON logging.
+It is based on the implementation from mCodingLLC's video tutorial on modern logging.
+
+Dependencies:
+    - datetime: For timestamp handling
+    - json: For JSON serialization
+    - logging: Base logging functionality
+    - typing: Type hints and overrides
+
+Main Classes:
+    - MyJSONFormatter: Custom formatter that converts log records to JSON format
+    - NonErrorFilter: Filter that only allows log records with level INFO or lower
 """
 
 import datetime as dt
@@ -10,6 +20,7 @@ import json
 import logging
 from typing import override
 
+# Set of built-in attributes in LogRecord objects
 LOG_RECORD_BUILTIN_ATTRS = {
     "args",
     "asctime",
@@ -38,10 +49,14 @@ LOG_RECORD_BUILTIN_ATTRS = {
 
 
 class MyJSONFormatter(logging.Formatter):
-    """Json formatter for logging
+    """
+    A custom formatter that converts log records to JSON format.
 
-    Args:
-        logging (_type_): _description_
+    This formatter allows for structured logging with custom field mappings
+    and includes additional fields like timestamp and exception information.
+
+    Attributes:
+        fmt_keys (dict[str, str]): Dictionary mapping custom field names to log record attributes
     """
 
     def __init__(
@@ -49,15 +64,40 @@ class MyJSONFormatter(logging.Formatter):
         *,
         fmt_keys: dict[str, str] | None = None,
     ):
+        """
+        Initialize the JSON formatter.
+
+        Args:
+            fmt_keys (dict[str, str] | None): Optional dictionary mapping custom field names
+                to log record attributes. If None, an empty dictionary is used.
+        """
         super().__init__()
         self.fmt_keys = fmt_keys if fmt_keys is not None else {}
 
     @override
     def format(self, record: logging.LogRecord) -> str:
+        """
+        Format the log record as a JSON string.
+
+        Args:
+            record (logging.LogRecord): The log record to format
+
+        Returns:
+            str: JSON string representation of the log record
+        """
         message = self._prepare_log_dict(record)
         return json.dumps(message, default=str)
 
-    def _prepare_log_dict(self, record: logging.LogRecord):
+    def _prepare_log_dict(self, record: logging.LogRecord) -> dict:
+        """
+        Prepare a dictionary from the log record for JSON serialization.
+
+        Args:
+            record (logging.LogRecord): The log record to process
+
+        Returns:
+            dict: Dictionary containing the formatted log record data
+        """
         always_fields = {
             "message": record.getMessage(),
             "timestamp": dt.datetime.fromtimestamp(record.created, tz=dt.timezone.utc).isoformat(),
@@ -82,17 +122,24 @@ class MyJSONFormatter(logging.Formatter):
 
 
 class NonErrorFilter(logging.Filter):
-    """_summary_
+    """
+    A filter that only allows log records with level INFO or lower.
 
-    Args:
-        logging (_type_): _description_
-
-    Returns:
-        _type_: _description_
+    This filter is useful for separating non-error logs from error logs
+    in logging configurations.
     """
 
     # pylint: disable=too-few-public-methods
 
     @override
-    def filter(self, record: logging.LogRecord) -> bool | logging.LogRecord:
+    def filter(self, record: logging.LogRecord) -> bool:
+        """
+        Filter log records based on their level.
+
+        Args:
+            record (logging.LogRecord): The log record to filter
+
+        Returns:
+            bool: True if the record's level is INFO or lower, False otherwise
+        """
         return record.levelno <= logging.INFO
