@@ -45,7 +45,7 @@ class UsaStockFinder:
             - Fetches 1 year of daily data from Yahoo Finance
             - Calculates initial high, low, and current prices for each symbol
         """
-        self.stock_data = yf.download(symbols, period="1y", interval="1d")
+        self.stock_data = yf.download(symbols, period="1y", interval="1d", auto_adjust=True)
         self.symbols = symbols
         self.last_high = {}
         self.last_low = {}
