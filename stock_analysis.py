@@ -51,9 +51,32 @@ class UsaStockFinder:
         self.last_low = {}
         self.current_price = {}
         for symbol in self.symbols:
-            self.last_high[symbol] = self.stock_data["High"][symbol].max()
-            self.current_price[symbol] = self.stock_data["Close"][symbol].iloc[-1]
-            self.last_low[symbol] = self.stock_data["Low"][symbol].min()
+            try:
+                # 데이터 유효성 검증
+                if (
+                    symbol in self.stock_data["High"]
+                    and symbol in self.stock_data["Close"]
+                    and symbol in self.stock_data["Low"]
+                    and not self.stock_data["High"][symbol].empty
+                    and not self.stock_data["Close"][symbol].empty
+                    and not self.stock_data["Low"][symbol].empty
+                ):
+
+                    self.last_high[symbol] = self.stock_data["High"][symbol].max()
+                    self.current_price[symbol] = self.stock_data["Close"][symbol].iloc[-1]
+                    self.last_low[symbol] = self.stock_data["Low"][symbol].min()
+                else:
+                    # 데이터가 없는 경우 기본값 설정
+                    self.last_high[symbol] = 0.0
+                    self.current_price[symbol] = 0.0
+                    self.last_low[symbol] = 0.0
+                    print(f"Warning: No data available for {symbol}")
+            except (IndexError, KeyError, AttributeError) as e:
+                # 에러 발생 시 기본값 설정
+                self.last_high[symbol] = 0.0
+                self.current_price[symbol] = 0.0
+                self.last_low[symbol] = 0.0
+                print(f"Error processing {symbol}: {e}")
 
     def is_data_valid(self) -> bool:
         """
@@ -122,9 +145,20 @@ class UsaStockFinder:
         Returns:
             Dict[str, float]: Dictionary of moving average prices for each symbol
         """
-        return {
-            symbol: self.stock_data["Close"][symbol].rolling(window=days).mean().iloc[-1] for symbol in self.symbols
-        }
+        result = {}
+        for symbol in self.symbols:
+            try:
+                if (
+                    symbol in self.stock_data["Close"]
+                    and not self.stock_data["Close"][symbol].empty
+                    and len(self.stock_data["Close"][symbol]) >= days
+                ):
+                    result[symbol] = self.stock_data["Close"][symbol].rolling(window=days).mean().iloc[-1]
+                else:
+                    result[symbol] = 0.0
+            except (IndexError, KeyError, AttributeError):
+                result[symbol] = 0.0
+        return result
 
     def is_200_ma_increasing_recently(self, margin: float) -> Dict[str, bool]:
         """
@@ -136,13 +170,27 @@ class UsaStockFinder:
         Returns:
             Dict[str, bool]: True if 200-day MA has increased recently
         """
-        ma_200 = {symbol: self.stock_data["Close"][symbol].rolling(window=200).mean() for symbol in self.symbols}
-        return self._compare_with_threshold(
-            {symbol: ma_200[symbol].iloc[-1] for symbol in self.symbols},
-            {symbol: ma_200[symbol].iloc[-21] for symbol in self.symbols},
-            lambda x, y, m: x >= y * (1 - m),
-            margin,
-        )
+        result = {}
+        for symbol in self.symbols:
+            try:
+                if (
+                    symbol in self.stock_data["Close"]
+                    and not self.stock_data["Close"][symbol].empty
+                    and len(self.stock_data["Close"][symbol]) >= 200
+                ):
+
+                    ma_200 = self.stock_data["Close"][symbol].rolling(window=200).mean()
+                    if len(ma_200) >= 21:
+                        current_ma = ma_200.iloc[-1]
+                        past_ma = ma_200.iloc[-21]
+                        result[symbol] = current_ma >= past_ma * (1 - margin)
+                    else:
+                        result[symbol] = False
+                else:
+                    result[symbol] = False
+            except (IndexError, KeyError, AttributeError):
+                result[symbol] = False
+        return result
 
     def has_valid_trend_template(self, margin: float) -> Dict[str, bool]:
         """
