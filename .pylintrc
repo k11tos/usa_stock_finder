@@ -1,2 +1,33 @@
 [FORMAT]
 max-line-length=120
+
+[MESSAGES CONTROL]
+disable=
+    C0114,  # missing-module-docstring
+    C0115,  # missing-class-docstring
+    C0116,  # missing-function-docstring
+    C0103,  # invalid-name (for test files)
+    W0621,  # redefined-outer-name (common in pytest)
+    W0611,  # unused-import (common in test files)
+    R0903,  # too-few-public-methods (for test classes)
+    R0801,  # duplicate-code (allow some duplication in tests)
+    E0401,  # import-error (common in test files)
+    C0415,  # import-outside-toplevel (common in test files)
+    W0718,  # broad-exception-caught (common in test files)
+    W0612,  # unused-variable (common in test files)
+    W0640,  # cell-var-from-loop (common in test files)
+    R1720,  # no-else-raise (common in test files)
+    W0404,  # reimported (common in test files)
+
+[DESIGN]
+max-args=10
+max-locals=20
+max-returns=10
+max-statements=50
+max-branches=20
+
+[IMPORTS]
+deprecated-modules=
+
+[BASIC]
+good-names=i,j,k,ex,Run,_,id,db
