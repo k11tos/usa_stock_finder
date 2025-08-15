@@ -52,15 +52,8 @@ class UsaStockFinder:
         self.current_price = {}
         for symbol in self.symbols:
             try:
-                # 데이터 유효성 검증
-                if (
-                    symbol in self.stock_data["High"]
-                    and symbol in self.stock_data["Close"]
-                    and symbol in self.stock_data["Low"]
-                    and not self.stock_data["High"][symbol].empty
-                    and not self.stock_data["Close"][symbol].empty
-                    and not self.stock_data["Low"][symbol].empty
-                ):
+                # 데이터 유효성 검증을 헬퍼 함수로 분리
+                if self._is_symbol_data_valid(symbol):
 
                     self.last_high[symbol] = self.stock_data["High"][symbol].max()
                     self.current_price[symbol] = self.stock_data["Close"][symbol].iloc[-1]
@@ -77,6 +70,25 @@ class UsaStockFinder:
                 self.current_price[symbol] = 0.0
                 self.last_low[symbol] = 0.0
                 print(f"Error processing {symbol}: {e}")
+
+    def _is_symbol_data_valid(self, symbol: str) -> bool:
+        """
+        Check if the data for a specific symbol is valid and not empty.
+
+        Args:
+            symbol (str): Stock symbol to check
+
+        Returns:
+            bool: True if the symbol data is valid, False otherwise
+        """
+        return (
+            symbol in self.stock_data["High"]
+            and symbol in self.stock_data["Close"]
+            and symbol in self.stock_data["Low"]
+            and not self.stock_data["High"][symbol].empty
+            and not self.stock_data["Close"][symbol].empty
+            and not self.stock_data["Low"][symbol].empty
+        )
 
     def is_data_valid(self) -> bool:
         """

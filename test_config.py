@@ -103,7 +103,7 @@ class TestConfig:
     def cleanup_test_environment(cls) -> None:
         """테스트 환경 정리"""
         # 테스트 환경 변수 제거
-        for key in cls.get_test_env_vars().keys():
+        for key in cls.get_test_env_vars():
             if key in os.environ:
                 del os.environ[key]
 
