@@ -66,7 +66,7 @@ class TestAdvancedErrorHandling(unittest.TestCase):
 
         try:
             # Step 1: File corruption
-            with open(self.data_file, "w") as f:
+            with open(self.data_file, "w", encoding="utf-8") as f:
                 f.write("{invalid json")
 
             # This should fail
@@ -254,7 +254,7 @@ class TestAdvancedErrorHandling(unittest.TestCase):
         save_json(primary_data, primary_file)
 
         # Corrupt primary file
-        with open(primary_file, "w") as f:
+        with open(primary_file, "w", encoding="utf-8") as f:
             f.write("{corrupted json")
 
         # Fallback data (valid)
@@ -385,7 +385,7 @@ class TestAdvancedErrorHandling(unittest.TestCase):
         # Corrupt primary and secondary sources
         for filename in ["primary.json", "secondary.json"]:
             filepath = os.path.join(self.temp_dir, filename)
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write("{corrupted")
 
         # Test recovery chain
