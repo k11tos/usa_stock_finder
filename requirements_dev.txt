@@ -82,3 +82,13 @@ webcolors==1.13
 websocket-client==1.8.0
 widgetsnbextension==4.0.11
 pylint==3.2.1
+
+# Type Checking
+mypy>=1.8.0
+types-requests>=2.31.0
+types-PyYAML>=6.0.0
+types-python-dateutil>=2.8.0
+
+# Security
+bandit>=1.7.5
+safety>=2.3.5

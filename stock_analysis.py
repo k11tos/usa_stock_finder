@@ -260,8 +260,8 @@ class UsaStockFinder:
         """
         price_diff = period_data["Close"][symbol].diff()
         volume_diff = period_data["Volume"][symbol].diff()
-        positive_correlation = ((price_diff >= 0) & (volume_diff >= 0)).mean() * 100
-        negative_correlation = ((price_diff < 0) & (volume_diff < 0)).mean() * 100
+        positive_correlation = float(((price_diff >= 0) & (volume_diff >= 0)).mean() * 100)
+        negative_correlation = float(((price_diff < 0) & (volume_diff < 0)).mean() * 100)
         return positive_correlation + negative_correlation
 
     def price_volume_correlation_percent(self, recent_days: int) -> Dict[str, float]:
@@ -293,8 +293,8 @@ class UsaStockFinder:
         volume_data = period_data["Volume"][symbol]
         price_diff_data = period_data["Close"][symbol].diff()
         volume_up_days = volume_data > average_volume
-        price_up_days = (price_diff_data[volume_up_days] >= 0).sum()
-        price_down_days = (price_diff_data[volume_up_days] < 0).sum()
+        price_up_days = int((price_diff_data[volume_up_days] >= 0).sum())
+        price_down_days = int((price_diff_data[volume_up_days] < 0).sum())
         return price_up_days >= price_down_days * (1 - margin)
 
     def compare_volume_price_movement(self, recent_days: int, margin: float) -> Dict[str, bool]:

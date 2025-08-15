@@ -26,10 +26,9 @@ import atexit
 import json
 import logging.config
 import pathlib
-from typing import NoReturn
 
 
-def setup_logging() -> NoReturn:
+def setup_logging() -> None:
     """
     Initialize and configure the application's logging system.
 

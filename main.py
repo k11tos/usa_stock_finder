@@ -200,14 +200,20 @@ def main() -> None:
     telegram_message = generate_telegram_message(us_stock_holdings, buy_items, not_sell_items)
 
     if telegram_message:
-        asyncio.run(
-            send_telegram_message(
-                bot_token=os.getenv("telegram_api_key"),
-                chat_id=os.getenv("telegram_manager_id"),
-                message="\n".join(telegram_message),
+        bot_token = os.getenv("telegram_api_key")
+        chat_id = os.getenv("telegram_manager_id")
+
+        if bot_token and chat_id:
+            asyncio.run(
+                send_telegram_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message="\n".join(telegram_message),
+                )
             )
-        )
-        logger.debug(telegram_message)
+            logger.debug(telegram_message)
+        else:
+            logger.error("Missing Telegram API credentials")
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items)
     save_json(final_items, "data.json")
