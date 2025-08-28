@@ -2,5 +2,5 @@ pip==25.0.1
 jmespath==1.0.1
 mojito2==0.1.6
 python-telegram-bot==21.0.1
-yfinance==0.2.54
+yfinance==0.2.65
 python-dotenv==1.0.1
