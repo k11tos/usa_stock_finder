@@ -53,14 +53,14 @@ def read_csv_first_column(file_path: str) -> List[str]:
         reader = csv.reader(csvfile)
         # Skip header row
         next(reader, None)
-        
+
         for row in reader:
             if row and len(row) > 0:  # Check if row exists and has at least one element
                 symbol = row[0].strip()  # Remove whitespace
                 if symbol:  # Check if symbol is not empty
                     processed_symbol = re.sub("-US$", "", symbol).replace("/", "-")
                     symbols.append(processed_symbol)
-    
+
     return symbols
 
 
