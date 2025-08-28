@@ -48,8 +48,20 @@ def read_csv_first_column(file_path: str) -> List[str]:
         FileNotFoundError: If the specified file does not exist
         csv.Error: If there's an error reading the CSV file
     """
+    symbols = []
     with open(file_path, newline="", encoding="utf-8") as csvfile:
-        return [re.sub("-US$", "", row[0]).replace("/", "-") for row in csv.reader(csvfile)][1:]
+        reader = csv.reader(csvfile)
+        # Skip header row
+        next(reader, None)
+        
+        for row in reader:
+            if row and len(row) > 0:  # Check if row exists and has at least one element
+                symbol = row[0].strip()  # Remove whitespace
+                if symbol:  # Check if symbol is not empty
+                    processed_symbol = re.sub("-US$", "", symbol).replace("/", "-")
+                    symbols.append(processed_symbol)
+    
+    return symbols
 
 
 def save_json(data: Any, file_path: str) -> None:
