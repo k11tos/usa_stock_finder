@@ -8,7 +8,14 @@ It tests the main functions for stock analysis and selection.
 import unittest
 from unittest.mock import MagicMock, patch
 
-from main import calculate_correlations, generate_telegram_message, log_stock_info, select_stocks, update_final_items
+from main import (
+    calculate_correlations,
+    calculate_investment_per_stock,
+    generate_telegram_message,
+    log_stock_info,
+    select_stocks,
+    update_final_items,
+)
 
 
 class TestMainFunctions(unittest.TestCase):
@@ -221,6 +228,118 @@ class TestMainFunctions(unittest.TestCase):
         # GOOGL should not be in either (correlation < 40.0)
         self.assertNotIn("GOOGL", buy_items)
         self.assertNotIn("GOOGL", not_sell_items)
+
+    @patch("main.fetch_account_balance")
+    def test_calculate_investment_per_stock_success(self, mock_fetch_balance):
+        """Test calculate_investment_per_stock with successful balance fetch"""
+        # Mock account balance
+        mock_fetch_balance.return_value = {
+            "available_cash": 10000.0,
+            "buyable_cash": 9500.0,
+            "total_balance": 50000.0,
+        }
+
+        buy_items = ["AAPL", "MSFT", "GOOGL"]
+
+        result = calculate_investment_per_stock(buy_items)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 3)
+        # With default reserve_ratio (0.1), 9500 * 0.9 / 3 = 2850 per stock
+        expected_investment = 9500.0 * 0.9 / 3
+        self.assertAlmostEqual(result["AAPL"], expected_investment, places=2)
+        self.assertAlmostEqual(result["MSFT"], expected_investment, places=2)
+        self.assertAlmostEqual(result["GOOGL"], expected_investment, places=2)
+
+    @patch("main.fetch_account_balance")
+    def test_calculate_investment_per_stock_with_reserve(self, mock_fetch_balance):
+        """Test calculate_investment_per_stock with custom reserve ratio"""
+        mock_fetch_balance.return_value = {
+            "available_cash": 10000.0,
+            "buyable_cash": 10000.0,
+            "total_balance": 50000.0,
+        }
+
+        buy_items = ["AAPL", "MSFT"]
+
+        result = calculate_investment_per_stock(buy_items, reserve_ratio=0.2)
+
+        self.assertIsNotNone(result)
+        # With reserve_ratio=0.2, 10000 * 0.8 / 2 = 4000 per stock
+        expected_investment = 10000.0 * 0.8 / 2
+        self.assertAlmostEqual(result["AAPL"], expected_investment, places=2)
+
+    @patch("main.fetch_account_balance")
+    def test_calculate_investment_per_stock_with_min_investment(self, mock_fetch_balance):
+        """Test calculate_investment_per_stock with minimum investment constraint"""
+        mock_fetch_balance.return_value = {
+            "available_cash": 1000.0,
+            "buyable_cash": 1000.0,
+            "total_balance": 5000.0,
+        }
+
+        buy_items = ["AAPL", "MSFT", "GOOGL", "TSLA"]
+
+        # With 1000 cash and 10% reserve = 900, divided by 4 = 225 per stock
+        # But min_investment is 300, so only 2 stocks can be afforded (900/300 = 3, but we have 4)
+        result = calculate_investment_per_stock(buy_items, min_investment=300.0)
+
+        self.assertIsNotNone(result)
+        # Only stocks that can afford minimum investment
+        # With 900 total and min 300, max 3 stocks, but we'll adjust to available
+        self.assertLessEqual(len(result), 3)
+
+    @patch("main.fetch_account_balance")
+    def test_calculate_investment_per_stock_with_max_investment(self, mock_fetch_balance):
+        """Test calculate_investment_per_stock with maximum investment constraint"""
+        mock_fetch_balance.return_value = {
+            "available_cash": 10000.0,
+            "buyable_cash": 10000.0,
+            "total_balance": 50000.0,
+        }
+
+        buy_items = ["AAPL"]
+
+        result = calculate_investment_per_stock(buy_items, max_investment=5000.0)
+
+        self.assertIsNotNone(result)
+        # Without max, would be 9000, but max is 5000
+        self.assertLessEqual(result["AAPL"], 5000.0)
+
+    @patch("main.fetch_account_balance")
+    def test_calculate_investment_per_stock_no_balance(self, mock_fetch_balance):
+        """Test calculate_investment_per_stock when balance fetch fails"""
+        mock_fetch_balance.return_value = None
+
+        buy_items = ["AAPL", "MSFT"]
+
+        result = calculate_investment_per_stock(buy_items)
+
+        self.assertIsNone(result)
+
+    @patch("main.fetch_account_balance")
+    def test_calculate_investment_per_stock_no_buy_items(self, mock_fetch_balance):
+        """Test calculate_investment_per_stock with empty buy items"""
+        result = calculate_investment_per_stock([])
+
+        self.assertIsNone(result)
+
+    @patch("main.fetch_account_balance")
+    def test_calculate_investment_per_stock_insufficient_cash(self, mock_fetch_balance):
+        """Test calculate_investment_per_stock with insufficient cash"""
+        mock_fetch_balance.return_value = {
+            "available_cash": 50.0,
+            "buyable_cash": 50.0,
+            "total_balance": 100.0,
+        }
+
+        buy_items = ["AAPL", "MSFT"]
+
+        # With 50 cash, 10% reserve = 45, divided by 2 = 22.5 per stock
+        # But min_investment default is 100, so insufficient
+        result = calculate_investment_per_stock(buy_items, min_investment=100.0)
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
