@@ -83,6 +83,9 @@ websocket-client==1.8.0
 widgetsnbextension==4.0.11
 pylint==3.2.1
 
+# Testing
+pytest>=8.0.0
+
 # Type Checking
 mypy>=1.8.0
 types-requests>=2.31.0
