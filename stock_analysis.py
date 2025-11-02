@@ -2,8 +2,8 @@
 stock_analysis.py
 
 This module provides functionality for analyzing US stock market data using technical indicators.
-It includes methods for calculating moving averages, price-volume correlations, and trend analysis
-to identify potential trading opportunities.
+It includes methods for calculating moving averages, price-volume correlations, trend analysis,
+and AVSL (Average Volume Support Level) sell signal detection to identify potential trading opportunities.
 
 Dependencies:
     - yfinance: Yahoo Finance API client for fetching stock data
@@ -310,3 +310,90 @@ class UsaStockFinder:
         """
         period_data = self.stock_data.tail(recent_days)
         return {symbol: self._compare_volume_price(period_data, symbol, margin) for symbol in self.symbols}
+
+    def check_avsl_sell_signal(
+        self,
+        period_days: int = 50,
+        volume_decline_threshold: float = 0.5,
+        price_decline_threshold: float = 0.03,
+        recent_days: int = 5,
+    ) -> Dict[str, bool]:
+        """
+        Check for AVSL (Average Volume Support Level) sell signals based on volume and price decline.
+
+        AVSL sell signal occurs when:
+        1. Recent volume is significantly below average volume (support level breaks)
+        2. Price is declining while volume is below average
+        3. This indicates weakening support and potential trend reversal
+
+        Args:
+            period_days (int): Number of days for calculating average volume (default: 50)
+            volume_decline_threshold (float): Threshold for volume decline ratio (default: 0.5 = 50% below average)
+            price_decline_threshold (float): Threshold for price decline percentage (default: 0.03 = 3% decline)
+            recent_days (int): Number of recent days to analyze (default: 5)
+
+        Returns:
+            Dict[str, bool]: True if AVSL sell signal is detected for the symbol
+        """
+        result = {}
+        for symbol in self.symbols:
+            try:
+                if (
+                    symbol not in self.stock_data["Volume"]
+                    or symbol not in self.stock_data["Close"]
+                    or self.stock_data["Volume"][symbol].empty
+                    or self.stock_data["Close"][symbol].empty
+                    or len(self.stock_data["Volume"][symbol]) < period_days
+                    or len(self.stock_data["Close"][symbol]) < period_days
+                ):
+                    result[symbol] = False
+                    continue
+
+                # Calculate average volume over the period
+                volume_data = self.stock_data["Volume"][symbol]
+                price_data = self.stock_data["Close"][symbol]
+
+                if len(volume_data) < period_days or len(price_data) < period_days:
+                    result[symbol] = False
+                    continue
+
+                # Calculate average volume for the period
+                avg_volume = volume_data.tail(period_days).mean()
+
+                if avg_volume <= 0:
+                    result[symbol] = False
+                    continue
+
+                # Check recent days
+                if len(volume_data) < recent_days or len(price_data) < recent_days:
+                    result[symbol] = False
+                    continue
+
+                recent_volume = volume_data.tail(recent_days)
+                recent_price = price_data.tail(recent_days)
+
+                # Check if recent volume is significantly below average
+                recent_avg_volume = recent_volume.mean()
+                volume_ratio = recent_avg_volume / avg_volume if avg_volume > 0 else 1.0
+
+                # Check if price is declining
+                current_price = recent_price.iloc[-1]
+                past_price = recent_price.iloc[0] if len(recent_price) > 1 else current_price
+                price_change = (current_price - past_price) / past_price if past_price > 0 else 0.0
+
+                # AVSL sell signal: volume below threshold AND price declining
+                # Volume support level is broken when volume drops significantly
+                is_volume_below_support = volume_ratio < volume_decline_threshold
+                is_price_declining = price_change < -price_decline_threshold
+
+                # Additional check: most recent volume is below average
+                latest_volume = volume_data.iloc[-1]
+                is_latest_volume_low = latest_volume < avg_volume * (1 - volume_decline_threshold)
+
+                result[symbol] = bool(is_volume_below_support and (is_price_declining or is_latest_volume_low))
+
+            except (IndexError, KeyError, AttributeError, ZeroDivisionError) as e:
+                result[symbol] = False
+                print(f"Error checking AVSL for {symbol}: {e}")
+
+        return result

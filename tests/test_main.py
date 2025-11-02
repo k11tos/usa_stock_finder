@@ -439,6 +439,35 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIn("10", message_text)  # Shares to buy
         self.assertIn("300.00", message_text)  # Current price
 
+    def test_generate_telegram_message_with_avsl_sell_signal(self):
+        """Test generate_telegram_message with AVSL sell signals"""
+        prev_items = ["AAPL", "MSFT", "TSLA"]
+        buy_items = ["AAPL", "MSFT"]
+        not_sell_items = ["AAPL", "MSFT"]
+
+        sell_quantities = {
+            "TSLA": {
+                "current_quantity": 20,
+                "current_price": 250.0,
+                "shares_to_sell": 20,
+                "sell_amount": 5000.0,
+                "profit_loss": 1000.0,
+                "profit_loss_rate": 25.0,
+            }
+        }
+
+        avsl_sell_items = ["TSLA"]
+
+        result = generate_telegram_message(
+            prev_items, buy_items, not_sell_items, None, sell_quantities, avsl_sell_items
+        )
+
+        self.assertIsNotNone(result)
+        message_text = "\n".join(result)
+        self.assertIn("TSLA", message_text)
+        self.assertIn("AVSL", message_text)  # AVSL signal mentioned
+        self.assertIn("5,000", message_text)  # Sell amount (formatted)
+
 
 if __name__ == "__main__":
     unittest.main()

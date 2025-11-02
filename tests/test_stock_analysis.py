@@ -87,6 +87,24 @@ class TestUsaStockFinder(unittest.TestCase):
         result = self.finder.compare_volume_price_movement(recent_days=10, margin=0.01)
         self.assertIsInstance(result, dict)
 
+    def test_check_avsl_sell_signal(self):
+        """check check_avsl_sell_signal function"""
+        result = self.finder.check_avsl_sell_signal()
+        self.assertIsInstance(result, dict)
+        for symbol in self.symbols:
+            self.assertIn(symbol, result)
+            # Result should be boolean (numpy bool is also acceptable)
+            self.assertIsInstance(result[symbol], (bool, type(True)))
+
+    def test_check_avsl_sell_signal_with_custom_params(self):
+        """check check_avsl_sell_signal with custom parameters"""
+        result = self.finder.check_avsl_sell_signal(
+            period_days=30, volume_decline_threshold=0.6, price_decline_threshold=0.05, recent_days=3
+        )
+        self.assertIsInstance(result, dict)
+        for symbol in self.symbols:
+            self.assertIn(symbol, result)
+
 
 if __name__ == "__main__":
     unittest.main()

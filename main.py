@@ -120,6 +120,7 @@ def generate_telegram_message(
     not_sell_items: list[str],
     share_quantities: dict[str, dict[str, Any]] | None = None,
     sell_quantities: dict[str, dict[str, Any]] | None = None,
+    avsl_sell_items: list[str] | None = None,
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
@@ -133,10 +134,11 @@ def generate_telegram_message(
         prev_items (list[str]): List of previously selected stock symbols
         buy_items (list[str]): List of stock symbols recommended for buying
         not_sell_items (list[str]): List of stock symbols not recommended for selling
-        share_quantities (dict[str, dict[str, any]] | None): Dictionary containing share
+        share_quantities (dict[str, dict[str, Any]] | None): Dictionary containing share
             quantity information for buy signals
-        sell_quantities (dict[str, dict[str, any]] | None): Dictionary containing share
+        sell_quantities (dict[str, dict[str, Any]] | None): Dictionary containing share
             quantity information for sell signals
+        avsl_sell_items (list[str] | None): List of stock symbols with AVSL sell signals
 
     Returns:
         list[str] | None: A list of strings containing the date and buy/sell recommendations
@@ -179,11 +181,15 @@ def generate_telegram_message(
 
     # Generate sell messages with quantity details
     sell_items = [item for item in prev_items if item not in keep_items]
-    if sell_items:
+    if sell_items or (avsl_sell_items and len(avsl_sell_items) > 0):
         message.append("\n📉 매도 신호:")
         has_changes = True
 
+        # Regular sell items
         for item in sell_items:
+            if item in (avsl_sell_items or []):
+                continue  # Skip if already in AVSL list (will be handled below)
+            
             if sell_quantities and item in sell_quantities:
                 info = sell_quantities[item]
                 shares = info.get("shares_to_sell", 0)
@@ -205,6 +211,31 @@ def generate_telegram_message(
                 message.append(msg)
             else:
                 message.append(f"  ❌ 매도: {item}")
+
+        # AVSL sell items (with special marking)
+        if avsl_sell_items:
+            for item in avsl_sell_items:
+                if sell_quantities and item in sell_quantities:
+                    info = sell_quantities[item]
+                    shares = info.get("shares_to_sell", 0)
+                    price = info.get("current_price", 0)
+                    sell_amount = info.get("sell_amount", 0)
+                    profit_loss = info.get("profit_loss", 0.0)
+                    profit_rate = info.get("profit_loss_rate", 0.0)
+
+                    msg = f"  ⚠️ AVSL 하락신호: {item}"
+                    msg += f"\n     매도 수량: {shares}주"
+                    msg += f"\n     현재가: ${price:.2f}"
+                    msg += f"\n     매도 금액: ${sell_amount:,.2f}"
+
+                    if profit_loss != 0:
+                        profit_sign = "+" if profit_loss >= 0 else ""
+                        rate_sign = "+" if profit_rate >= 0 else ""
+                        msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+
+                    message.append(msg)
+                else:
+                    message.append(f"  ⚠️ AVSL 하락신호: {item}")
 
     if has_changes:
         return message
@@ -582,16 +613,38 @@ def main() -> None:
         else:
             logger.warning("Failed to calculate investment amounts")
 
-    # Calculate sell quantities for stocks to sell
+    # Check for AVSL sell signals on holdings
+    avsl_sell_items = []
+    current_holdings_detail = fetch_holdings_detail()
+    if current_holdings_detail:
+        # Get symbols from holdings
+        holdings_symbols = [holding.get("symbol", "") for holding in current_holdings_detail if holding.get("symbol")]
+        
+        # Check AVSL for all symbols in finder (includes candidate stocks)
+        # But we only care about holdings that are in the finder
+        avsl_signals = finder.check_avsl_sell_signal()
+        
+        # Filter AVSL signals to only include holdings
+        for symbol in holdings_symbols:
+            if symbol in avsl_signals and avsl_signals[symbol]:
+                avsl_sell_items.append(symbol)
+                logger.info("AVSL sell signal detected for %s", symbol)
+
+    # Calculate sell quantities for stocks to sell (including AVSL signals)
     keep_items = set(buy_items) | set(not_sell_items)
-    sell_items = [item for item in us_stock_holdings if item not in keep_items]
-    if sell_items:
-        sell_quantities = calculate_sell_quantities(sell_items, finder)
+    # Regular sell items (no longer in buy/not_sell)
+    regular_sell_items = [item for item in us_stock_holdings if item not in keep_items]
+    # Combine regular sell items and AVSL sell items (avoid duplicates)
+    all_sell_items = list(set(regular_sell_items + avsl_sell_items))
+    
+    if all_sell_items:
+        sell_quantities = calculate_sell_quantities(all_sell_items, finder)
         if sell_quantities:
-            logger.info("Sell quantities calculated for %d stocks", len(sell_quantities))
+            logger.info("Sell quantities calculated for %d stocks (%d regular, %d AVSL)", 
+                       len(sell_quantities), len(regular_sell_items), len(avsl_sell_items))
 
     telegram_message = generate_telegram_message(
-        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities
+        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, avsl_sell_items
     )
 
     if telegram_message:

@@ -122,12 +122,13 @@ def fetch_account_balance() -> dict[str, float] | None:
         - Returns None if all attempts fail
     """
     exchanges = ["나스닥", "뉴욕"]
-    total_available_cash = 0.0
-    total_balance = 0.0
-    total_buyable_cash = 0.0
 
     for attempt in range(5):
         try:
+            total_available_cash = 0.0
+            total_balance = 0.0
+            total_buyable_cash = 0.0
+            
             for exchange in exchanges:
                 broker = _get_broker(exchange)
                 balance = broker.fetch_present_balance()
