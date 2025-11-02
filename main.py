@@ -32,13 +32,14 @@ import logging.config
 import logging.handlers
 import os.path
 from datetime import date
+from typing import Any
 
 from dotenv import load_dotenv
 
 from file_utils import read_csv_first_column, save_json
 from logging_setup import setup_logging
 from stock_analysis import UsaStockFinder
-from stock_operations import fetch_account_balance, fetch_us_stock_holdings
+from stock_operations import fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -114,30 +115,98 @@ def log_stock_info(symbol: str, correlations: dict[str, dict[str, float]]) -> No
 
 
 def generate_telegram_message(
-    prev_items: list[str], buy_items: list[str], not_sell_items: list[str]
+    prev_items: list[str],
+    buy_items: list[str],
+    not_sell_items: list[str],
+    share_quantities: dict[str, dict[str, Any]] | None = None,
+    sell_quantities: dict[str, dict[str, Any]] | None = None,
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
 
     This function compares the current selection of stocks with the previous selection
     to determine which stocks should be bought or sold. It generates a message that
-    includes the current date and specific buy/sell recommendations.
+    includes the current date and specific buy/sell recommendations with investment
+    amounts and share quantities.
 
     Args:
         prev_items (list[str]): List of previously selected stock symbols
         buy_items (list[str]): List of stock symbols recommended for buying
         not_sell_items (list[str]): List of stock symbols not recommended for selling
+        share_quantities (dict[str, dict[str, any]] | None): Dictionary containing share
+            quantity information for buy signals
+        sell_quantities (dict[str, dict[str, any]] | None): Dictionary containing share
+            quantity information for sell signals
 
     Returns:
-        list[str] | None: A list of strings containing the date and buy/sell recommendations,
-                         or None if there are no changes to report
+        list[str] | None: A list of strings containing the date and buy/sell recommendations
+                         with investment amounts and share quantities, or None if there are
+                         no changes to report
     """
     keep_items = set(buy_items) | set(not_sell_items)
     message = [str(date.today())]
-    message.extend(f"Buy {item}" for item in buy_items if item not in prev_items)
-    message.extend(f"Sell {item}" for item in prev_items if item not in keep_items)
+    has_changes = False
 
-    if len(message) > 1:
+    # Generate buy messages with investment details
+    new_buy_items = [item for item in buy_items if item not in prev_items]
+    if new_buy_items:
+        message.append("\n📈 매수 신호:")
+        has_changes = True
+
+        for item in new_buy_items:
+            if share_quantities and item in share_quantities:
+                info = share_quantities[item]
+                investment = info.get("investment_amount", 0)
+                price = info.get("current_price", 0)
+                shares = info.get("shares_to_buy", 0)
+                current_qty = info.get("current_quantity", 0)
+                total_qty = info.get("total_after_buy", 0)
+
+                if current_qty > 0:
+                    msg = f"  🔄 추가 매수: {item}"
+                    msg += f"\n     현재 보유: {current_qty}주"
+                    msg += f"\n     추가 매수: {shares}주"
+                    msg += f"\n     총 보유: {total_qty}주"
+                else:
+                    msg = f"  ✅ 신규 매수: {item}"
+                    msg += f"\n     매수 수량: {shares}주"
+
+                msg += f"\n     투자 금액: ${investment:,.2f}"
+                msg += f"\n     현재가: ${price:.2f}"
+                message.append(msg)
+            else:
+                message.append(f"  ✅ 매수: {item}")
+
+    # Generate sell messages with quantity details
+    sell_items = [item for item in prev_items if item not in keep_items]
+    if sell_items:
+        message.append("\n📉 매도 신호:")
+        has_changes = True
+
+        for item in sell_items:
+            if sell_quantities and item in sell_quantities:
+                info = sell_quantities[item]
+                shares = info.get("shares_to_sell", 0)
+                price = info.get("current_price", 0)
+                sell_amount = info.get("sell_amount", 0)
+                profit_loss = info.get("profit_loss", 0.0)
+                profit_rate = info.get("profit_loss_rate", 0.0)
+
+                msg = f"  ❌ 매도: {item}"
+                msg += f"\n     매도 수량: {shares}주"
+                msg += f"\n     현재가: ${price:.2f}"
+                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
+
+                if profit_loss != 0:
+                    profit_sign = "+" if profit_loss >= 0 else ""
+                    rate_sign = "+" if profit_rate >= 0 else ""
+                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+
+                message.append(msg)
+            else:
+                message.append(f"  ❌ 매도: {item}")
+
+    if has_changes:
         return message
     return None
 
@@ -241,6 +310,202 @@ def calculate_investment_per_stock(
     return investment_map
 
 
+def calculate_share_quantities(
+    investment_map: dict[str, float],
+    finder: UsaStockFinder,
+    current_holdings: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]] | None:
+    """
+    Calculate share quantities to buy/sell based on investment amounts and current prices.
+
+    This function:
+    1. Calculates number of shares to buy for each stock based on investment amount and current price
+    2. Compares with current holdings to determine additional buy or sell quantities
+    3. Returns detailed information including buy/sell quantities and current holdings
+
+    Args:
+        investment_map (dict[str, float]): Dictionary mapping stock symbols to investment amounts
+        finder (UsaStockFinder): Instance containing current stock prices
+        current_holdings (list[dict[str, Any]] | None): Current holdings detail from account.
+            If None, will fetch from account.
+
+    Returns:
+        dict[str, dict[str, Any]] | None: Dictionary mapping stock symbols to trading information.
+            Each value contains:
+            - "investment_amount": Investment amount for this stock
+            - "current_price": Current market price
+            - "shares_to_buy": Number of shares to buy
+            - "current_quantity": Current number of shares held (0 if not held)
+            - "additional_buy": Additional shares to buy (if already holding)
+            - "total_after_buy": Total shares after buying
+            Returns None if investment_map is empty or prices unavailable
+
+    Note:
+        - Uses current_price from finder
+        - Rounds down shares to buy (cannot buy fractional shares)
+        - If stock is already held, calculates additional buy quantity
+        - Returns None if prices are unavailable
+    """
+    if not investment_map:
+        logger.warning("No investment map provided")
+        return None
+
+    # Fetch current holdings if not provided
+    if current_holdings is None:
+        current_holdings = fetch_holdings_detail()
+
+    # Create a mapping of current holdings for quick lookup
+    holdings_map: dict[str, float] = {}
+    if current_holdings:
+        for holding in current_holdings:
+            symbol = holding.get("symbol", "")
+            quantity = holding.get("quantity", 0.0)
+            if symbol:
+                holdings_map[symbol] = quantity
+
+    result: dict[str, dict[str, Any]] = {}
+
+    for symbol, investment_amount in investment_map.items():
+        current_price = finder.current_price.get(symbol, 0.0)
+
+        if current_price <= 0:
+            logger.warning("Invalid price for %s: %s", symbol, current_price)
+            continue
+
+        # Calculate shares to buy (round down to whole shares)
+        shares_to_buy = int(investment_amount / current_price)
+
+        if shares_to_buy <= 0:
+            logger.warning(
+                "Investment amount %s too small for %s at price %s", investment_amount, symbol, current_price
+            )
+            continue
+
+        # Get current holding quantity
+        current_quantity = holdings_map.get(symbol, 0.0)
+
+        # Calculate additional buy (if already holding) or total shares to buy
+        additional_buy = shares_to_buy if current_quantity == 0 else shares_to_buy
+        total_after_buy = current_quantity + shares_to_buy
+
+        # Calculate actual investment amount (shares * price)
+        actual_investment = shares_to_buy * current_price
+
+        result[symbol] = {
+            "investment_amount": round(investment_amount, 2),
+            "current_price": round(current_price, 2),
+            "shares_to_buy": shares_to_buy,
+            "current_quantity": int(current_quantity),
+            "additional_buy": additional_buy,
+            "total_after_buy": total_after_buy,
+            "actual_investment": round(actual_investment, 2),
+        }
+
+        logger.debug(
+            "%s: Investment=%s, Price=%s, Shares=%d, Current=%d, Total=%d",
+            symbol,
+            investment_amount,
+            current_price,
+            shares_to_buy,
+            int(current_quantity),
+            total_after_buy,
+        )
+
+    if not result:
+        logger.warning("No valid share quantities calculated")
+        return None
+
+    return result
+
+
+def calculate_sell_quantities(
+    sell_items: list[str],
+    finder: UsaStockFinder,
+    current_holdings: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]] | None:
+    """
+    Calculate share quantities to sell for stocks that need to be sold.
+
+    Args:
+        sell_items (list[str]): List of stock symbols to sell
+        finder (UsaStockFinder): Instance containing current stock prices
+        current_holdings (list[dict[str, Any]] | None): Current holdings detail from account.
+            If None, will fetch from account.
+
+    Returns:
+        dict[str, dict[str, Any]] | None: Dictionary mapping stock symbols to sell information.
+            Each value contains:
+            - "current_quantity": Current number of shares held
+            - "current_price": Current market price
+            - "shares_to_sell": Number of shares to sell (all if selling)
+            - "sell_amount": Estimated sell amount (shares * price)
+            Returns None if no sell items or holdings unavailable
+    """
+    if not sell_items:
+        return None
+
+    # Fetch current holdings if not provided
+    if current_holdings is None:
+        current_holdings = fetch_holdings_detail()
+
+    if not current_holdings:
+        logger.warning("No current holdings available for sell calculation")
+        return None
+
+    # Create a mapping of current holdings for quick lookup
+    holdings_map: dict[str, dict[str, Any]] = {}
+    for holding in current_holdings:
+        symbol = holding.get("symbol", "")
+        if symbol:
+            holdings_map[symbol] = holding
+
+    result: dict[str, dict[str, Any]] = {}
+
+    for symbol in sell_items:
+        holding = holdings_map.get(symbol)
+        if not holding:
+            logger.debug("%s not in current holdings, skipping sell calculation", symbol)
+            continue
+
+        current_quantity = holding.get("quantity", 0.0)
+        if current_quantity <= 0:
+            logger.debug("%s has no shares to sell", symbol)
+            continue
+
+        current_price = finder.current_price.get(symbol, holding.get("current_price", 0.0))
+        if current_price <= 0:
+            logger.warning("Invalid price for %s: %s", symbol, current_price)
+            continue
+
+        # Sell all shares
+        shares_to_sell = int(current_quantity)
+        sell_amount = shares_to_sell * current_price
+
+        result[symbol] = {
+            "current_quantity": int(current_quantity),
+            "current_price": round(current_price, 2),
+            "shares_to_sell": shares_to_sell,
+            "sell_amount": round(sell_amount, 2),
+            "avg_price": holding.get("avg_price", 0.0),
+            "profit_loss": holding.get("profit_loss", 0.0),
+            "profit_loss_rate": holding.get("profit_loss_rate", 0.0),
+        }
+
+        logger.debug(
+            "%s: Sell %d shares at %s, Amount=%s",
+            symbol,
+            shares_to_sell,
+            current_price,
+            sell_amount,
+        )
+
+    if not result:
+        logger.warning("No valid sell quantities calculated")
+        return None
+
+    return result
+
+
 def update_final_items(prev_items: list[str], buy_items: list[str], not_sell_items: list[str]) -> list[str]:
     """
     Update the final list of items based on previous selections and new buy/not sell decisions.
@@ -299,6 +564,9 @@ def main() -> None:
 
     # Calculate investment amount per stock
     investment_map = None
+    share_quantities = None
+    sell_quantities = None
+
     if buy_items:
         investment_map = calculate_investment_per_stock(buy_items)
         if investment_map:
@@ -307,10 +575,24 @@ def main() -> None:
                 len(investment_map),
                 sum(investment_map.values()),
             )
+            # Calculate share quantities for buy signals
+            share_quantities = calculate_share_quantities(investment_map, finder)
+            if share_quantities:
+                logger.info("Share quantities calculated for %d stocks", len(share_quantities))
         else:
             logger.warning("Failed to calculate investment amounts")
 
-    telegram_message = generate_telegram_message(us_stock_holdings, buy_items, not_sell_items)
+    # Calculate sell quantities for stocks to sell
+    keep_items = set(buy_items) | set(not_sell_items)
+    sell_items = [item for item in us_stock_holdings if item not in keep_items]
+    if sell_items:
+        sell_quantities = calculate_sell_quantities(sell_items, finder)
+        if sell_quantities:
+            logger.info("Sell quantities calculated for %d stocks", len(sell_quantities))
+
+    telegram_message = generate_telegram_message(
+        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities
+    )
 
     if telegram_message:
         bot_token = os.getenv("telegram_api_key")

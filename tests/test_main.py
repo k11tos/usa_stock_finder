@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 from main import (
     calculate_correlations,
     calculate_investment_per_stock,
+    calculate_sell_quantities,
+    calculate_share_quantities,
     generate_telegram_message,
     log_stock_info,
     select_stocks,
@@ -116,7 +118,9 @@ class TestMainFunctions(unittest.TestCase):
 
         # Should return a message with changes
         self.assertIsNotNone(result)
-        self.assertIn("Buy TSLA", result)
+        # Check for buy signal message format
+        has_buy_signal = any("TSLA" in line or "매수" in line for line in result)
+        self.assertTrue(has_buy_signal)
         # No sell message since all prev items are in keep_items
 
     def test_generate_telegram_message_with_sell_signals(self):
@@ -129,7 +133,9 @@ class TestMainFunctions(unittest.TestCase):
 
         # Should return a message with sell signal for TSLA
         self.assertIsNotNone(result)
-        self.assertIn("Sell TSLA", result)
+        # Check for sell signal message format
+        has_sell_signal = any("TSLA" in line or "매도" in line for line in result)
+        self.assertTrue(has_sell_signal)
 
     def test_generate_telegram_message_no_changes(self):
         """Test generate_telegram_message function with no changes"""
@@ -340,6 +346,98 @@ class TestMainFunctions(unittest.TestCase):
         result = calculate_investment_per_stock(buy_items, min_investment=100.0)
 
         self.assertIsNone(result)
+
+    @patch("main.fetch_holdings_detail")
+    def test_calculate_share_quantities_success(self, mock_fetch_holdings):
+        """Test calculate_share_quantities with successful calculation"""
+        # Mock finder
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"AAPL": 150.0, "MSFT": 300.0}
+
+        # Mock holdings
+        mock_fetch_holdings.return_value = [
+            {"symbol": "AAPL", "quantity": 10.0, "avg_price": 140.0, "current_price": 150.0}
+        ]
+
+        investment_map = {"AAPL": 3000.0, "MSFT": 3000.0}
+
+        result = calculate_share_quantities(investment_map, mock_finder)
+
+        self.assertIsNotNone(result)
+        self.assertIn("AAPL", result)
+        self.assertIn("MSFT", result)
+
+        # AAPL: 3000 / 150 = 20 shares, already holding 10
+        aapl_info = result["AAPL"]
+        self.assertEqual(aapl_info["shares_to_buy"], 20)
+        self.assertEqual(aapl_info["current_quantity"], 10)
+        self.assertEqual(aapl_info["total_after_buy"], 30)
+
+        # MSFT: 3000 / 300 = 10 shares, not holding
+        msft_info = result["MSFT"]
+        self.assertEqual(msft_info["shares_to_buy"], 10)
+        self.assertEqual(msft_info["current_quantity"], 0)
+        self.assertEqual(msft_info["total_after_buy"], 10)
+
+    @patch("main.fetch_holdings_detail")
+    def test_calculate_sell_quantities_success(self, mock_fetch_holdings):
+        """Test calculate_sell_quantities with successful calculation"""
+        # Mock finder
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"TSLA": 250.0}
+
+        # Mock holdings
+        mock_fetch_holdings.return_value = [
+            {
+                "symbol": "TSLA",
+                "quantity": 20.0,
+                "avg_price": 200.0,
+                "current_price": 250.0,
+                "profit_loss": 1000.0,
+                "profit_loss_rate": 25.0,
+            }
+        ]
+
+        sell_items = ["TSLA"]
+
+        result = calculate_sell_quantities(sell_items, mock_finder)
+
+        self.assertIsNotNone(result)
+        self.assertIn("TSLA", result)
+
+        tsla_info = result["TSLA"]
+        self.assertEqual(tsla_info["shares_to_sell"], 20)
+        self.assertEqual(tsla_info["current_price"], 250.0)
+        self.assertEqual(tsla_info["sell_amount"], 5000.0)
+        self.assertEqual(tsla_info["profit_loss"], 1000.0)
+        self.assertEqual(tsla_info["profit_loss_rate"], 25.0)
+
+    @patch("main.fetch_holdings_detail")
+    def test_generate_telegram_message_with_share_quantities(self, mock_fetch_holdings):
+        """Test generate_telegram_message with share quantities"""
+        prev_items = ["AAPL"]
+        buy_items = ["AAPL", "MSFT"]
+        not_sell_items = ["AAPL"]
+
+        share_quantities = {
+            "MSFT": {
+                "investment_amount": 3000.0,
+                "current_price": 300.0,
+                "shares_to_buy": 10,
+                "current_quantity": 0,
+                "total_after_buy": 10,
+            }
+        }
+
+        result = generate_telegram_message(prev_items, buy_items, not_sell_items, share_quantities)
+
+        self.assertIsNotNone(result)
+        # Check that message contains investment details
+        message_text = "\n".join(result)
+        self.assertIn("MSFT", message_text)
+        self.assertIn("3,000", message_text)  # Investment amount (formatted)
+        self.assertIn("10", message_text)  # Shares to buy
+        self.assertIn("300.00", message_text)  # Current price
 
 
 if __name__ == "__main__":

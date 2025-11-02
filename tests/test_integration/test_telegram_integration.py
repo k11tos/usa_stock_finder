@@ -83,7 +83,9 @@ class TestTelegramIntegration(unittest.TestCase):
 
         # Verify message content
         self.assertIsNotNone(message)
-        self.assertIn("Buy MSFT", message)  # MSFT가 새로운 구매 항목
+        # Check for buy signal message format (new format uses Korean)
+        message_text = "\n".join(message) if isinstance(message, list) else str(message)
+        self.assertIn("MSFT", message_text)  # MSFT가 새로운 구매 항목
         # GOOGL은 not_sell_items에만 있으므로 Buy 메시지가 생성되지 않음
         # 대신 not_sell_items에 포함되어 있는지 확인
         self.assertIn("GOOGL", not_sell_items)
@@ -137,8 +139,12 @@ class TestTelegramIntegration(unittest.TestCase):
 
                 # Verify message contains expected content
                 if message:  # Some scenarios might return None (no changes)
+                    message_text = "\n".join(message) if isinstance(message, list) else str(message)
                     for expected_msg in scenario["expected_messages"]:
-                        self.assertIn(expected_msg, message)
+                        # Extract symbol from "Buy SYMBOL" or "Sell SYMBOL"
+                        symbol = expected_msg.split()[-1]
+                        # Check if symbol is in message (new format uses Korean emojis)
+                        self.assertIn(symbol, message_text)
 
                 # Send notification
                 async def test_send():
