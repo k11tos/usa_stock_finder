@@ -125,20 +125,16 @@ class TestErrorHandlingIntegration(unittest.TestCase):
     @patch("stock_operations.mojito.KoreaInvestment")
     def test_stock_api_error_integration(self, mock_korea_investment):
         """Test stock API error handling integration"""
-        # Test API authentication errors
-        mock_api = MagicMock()
-        mock_api.fetch_us_stock_holdings.side_effect = Exception("Invalid API key")
-        mock_korea_investment.return_value = mock_api
+        from stock_operations import APIError, fetch_us_stock_holdings
 
-        # Test API authentication errors - function returns empty list on failure
-        from stock_operations import fetch_us_stock_holdings
+        # Test API authentication errors - now raises APIError instead of returning empty list
+        mock_broker = MagicMock()
+        mock_broker.fetch_present_balance.return_value = {"rt_cd": "-1", "msg1": "Invalid API key"}
+        mock_korea_investment.return_value = mock_broker
 
-        result = fetch_us_stock_holdings()
-        self.assertEqual(result, [])  # Should return empty list on failure
-
-        # Test API rate limiting - function returns empty list on failure
-        result = fetch_us_stock_holdings()
-        self.assertEqual(result, [])  # Should return empty list on failure
+        # Should raise APIError after all retries fail
+        with self.assertRaises(APIError):
+            fetch_us_stock_holdings()
 
     @patch("telegram_utils.telegram.Bot")
     def test_telegram_error_integration(self, mock_bot_class):

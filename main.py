@@ -36,10 +36,16 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from config import (
+    EnvironmentConfig,
+    InvestmentConfig,
+    StrategyConfig,
+    ConfigError,
+)
 from file_utils import read_csv_first_column, save_json
 from logging_setup import setup_logging
 from stock_analysis import UsaStockFinder
-from stock_operations import fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
+from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -83,14 +89,25 @@ def select_stocks(finder: UsaStockFinder, correlations: dict[str, dict[str, floa
             - List of stocks recommended to hold (not sell)
     """
     selected_buy, selected_not_sell = [], []
-    valid_trend = finder.has_valid_trend_template(0)
-    valid_trend_margin = finder.has_valid_trend_template(0.1)
+    valid_trend = finder.has_valid_trend_template(StrategyConfig.MARGIN)
+    valid_trend_margin = finder.has_valid_trend_template(StrategyConfig.MARGIN_RELAXED)
 
     for symbol in finder.symbols:
-        if valid_trend[symbol] and correlations["50"][symbol] >= 50:
+        correlation_50 = correlations.get("50", {}).get(symbol, 0.0)
+        if valid_trend[symbol] and correlation_50 >= StrategyConfig.CORRELATION_THRESHOLD_STRICT:
             selected_buy.append(symbol)
-        elif valid_trend_margin[symbol] and correlations["50"][symbol] >= 40:
+            logger.info(
+                "매수 신호: %s (트렌드: True, 상관계수: %.2f%%)",
+                symbol,
+                correlation_50,
+            )
+        elif valid_trend_margin[symbol] and correlation_50 >= StrategyConfig.CORRELATION_THRESHOLD_RELAXED:
             selected_not_sell.append(symbol)
+            logger.info(
+                "보유 신호: %s (트렌드(마진): True, 상관계수: %.2f%%)",
+                symbol,
+                correlation_50,
+            )
         log_stock_info(symbol, correlations)
 
     return selected_buy, selected_not_sell
@@ -244,8 +261,8 @@ def generate_telegram_message(
 
 def calculate_investment_per_stock(
     buy_items: list[str],
-    reserve_ratio: float = 0.1,
-    min_investment: float = 100.0,
+    reserve_ratio: float | None = None,
+    min_investment: float | None = None,
     max_investment: float | None = None,
 ) -> dict[str, float] | None:
     """
@@ -253,40 +270,55 @@ def calculate_investment_per_stock(
 
     This function:
     1. Fetches account balance and available cash
-    2. Calculates investment amount per stock using equal distribution strategy
+    2. Calculates investment amount per stock using configured distribution strategy
     3. Applies reserve ratio to keep some cash reserved
     4. Applies min/max investment constraints
 
     Args:
         buy_items (list[str]): List of stock symbols recommended for buying
-        reserve_ratio (float): Ratio of cash to reserve (default: 0.1 = 10%)
-        min_investment (float): Minimum investment amount per stock (default: 100.0)
-        max_investment (float | None): Maximum investment amount per stock (None = no limit)
+        reserve_ratio (float | None): Ratio of cash to reserve (None = use config default)
+        min_investment (float | None): Minimum investment amount per stock (None = use config default)
+        max_investment (float | None): Maximum investment amount per stock (None = use config default)
 
     Returns:
         dict[str, float] | None: Dictionary mapping stock symbols to investment amounts,
                                  or None if account balance cannot be fetched or no buy signals
 
     Note:
-        - Uses equal distribution strategy (available cash divided equally among buy signals)
+        - Supports equal distribution or proportional distribution strategies
         - Applies reserve ratio to keep emergency funds
         - Respects min/max investment constraints
         - Returns None if account balance fetch fails
+        - Automatically excludes stocks that cannot afford minimum investment
     """
     if not buy_items:
         logger.warning("No buy signals to calculate investment amounts")
         return None
 
-    account_balance = fetch_account_balance()
+    # Use config defaults if not provided
+    if reserve_ratio is None:
+        reserve_ratio = InvestmentConfig.RESERVE_RATIO
+    if min_investment is None:
+        min_investment = InvestmentConfig.MIN_INVESTMENT
+    if max_investment is None or max_investment == 0:
+        max_investment = InvestmentConfig.MAX_INVESTMENT if InvestmentConfig.MAX_INVESTMENT > 0 else None
+
+    try:
+        account_balance = fetch_account_balance()
+    except APIError as e:
+        logger.error("계좌 잔액 조회 실패: %s", str(e))
+        return None
+
     if not account_balance:
         logger.error("Failed to fetch account balance")
         return None
 
     available_cash = account_balance.get("available_cash", 0.0)
     buyable_cash = account_balance.get("buyable_cash", available_cash)
+    total_balance = account_balance.get("total_balance", available_cash)
 
     if buyable_cash <= 0:
-        logger.warning("No buyable cash available")
+        logger.warning("매수 가능 금액이 없습니다 (예수금: %.2f, 매수가능: %.2f)", available_cash, buyable_cash)
         return None
 
     # Calculate total investment amount (excluding reserve)
@@ -297,45 +329,57 @@ def calculate_investment_per_stock(
         logger.warning("No stocks to invest in")
         return None
 
-    # Equal distribution: divide total investment equally among stocks
-    investment_per_stock = total_investment / num_stocks
+    # Calculate investment per stock based on distribution strategy
+    if InvestmentConfig.DISTRIBUTION_STRATEGY == "proportional" and InvestmentConfig.PROPORTIONAL_PERCENTAGE > 0:
+        # Proportional distribution: each stock gets a percentage of total balance
+        investment_per_stock = total_balance * InvestmentConfig.PROPORTIONAL_PERCENTAGE
+        logger.info(
+            "Using proportional distribution: %.2f%% of total balance per stock",
+            InvestmentConfig.PROPORTIONAL_PERCENTAGE * 100,
+        )
+    else:
+        # Equal distribution: divide total investment equally among stocks
+        investment_per_stock = total_investment / num_stocks
+        logger.info("Using equal distribution strategy")
 
-    # Apply min/max constraints
-    affordable_stocks = buy_items
-    if investment_per_stock < min_investment:
-        # If investment per stock is below minimum, check if we can invest in fewer stocks
-        max_affordable_stocks = int(total_investment / min_investment)
-        if max_affordable_stocks == 0:
-            logger.warning(
-                "Available cash (%s) is insufficient for minimum investment (%s) for any stock",
-                total_investment,
+    # Apply min/max constraints and filter affordable stocks
+    affordable_stocks = []
+    for symbol in buy_items:
+        stock_investment = investment_per_stock
+
+        # Apply max constraint
+        if max_investment and stock_investment > max_investment:
+            stock_investment = max_investment
+
+        # Check if meets minimum investment
+        if stock_investment >= min_investment:
+            affordable_stocks.append((symbol, stock_investment))
+        else:
+            logger.debug(
+                "종목 %s 제외: 투자금액 %.2f < 최소투자금액 %.2f",
+                symbol,
+                stock_investment,
                 min_investment,
             )
-            return None
 
-        # Only invest in stocks that can meet minimum investment
-        investment_per_stock = min_investment
-        num_affordable_stocks = min(num_stocks, max_affordable_stocks)
-        affordable_stocks = buy_items[:num_affordable_stocks]
-        logger.info(
-            "Adjusting investment: %d stocks can afford minimum investment of %s",
-            num_affordable_stocks,
+    if not affordable_stocks:
+        logger.warning(
+            "Available cash (%s) is insufficient for minimum investment (%s) for any stock",
+            total_investment,
             min_investment,
         )
-
-    if max_investment and investment_per_stock > max_investment:
-        investment_per_stock = max_investment
-        logger.info("Capping investment per stock to maximum: %s", max_investment)
+        return None
 
     # Create investment mapping
-    investment_map = {symbol: round(investment_per_stock, 2) for symbol in affordable_stocks}
+    investment_map = {symbol: round(investment, 2) for symbol, investment in affordable_stocks}
 
     logger.info(
-        "Investment calculation: Total: %s, Reserve: %s, Per stock: %s, Stocks: %d",
+        "Investment calculation: Total: %s, Reserve: %s, Per stock: %s, Stocks: %d (원래: %d)",
         buyable_cash,
         buyable_cash * reserve_ratio,
         investment_per_stock,
         len(investment_map),
+        num_stocks,
     )
 
     return investment_map
@@ -416,18 +460,23 @@ def calculate_share_quantities(
         current_quantity = holdings_map.get(symbol, 0.0)
 
         # Calculate additional buy (if already holding) or total shares to buy
-        additional_buy = shares_to_buy if current_quantity == 0 else shares_to_buy
-        total_after_buy = current_quantity + shares_to_buy
+        # 추가매수 = 목표 수량 - 현재 보유 수량 (단, 현재 보유가 0이면 신규매수)
+        if current_quantity == 0:
+            additional_buy = shares_to_buy  # 신규매수
+        else:
+            additional_buy = max(shares_to_buy - current_quantity, 0)  # 추가매수 (목표 수량까지)
+        
+        total_after_buy = current_quantity + additional_buy
 
-        # Calculate actual investment amount (shares * price)
-        actual_investment = shares_to_buy * current_price
+        # Calculate actual investment amount (additional shares * price)
+        actual_investment = additional_buy * current_price
 
         result[symbol] = {
             "investment_amount": round(investment_amount, 2),
             "current_price": round(current_price, 2),
-            "shares_to_buy": shares_to_buy,
+            "shares_to_buy": shares_to_buy,  # 목표 총 수량
             "current_quantity": int(current_quantity),
-            "additional_buy": additional_buy,
+            "additional_buy": additional_buy,  # 실제 추가 매수 수량
             "total_after_buy": total_after_buy,
             "actual_investment": round(actual_investment, 2),
         }
@@ -564,23 +613,39 @@ def main() -> None:
 
     This function:
     1. Sets up logging and loads environment variables
-    2. Fetches current stock holdings
-    3. Analyzes candidate stocks
-    4. Generates trading signals
-    5. Sends notifications via Telegram
-    6. Updates the portfolio data
+    2. Validates required environment variables
+    3. Fetches current stock holdings
+    4. Analyzes candidate stocks
+    5. Generates trading signals
+    6. Sends notifications via Telegram
+    7. Updates the portfolio data
 
     Note:
         - Requires environment variables for Telegram API and account information
         - Expects a portfolio.csv file in the portfolio directory
         - Saves the final portfolio to data.json
+
+    Raises:
+        ConfigError: If required environment variables are missing
     """
     setup_logging()
     load_dotenv()
 
-    us_stock_holdings = fetch_us_stock_holdings()
-    if not us_stock_holdings:
-        logger.error("Failed to get stock tickers from stock account")
+    # Validate environment variables at startup
+    try:
+        EnvironmentConfig.validate()
+        logger.info("Environment variables validated successfully")
+    except ConfigError as e:
+        logger.error("환경 변수 검증 실패: %s", str(e))
+        raise
+
+    try:
+        us_stock_holdings = fetch_us_stock_holdings()
+        if not us_stock_holdings:
+            logger.warning("No stock holdings found in account")
+            us_stock_holdings = []
+    except APIError as e:
+        logger.error("API 오류로 인해 보유 종목 조회 실패: %s", str(e))
         return
 
     candidate_stocks = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
@@ -648,8 +713,8 @@ def main() -> None:
     )
 
     if telegram_message:
-        bot_token = os.getenv("telegram_api_key")
-        chat_id = os.getenv("telegram_manager_id")
+        bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
+        chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
 
         if bot_token and chat_id:
             asyncio.run(

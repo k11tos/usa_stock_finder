@@ -287,13 +287,12 @@ class TestMainFunctions(unittest.TestCase):
         buy_items = ["AAPL", "MSFT", "GOOGL", "TSLA"]
 
         # With 1000 cash and 10% reserve = 900, divided by 4 = 225 per stock
-        # But min_investment is 300, so only 2 stocks can be afforded (900/300 = 3, but we have 4)
+        # But min_investment is 300, so all stocks are below minimum
+        # New logic: excludes stocks that can't meet minimum investment
         result = calculate_investment_per_stock(buy_items, min_investment=300.0)
 
-        self.assertIsNotNone(result)
-        # Only stocks that can afford minimum investment
-        # With 900 total and min 300, max 3 stocks, but we'll adjust to available
-        self.assertLessEqual(len(result), 3)
+        # All stocks are below minimum investment, so result should be None
+        self.assertIsNone(result)
 
     @patch("main.fetch_account_balance")
     def test_calculate_investment_per_stock_with_max_investment(self, mock_fetch_balance):
@@ -367,11 +366,14 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIn("AAPL", result)
         self.assertIn("MSFT", result)
 
-        # AAPL: 3000 / 150 = 20 shares, already holding 10
+        # AAPL: 3000 / 150 = 20 shares (target), already holding 10
+        # additional_buy = max(20 - 10, 0) = 10 shares
+        # total_after_buy = 10 + 10 = 20 shares
         aapl_info = result["AAPL"]
-        self.assertEqual(aapl_info["shares_to_buy"], 20)
-        self.assertEqual(aapl_info["current_quantity"], 10)
-        self.assertEqual(aapl_info["total_after_buy"], 30)
+        self.assertEqual(aapl_info["shares_to_buy"], 20)  # Target total shares
+        self.assertEqual(aapl_info["current_quantity"], 10)  # Currently holding
+        self.assertEqual(aapl_info["additional_buy"], 10)  # Additional shares to buy
+        self.assertEqual(aapl_info["total_after_buy"], 20)  # Total after buying
 
         # MSFT: 3000 / 300 = 10 shares, not holding
         msft_info = result["MSFT"]

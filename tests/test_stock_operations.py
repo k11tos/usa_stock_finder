@@ -6,7 +6,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from stock_operations import fetch_us_stock_holdings, fetch_account_balance, fetch_holdings_detail
+from stock_operations import APIError, fetch_us_stock_holdings, fetch_account_balance, fetch_holdings_detail
 
 
 class TestStockOperations(unittest.TestCase):
@@ -32,7 +32,7 @@ class TestStockOperations(unittest.TestCase):
 
     @patch("stock_operations.mojito.KoreaInvestment")
     def test_fetch_us_stock_holdings_fail(self, mock_korea_investment):
-        """Check fetch_us_stock_holdings fail"""
+        """Check fetch_us_stock_holdings fail - should raise APIError"""
         os.environ["ki_app_key"] = "test_key"
         os.environ["ki_app_secret_key"] = "test_secret"
         os.environ["account_number"] = "test_account"
@@ -41,9 +41,10 @@ class TestStockOperations(unittest.TestCase):
         mock_broker.fetch_present_balance.return_value = {"rt_cd": "-1", "msg1": "Error fetching balance"}
         mock_korea_investment.return_value = mock_broker
 
-        result = fetch_us_stock_holdings()
-
-        self.assertEqual(result, [])
+        # Now raises APIError instead of returning empty list
+        with self.assertRaises(APIError):
+            fetch_us_stock_holdings()
+        
         mock_korea_investment.assert_called()
         mock_broker.fetch_present_balance.assert_called()
 
@@ -77,7 +78,7 @@ class TestStockOperations(unittest.TestCase):
 
     @patch("stock_operations._get_broker")
     def test_fetch_account_balance_fail(self, mock_get_broker):
-        """Check fetch_account_balance fail"""
+        """Check fetch_account_balance fail - should raise APIError"""
         os.environ["ki_app_key"] = "test_key"
         os.environ["ki_app_secret_key"] = "test_secret"
         os.environ["account_number"] = "test_account"
@@ -86,9 +87,9 @@ class TestStockOperations(unittest.TestCase):
         mock_broker.fetch_present_balance.return_value = {"rt_cd": "-1", "msg1": "Error fetching balance"}
         mock_get_broker.return_value = mock_broker
 
-        result = fetch_account_balance()
-
-        self.assertIsNone(result)
+        # Now raises APIError instead of returning None
+        with self.assertRaises(APIError):
+            fetch_account_balance()
 
     @patch("stock_operations._get_broker")
     def test_fetch_holdings_detail_success(self, mock_get_broker):
@@ -144,7 +145,7 @@ class TestStockOperations(unittest.TestCase):
 
     @patch("stock_operations._get_broker")
     def test_fetch_holdings_detail_fail(self, mock_get_broker):
-        """Check fetch_holdings_detail fail"""
+        """Check fetch_holdings_detail fail - should raise APIError"""
         os.environ["ki_app_key"] = "test_key"
         os.environ["ki_app_secret_key"] = "test_secret"
         os.environ["account_number"] = "test_account"
@@ -153,9 +154,9 @@ class TestStockOperations(unittest.TestCase):
         mock_broker.fetch_present_balance.return_value = {"rt_cd": "-1", "msg1": "Error fetching balance"}
         mock_get_broker.return_value = mock_broker
 
-        result = fetch_holdings_detail()
-
-        self.assertIsNone(result)
+        # Now raises APIError instead of returning None
+        with self.assertRaises(APIError):
+            fetch_holdings_detail()
 
     @patch("stock_operations._get_broker")
     def test_fetch_holdings_detail_empty(self, mock_get_broker):
