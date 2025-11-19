@@ -143,12 +143,22 @@ class InvestmentConfig:
 
 
 class AVSLConfig:
-    """AVSL (Average Volume Support Level) sell signal parameters."""
+    """AVSL (Average Volume Support Level) sell signal parameters based on Buff Dormeier's method."""
 
+    # Legacy parameters (kept for backward compatibility)
     PERIOD_DAYS = int(os.getenv("AVSL_PERIOD_DAYS", "50"))
     VOLUME_DECLINE_THRESHOLD = float(os.getenv("AVSL_VOLUME_DECLINE_THRESHOLD", "0.5"))  # 50% below average
     PRICE_DECLINE_THRESHOLD = float(os.getenv("AVSL_PRICE_DECLINE_THRESHOLD", "0.03"))  # 3% decline
     RECENT_DAYS = int(os.getenv("AVSL_RECENT_DAYS", "5"))
+
+    # Buff Dormeier AVSL parameters
+    BARS = int(os.getenv("AVSL_BARS", "26"))  # 기본 기간 (일반적으로 26 또는 50)
+    STDDEV_MULT = float(os.getenv("AVSL_STDDEV_MULT", "2.0"))  # 표준편차 배수 (볼린저 밴드)
+    MIN_LENGTH = int(os.getenv("AVSL_MIN_LENGTH", "3"))  # VPCI 기반 Length 최소값
+    MAX_LENGTH = int(os.getenv("AVSL_MAX_LENGTH", "50"))  # VPCI 기반 Length 최대값
+    FAST_PERIOD = int(os.getenv("AVSL_FAST_PERIOD", "5"))  # 빠른 이동평균 기간
+    SLOW_PERIOD = int(os.getenv("AVSL_SLOW_PERIOD", "20"))  # 느린 이동평균 기간
+    TIMEFRAME = os.getenv("AVSL_TIMEFRAME", "1d")  # 타임프레임 (1d, 1wk, 1mo)
 
 
 class DataQualityConfig:
@@ -207,6 +217,13 @@ def get_config() -> dict[str, Any]:
             "volume_decline_threshold": AVSLConfig.VOLUME_DECLINE_THRESHOLD,
             "price_decline_threshold": AVSLConfig.PRICE_DECLINE_THRESHOLD,
             "recent_days": AVSLConfig.RECENT_DAYS,
+            "bars": AVSLConfig.BARS,
+            "stddev_mult": AVSLConfig.STDDEV_MULT,
+            "min_length": AVSLConfig.MIN_LENGTH,
+            "max_length": AVSLConfig.MAX_LENGTH,
+            "fast_period": AVSLConfig.FAST_PERIOD,
+            "slow_period": AVSLConfig.SLOW_PERIOD,
+            "timeframe": AVSLConfig.TIMEFRAME,
         },
         "data_quality": {
             "min_data_points_ma_50": DataQualityConfig.MIN_DATA_POINTS_MA_50,

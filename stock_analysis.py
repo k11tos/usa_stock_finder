@@ -17,6 +17,8 @@ Main Classes:
 import logging
 from typing import Dict, List
 
+import numpy as np
+import pandas as pd
 import yfinance as yf
 
 from config import AVSLConfig, DataQualityConfig, StrategyConfig
@@ -466,121 +468,347 @@ class UsaStockFinder:
         period_data = self.stock_data.tail(recent_days)
         return {symbol: self._compare_volume_price(period_data, symbol, margin) for symbol in self.symbols}
 
+    def calculate_vpci_components(
+        self, symbol: str, fast_period: int | None = None, slow_period: int | None = None
+    ) -> pd.DataFrame | None:
+        """
+        Calculate VPC, VPR, VM, and VPCI components for Buff Dormeier AVSL.
+
+        VPC (Volume Price Component): Difference between price-based average and volume-weighted average
+        VPR (Volume Price Ratio): Ratio of fast to slow price moving averages
+        VM (Volume Multiplier): Ratio of fast to slow volume moving averages
+        VPCI: VPC × VPR × VM (combined volume-price relationship indicator)
+
+        Args:
+            symbol (str): Stock symbol to analyze
+            fast_period (int | None): Fast moving average period (None = use config default)
+            slow_period (int | None): Slow moving average period (None = use config default)
+
+        Returns:
+            pd.DataFrame | None: DataFrame with columns ['VPC', 'VPR', 'VM', 'VPCI'], or None if insufficient data
+        """
+        if fast_period is None:
+            fast_period = AVSLConfig.FAST_PERIOD
+        if slow_period is None:
+            slow_period = AVSLConfig.SLOW_PERIOD
+
+        try:
+            if (
+                symbol not in self.stock_data["Close"]
+                or symbol not in self.stock_data["Volume"]
+                or symbol not in self.stock_data["Low"]
+                or self.stock_data["Close"][symbol].empty
+                or len(self.stock_data["Close"][symbol]) < slow_period
+            ):
+                return None
+
+            close = self.stock_data["Close"][symbol]
+            volume = self.stock_data["Volume"][symbol]
+            low = self.stock_data["Low"][symbol]
+
+            # Calculate moving averages
+            fast_ma_price = close.rolling(window=fast_period).mean()
+            slow_ma_price = close.rolling(window=slow_period).mean()
+            fast_ma_volume = volume.rolling(window=fast_period).mean()
+            slow_ma_volume = volume.rolling(window=slow_period).mean()
+
+            # VWAP (Volume Weighted Average Price) approximation
+            # Using a rolling window for VWAP calculation
+            typical_price = (self.stock_data["High"][symbol] + low + close) / 3
+            vwap = (typical_price * volume).rolling(window=slow_period).sum() / volume.rolling(window=slow_period).sum()
+
+            # VPC: Difference between close price and VWAP (normalized)
+            # Normalize by dividing by close price to make it comparable across stocks
+            vpc = (close - vwap) / close
+
+            # VPR: Fast MA / Slow MA ratio (price)
+            vpr = fast_ma_price / slow_ma_price
+
+            # VM: Fast MA / Slow MA ratio (volume)
+            # Avoid division by zero
+            vm = fast_ma_volume / slow_ma_volume.replace(0, np.nan)
+
+            # VPCI: Combined indicator
+            # Using absolute value of VPC to ensure positive values, then multiply by ratios
+            vpci = np.abs(vpc) * vpr * vm
+
+            # Create DataFrame
+            result = pd.DataFrame(
+                {
+                    "VPC": vpc,
+                    "VPR": vpr,
+                    "VM": vm,
+                    "VPCI": vpci,
+                },
+                index=close.index,
+            )
+
+            return result
+
+        except (IndexError, KeyError, AttributeError, ZeroDivisionError) as e:
+            logger.debug("Error calculating VPCI components for %s: %s", symbol, str(e))
+            return None
+
+    def calculate_avsl_series(
+        self,
+        symbol: str,
+        bars: int | None = None,
+        stddev_mult: float | None = None,
+        fast_period: int | None = None,
+        slow_period: int | None = None,
+    ) -> pd.Series | None:
+        """
+        Calculate Buff Dormeier AVSL (Anti-Volume Stop Loss) series.
+
+        AVSL is a dynamic trailing stop based on:
+        1. VPCI (Volume Price Component Indicator) to determine adaptive length
+        2. Price component (low price adjusted by VPC/VPR)
+        3. Bollinger Band lower band using standard deviation
+
+        Args:
+            symbol (str): Stock symbol to analyze
+            bars (int | None): Base period for calculation (None = use config default)
+            stddev_mult (float | None): Standard deviation multiplier for Bollinger Band (None = use config default)
+            fast_period (int | None): Fast moving average period for VPCI (None = use config default)
+            slow_period (int | None): Slow moving average period for VPCI (None = use config default)
+
+        Returns:
+            pd.Series | None: Series of AVSL stop loss prices, or None if insufficient data
+        """
+        if bars is None:
+            bars = AVSLConfig.BARS
+        if stddev_mult is None:
+            stddev_mult = AVSLConfig.STDDEV_MULT
+        if fast_period is None:
+            fast_period = AVSLConfig.FAST_PERIOD
+        if slow_period is None:
+            slow_period = AVSLConfig.SLOW_PERIOD
+
+        try:
+            # Calculate VPCI components
+            vpci_df = self.calculate_vpci_components(symbol, fast_period, slow_period)
+            if vpci_df is None:
+                return None
+
+            if symbol not in self.stock_data["Low"] or self.stock_data["Low"][symbol].empty or len(vpci_df) < bars:
+                return None
+
+            low = self.stock_data["Low"][symbol]
+            vpci = vpci_df["VPCI"]
+            vpc = vpci_df["VPC"]
+
+            # Calculate adaptive length: Length = 3 + VPCI (rounded, clamped)
+            # VPCI is typically normalized, so we scale it appropriately
+            # Using the latest VPCI value to determine length
+            # For each bar, we use a rolling window based on the VPCI at that point
+            length_base = AVSLConfig.MIN_LENGTH
+            length_max = AVSLConfig.MAX_LENGTH
+
+            # Price component: Low price adjusted by VPC and VPR
+            # Adjustment factor based on VPC and VPR
+            adjustment = 1.0 + (vpc * 0.1)  # Scale VPC adjustment
+            price_component = low * adjustment
+
+            # Calculate AVSL using adaptive length
+            # For simplicity, use a rolling window based on average VPCI over the period
+            avg_vpci = vpci.rolling(window=bars).mean()
+            # Convert VPCI to length (scaled appropriately)
+            # VPCI values are typically small, so we scale them
+            dynamic_length = (length_base + avg_vpci * 10).clip(lower=length_base, upper=length_max).round().astype(int)
+
+            # Calculate moving average of price component with adaptive length
+            # Use a simplified approach: use the most recent dynamic_length value
+            recent_length = int(dynamic_length.iloc[-1]) if not dynamic_length.empty else length_base
+            recent_length = max(length_base, min(recent_length, length_max))
+
+            # Price component moving average
+            price_component_ma = price_component.rolling(window=recent_length).mean()
+
+            # Calculate standard deviation of price component
+            price_component_std = price_component.rolling(window=recent_length).std()
+
+            # AVSL = Price Component MA - (StdDev × Multiplier)
+            # This creates the lower Bollinger Band
+            avsl = price_component_ma - (price_component_std * stddev_mult)
+
+            # Fill NaN values with forward fill (use previous valid AVSL)
+            avsl = avsl.ffill()
+
+            return avsl
+
+        except (IndexError, KeyError, AttributeError, ZeroDivisionError, ValueError) as e:
+            logger.debug("Error calculating AVSL series for %s: %s", symbol, str(e))
+            return None
+
+    def get_latest_avsl(self, symbol: str) -> float | None:
+        """
+        Get the most recent AVSL (Anti-Volume Stop Loss) value for a symbol.
+
+        Args:
+            symbol (str): Stock symbol to analyze
+
+        Returns:
+            float | None: Latest AVSL stop loss price, or None if calculation fails
+        """
+        try:
+            avsl_series = self.calculate_avsl_series(symbol)
+            if avsl_series is None or avsl_series.empty:
+                return None
+
+            # Get the last valid value
+            latest_avsl = avsl_series.dropna().iloc[-1] if not avsl_series.dropna().empty else None
+
+            if latest_avsl is None or np.isnan(latest_avsl) or latest_avsl <= 0:
+                return None
+
+            return float(latest_avsl)
+
+        except (IndexError, KeyError, AttributeError, ValueError) as e:
+            logger.debug("Error getting latest AVSL for %s: %s", symbol, str(e))
+            return None
+
     def check_avsl_sell_signal(
         self,
         period_days: int | None = None,
         volume_decline_threshold: float | None = None,
         price_decline_threshold: float | None = None,
         recent_days: int | None = None,
+        use_buff_avsl: bool = True,
     ) -> Dict[str, bool]:
         """
-        Check for AVSL (Average Volume Support Level) sell signals based on volume and price decline.
+        Check for AVSL (Anti-Volume Stop Loss) sell signals based on Buff Dormeier's method.
 
-        AVSL sell signal occurs when:
-        1. Recent volume is significantly below average volume (support level breaks)
-        2. Price is declining while volume is below average
-        3. This indicates weakening support and potential trend reversal
+        When use_buff_avsl=True (default):
+        - Uses Buff Dormeier AVSL calculation (VPCI + Bollinger Band based dynamic stop)
+        - Sell signal occurs when current price (close or low) falls below the AVSL line
+        - This indicates support level break and potential trend reversal
+
+        When use_buff_avsl=False (legacy mode):
+        - Uses simple volume/price decline threshold method
+        - Kept for backward compatibility
 
         Args:
-            period_days (int | None): Number of days for calculating average volume (None = use config default)
-            volume_decline_threshold (float | None): Threshold for volume decline ratio (None = use config default)
-            price_decline_threshold (float | None): Threshold for price decline percentage (None = use config default)
-            recent_days (int | None): Number of recent days to analyze (None = use config default)
+            period_days (int | None): Legacy parameter - not used in Buff AVSL mode
+            volume_decline_threshold (float | None): Legacy parameter - not used in Buff AVSL mode
+            price_decline_threshold (float | None): Legacy parameter - not used in Buff AVSL mode
+            recent_days (int | None): Legacy parameter - not used in Buff AVSL mode
+            use_buff_avsl (bool): If True, use Buff Dormeier AVSL method (default: True)
 
         Returns:
-            Dict[str, bool]: True if AVSL sell signal is detected for the symbol
+            Dict[str, bool]: True if AVSL sell signal is detected (current price < AVSL stop loss)
         """
-        # Use config defaults if not provided
-        if period_days is None:
-            period_days = AVSLConfig.PERIOD_DAYS
-        if volume_decline_threshold is None:
-            volume_decline_threshold = AVSLConfig.VOLUME_DECLINE_THRESHOLD
-        if price_decline_threshold is None:
-            price_decline_threshold = AVSLConfig.PRICE_DECLINE_THRESHOLD
-        if recent_days is None:
-            recent_days = AVSLConfig.RECENT_DAYS
-
         result = {}
+
+        if not use_buff_avsl:
+            # Legacy mode: simple volume/price decline method
+            if period_days is None:
+                period_days = AVSLConfig.PERIOD_DAYS
+            if volume_decline_threshold is None:
+                volume_decline_threshold = AVSLConfig.VOLUME_DECLINE_THRESHOLD
+            if price_decline_threshold is None:
+                price_decline_threshold = AVSLConfig.PRICE_DECLINE_THRESHOLD
+            if recent_days is None:
+                recent_days = AVSLConfig.RECENT_DAYS
+
+            for symbol in self.symbols:
+                try:
+                    if (
+                        symbol not in self.stock_data["Volume"]
+                        or symbol not in self.stock_data["Close"]
+                        or self.stock_data["Volume"][symbol].empty
+                        or self.stock_data["Close"][symbol].empty
+                        or len(self.stock_data["Volume"][symbol]) < period_days
+                        or len(self.stock_data["Close"][symbol]) < period_days
+                    ):
+                        result[symbol] = False
+                        continue
+
+                    volume_data = self.stock_data["Volume"][symbol]
+                    price_data = self.stock_data["Close"][symbol]
+
+                    if len(volume_data) < period_days or len(price_data) < period_days:
+                        result[symbol] = False
+                        continue
+
+                    avg_volume = volume_data.tail(period_days).mean()
+
+                    if avg_volume <= 0:
+                        result[symbol] = False
+                        continue
+
+                    if len(volume_data) < recent_days or len(price_data) < recent_days:
+                        result[symbol] = False
+                        continue
+
+                    recent_volume = volume_data.tail(recent_days)
+                    recent_price = price_data.tail(recent_days)
+
+                    recent_avg_volume = recent_volume.mean()
+                    volume_ratio = recent_avg_volume / avg_volume if avg_volume > 0 else 1.0
+
+                    current_price = recent_price.iloc[-1]
+                    past_price = recent_price.iloc[0] if len(recent_price) > 1 else current_price
+                    price_change = (current_price - past_price) / past_price if past_price > 0 else 0.0
+
+                    is_volume_below_support = volume_ratio < volume_decline_threshold
+                    is_price_declining = price_change < -price_decline_threshold
+
+                    latest_volume = volume_data.iloc[-1]
+                    is_latest_volume_low = latest_volume < avg_volume * (1 - volume_decline_threshold)
+
+                    result[symbol] = bool(is_volume_below_support and (is_price_declining or is_latest_volume_low))
+
+                except (IndexError, KeyError, AttributeError, ZeroDivisionError) as e:
+                    result[symbol] = False
+                    logger.debug("Error checking AVSL signal (legacy mode) for %s: %s", symbol, str(e))
+
+            return result
+
+        # Buff Dormeier AVSL mode (default)
         for symbol in self.symbols:
             try:
-                if (
-                    symbol not in self.stock_data["Volume"]
-                    or symbol not in self.stock_data["Close"]
-                    or self.stock_data["Volume"][symbol].empty
-                    or self.stock_data["Close"][symbol].empty
-                    or len(self.stock_data["Volume"][symbol]) < period_days
-                    or len(self.stock_data["Close"][symbol]) < period_days
-                ):
+                # Get latest AVSL stop loss level
+                latest_avsl = self.get_latest_avsl(symbol)
+
+                if latest_avsl is None:
+                    result[symbol] = False
+                    logger.debug("%s: AVSL calculation failed or insufficient data", symbol)
+                    continue
+
+                # Get current price (use close price, or low if available)
+                if symbol not in self.stock_data["Close"] or self.stock_data["Close"][symbol].empty:
                     result[symbol] = False
                     continue
 
-                # Calculate average volume over the period
-                volume_data = self.stock_data["Volume"][symbol]
-                price_data = self.stock_data["Close"][symbol]
+                current_price = self.stock_data["Close"][symbol].iloc[-1]
 
-                if len(volume_data) < period_days or len(price_data) < period_days:
-                    result[symbol] = False
-                    continue
+                # Alternative: use low price for more sensitive detection
+                # current_price = (
+                #     self.stock_data["Low"][symbol].iloc[-1]
+                #     if symbol in self.stock_data["Low"]
+                #     else current_price
+                # )
 
-                # Calculate average volume for the period
-                avg_volume = volume_data.tail(period_days).mean()
+                # AVSL sell signal: current price falls below AVSL stop loss
+                is_stop_hit = current_price < latest_avsl
 
-                if avg_volume <= 0:
-                    result[symbol] = False
-                    continue
-
-                # Check recent days
-                if len(volume_data) < recent_days or len(price_data) < recent_days:
-                    result[symbol] = False
-                    continue
-
-                recent_volume = volume_data.tail(recent_days)
-                recent_price = price_data.tail(recent_days)
-
-                # Check if recent volume is significantly below average
-                recent_avg_volume = recent_volume.mean()
-                volume_ratio = recent_avg_volume / avg_volume if avg_volume > 0 else 1.0
-
-                # Check if price is declining
-                current_price = recent_price.iloc[-1]
-                past_price = recent_price.iloc[0] if len(recent_price) > 1 else current_price
-                price_change = (current_price - past_price) / past_price if past_price > 0 else 0.0
-
-                # AVSL sell signal: volume below threshold AND price declining
-                # Volume support level is broken when volume drops significantly
-                is_volume_below_support = volume_ratio < volume_decline_threshold
-                is_price_declining = price_change < -price_decline_threshold
-
-                # Additional check: most recent volume is below average
-                latest_volume = volume_data.iloc[-1]
-                is_latest_volume_low = latest_volume < avg_volume * (1 - volume_decline_threshold)
-
-                result[symbol] = bool(is_volume_below_support and (is_price_declining or is_latest_volume_low))
+                result[symbol] = bool(is_stop_hit)
 
                 logger.debug(
-                    "%s: AVSL signal evaluation\n"
-                    "  Average volume: %.2f\n"
-                    "  Recent average volume: %.2f (ratio: %.2f)\n"
-                    "  Latest volume: %.2f\n"
-                    "  Price change: %.2f%%\n"
-                    "  Volume decline: %s\n"
-                    "  Price decline: %s\n"
-                    "  Latest volume low: %s\n"
+                    "%s: Buff AVSL signal evaluation\n"
+                    "  Current price: %.2f\n"
+                    "  AVSL stop loss: %.2f\n"
+                    "  Price below AVSL: %s\n"
                     "  AVSL sell signal: %s",
                     symbol,
-                    avg_volume,
-                    recent_avg_volume,
-                    volume_ratio,
-                    latest_volume,
-                    price_change * 100,
-                    is_volume_below_support,
-                    is_price_declining,
-                    is_latest_volume_low,
+                    current_price,
+                    latest_avsl,
+                    is_stop_hit,
                     result[symbol],
                 )
 
-            except (IndexError, KeyError, AttributeError, ZeroDivisionError) as e:
+            except (IndexError, KeyError, AttributeError, ValueError) as e:
                 result[symbol] = False
-                logger.debug("Error checking AVSL signal (%s): %s", symbol, str(e))
+                logger.debug("Error checking Buff AVSL signal for %s: %s", symbol, str(e))
 
         return result
