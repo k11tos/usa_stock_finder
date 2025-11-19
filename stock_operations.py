@@ -235,7 +235,7 @@ def fetch_account_balance() -> dict[str, float] | None:
                         logger.info(
                             "%s exchange account_info all fields (first 10): %s",
                             exchange,
-                            {k: v for k, v in list(account_info.items())[:10]},
+                            dict(list(account_info.items())[:10]),
                         )
                     else:
                         logger.warning("%s exchange account_info is not a dict: %s", exchange, type(account_info))

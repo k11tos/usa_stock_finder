@@ -18,6 +18,12 @@ disable=
     W0640,  # cell-var-from-loop (common in test files)
     R1720,  # no-else-raise (common in test files)
     W0404,  # reimported (common in test files)
+    R0914,  # too-many-locals (complex functions need more variables)
+    R0915,  # too-many-statements (complex business logic)
+    R0912,  # too-many-branches (complex conditional logic)
+    R1702,  # too-many-nested-blocks (API response handling needs nesting)
+    R0916,  # too-many-boolean-expressions (complex condition checks)
+    R0904,  # too-many-public-methods (test classes need many test methods)
 
 [DESIGN]
 max-args=10

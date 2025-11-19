@@ -323,7 +323,7 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIsNone(result)
 
     @patch("main.fetch_account_balance")
-    def test_calculate_investment_per_stock_no_buy_items(self, mock_fetch_balance):
+    def test_calculate_investment_per_stock_no_buy_items(self, _mock_fetch_balance):
         """Test calculate_investment_per_stock with empty buy items"""
         result = calculate_investment_per_stock([])
 
@@ -415,7 +415,7 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(tsla_info["profit_loss_rate"], 25.0)
 
     @patch("main.fetch_holdings_detail")
-    def test_generate_telegram_message_with_share_quantities(self, mock_fetch_holdings):
+    def test_generate_telegram_message_with_share_quantities(self, _mock_fetch_holdings):
         """Test generate_telegram_message with share quantities"""
         prev_items = ["AAPL"]
         buy_items = ["AAPL", "MSFT"]
