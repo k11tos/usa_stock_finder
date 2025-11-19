@@ -120,6 +120,9 @@ class StrategyConfig:
     # MA increasing check period
     MA_INCREASE_CHECK_DAYS = int(os.getenv("MA_INCREASE_CHECK_DAYS", "21"))
 
+    # Stop loss threshold (absolute loss percentage from average purchase price)
+    STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.10"))  # 10% loss threshold
+
 
 class InvestmentConfig:
     """Investment calculation parameters."""
@@ -190,6 +193,7 @@ def get_config() -> dict[str, Any]:
             "margin": StrategyConfig.MARGIN,
             "margin_relaxed": StrategyConfig.MARGIN_RELAXED,
             "ma_increase_check_days": StrategyConfig.MA_INCREASE_CHECK_DAYS,
+            "stop_loss_pct": StrategyConfig.STOP_LOSS_PCT,
         },
         "investment": {
             "reserve_ratio": InvestmentConfig.RESERVE_RATIO,

@@ -18,6 +18,7 @@ from main import (
     select_stocks,
     update_final_items,
 )
+from sell_signals import SellDecision, SellReason
 
 
 class TestMainFunctions(unittest.TestCase):
@@ -129,7 +130,10 @@ class TestMainFunctions(unittest.TestCase):
         buy_items = ["AAPL", "MSFT"]
         not_sell_items = ["AAPL", "MSFT", "GOOGL"]
 
-        result = generate_telegram_message(prev_items, buy_items, not_sell_items)
+        # TSLA is not in buy_items or not_sell_items, so it should be sold due to trend
+        sell_decisions = {"TSLA": SellDecision("TSLA", SellReason.TREND, 100.0)}
+
+        result = generate_telegram_message(prev_items, buy_items, not_sell_items, None, None, sell_decisions)
 
         # Should return a message with sell signal for TSLA
         self.assertIsNotNone(result)
@@ -458,11 +462,9 @@ class TestMainFunctions(unittest.TestCase):
             }
         }
 
-        avsl_sell_items = ["TSLA"]
+        sell_decisions = {"TSLA": SellDecision("TSLA", SellReason.AVSL, 20.0)}
 
-        result = generate_telegram_message(
-            prev_items, buy_items, not_sell_items, None, sell_quantities, avsl_sell_items
-        )
+        result = generate_telegram_message(prev_items, buy_items, not_sell_items, None, sell_quantities, sell_decisions)
 
         self.assertIsNotNone(result)
         message_text = "\n".join(result)

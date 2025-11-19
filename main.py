@@ -39,6 +39,7 @@ from dotenv import load_dotenv
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, StrategyConfig
 from file_utils import read_csv_first_column, save_json
 from logging_setup import setup_logging
+from sell_signals import SellDecision, SellReason, evaluate_sell_decisions
 from stock_analysis import UsaStockFinder
 from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from telegram_utils import send_telegram_message
@@ -132,7 +133,7 @@ def generate_telegram_message(
     not_sell_items: list[str],
     share_quantities: dict[str, dict[str, Any]] | None = None,
     sell_quantities: dict[str, dict[str, Any]] | None = None,
-    avsl_sell_items: list[str] | None = None,
+    sell_decisions: dict[str, SellDecision] | None = None,
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
@@ -150,14 +151,14 @@ def generate_telegram_message(
             quantity information for buy signals
         sell_quantities (dict[str, dict[str, Any]] | None): Dictionary containing share
             quantity information for sell signals
-        avsl_sell_items (list[str] | None): List of stock symbols with AVSL sell signals
+        sell_decisions (dict[str, SellDecision] | None): Dictionary of sell decisions with reasons
 
     Returns:
         list[str] | None: A list of strings containing the date and buy/sell recommendations
                          with investment amounts and share quantities, or None if there are
                          no changes to report
     """
-    keep_items = set(buy_items) | set(not_sell_items)
+    set(buy_items) | set(not_sell_items)
     message = [str(date.today())]
     has_changes = False
 
@@ -191,63 +192,94 @@ def generate_telegram_message(
             else:
                 message.append(f"  ✅ Buy: {item}")
 
-    # Generate sell messages with quantity details
-    sell_items = [item for item in prev_items if item not in keep_items]
-    if sell_items or (avsl_sell_items and len(avsl_sell_items) > 0):
+    # Generate sell messages with quantity details and reasons
+    sell_items_to_display = []
+    if sell_decisions:
+        # Get all sell decisions (excluding HOLD)
+        for symbol, decision in sell_decisions.items():
+            if decision.reason != SellReason.NONE and decision.quantity > 0:
+                sell_items_to_display.append((symbol, decision))
+
+    if sell_items_to_display:
         message.append("\n📉 Sell Signals:")
         has_changes = True
 
-        # Regular sell items
-        for item in sell_items:
-            if item in (avsl_sell_items or []):
-                continue  # Skip if already in AVSL list (will be handled below)
+        # Group by reason for better organization
+        stop_loss_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.STOP_LOSS]
+        avsl_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.AVSL]
+        trend_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.TREND]
 
-            if sell_quantities and item in sell_quantities:
-                info = sell_quantities[item]
+        # Display stop loss items first (highest priority)
+        for symbol, decision in stop_loss_items:
+            if sell_quantities and symbol in sell_quantities:
+                info = sell_quantities[symbol]
                 shares = info.get("shares_to_sell", 0)
                 price = info.get("current_price", 0)
                 sell_amount = info.get("sell_amount", 0)
                 profit_loss = info.get("profit_loss", 0.0)
                 profit_rate = info.get("profit_loss_rate", 0.0)
 
-                msg = f"  ❌ Sell: {item}"
-                msg += f"\n     Sell Quantity: {shares} shares"
-                msg += f"\n     Current Price: ${price:.2f}"
-                msg += f"\n     Sell Amount: ${sell_amount:,.2f}"
+                msg = f"  🟥 매도 (절대 손절): {symbol}"
+                msg += f"\n     매도 수량: {shares}주"
+                msg += f"\n     현재가: ${price:.2f}"
+                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
 
                 if profit_loss != 0:
                     profit_sign = "+" if profit_loss >= 0 else ""
                     rate_sign = "+" if profit_rate >= 0 else ""
-                    msg += f"\n     P&L: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
 
                 message.append(msg)
             else:
-                message.append(f"  ❌ Sell: {item}")
+                message.append(f"  🟥 매도 (절대 손절): {symbol}")
 
-        # AVSL sell items (with special marking)
-        if avsl_sell_items:
-            for item in avsl_sell_items:
-                if sell_quantities and item in sell_quantities:
-                    info = sell_quantities[item]
-                    shares = info.get("shares_to_sell", 0)
-                    price = info.get("current_price", 0)
-                    sell_amount = info.get("sell_amount", 0)
-                    profit_loss = info.get("profit_loss", 0.0)
-                    profit_rate = info.get("profit_loss_rate", 0.0)
+        # Display AVSL items
+        for symbol, decision in avsl_items:
+            if sell_quantities and symbol in sell_quantities:
+                info = sell_quantities[symbol]
+                shares = info.get("shares_to_sell", 0)
+                price = info.get("current_price", 0)
+                sell_amount = info.get("sell_amount", 0)
+                profit_loss = info.get("profit_loss", 0.0)
+                profit_rate = info.get("profit_loss_rate", 0.0)
 
-                    msg = f"  ⚠️ AVSL Decline Signal: {item}"
-                    msg += f"\n     Sell Quantity: {shares} shares"
-                    msg += f"\n     Current Price: ${price:.2f}"
-                    msg += f"\n     Sell Amount: ${sell_amount:,.2f}"
+                msg = f"  🟧 매도 (AVSL 거래량 지지선 붕괴): {symbol}"
+                msg += f"\n     매도 수량: {shares}주"
+                msg += f"\n     현재가: ${price:.2f}"
+                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
 
-                    if profit_loss != 0:
-                        profit_sign = "+" if profit_loss >= 0 else ""
-                        rate_sign = "+" if profit_rate >= 0 else ""
-                        msg += f"\n     P&L: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+                if profit_loss != 0:
+                    profit_sign = "+" if profit_loss >= 0 else ""
+                    rate_sign = "+" if profit_rate >= 0 else ""
+                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
 
-                    message.append(msg)
-                else:
-                    message.append(f"  ⚠️ AVSL Decline Signal: {item}")
+                message.append(msg)
+            else:
+                message.append(f"  🟧 매도 (AVSL 거래량 지지선 붕괴): {symbol}")
+
+        # Display trend items
+        for symbol, decision in trend_items:
+            if sell_quantities and symbol in sell_quantities:
+                info = sell_quantities[symbol]
+                shares = info.get("shares_to_sell", 0)
+                price = info.get("current_price", 0)
+                sell_amount = info.get("sell_amount", 0)
+                profit_loss = info.get("profit_loss", 0.0)
+                profit_rate = info.get("profit_loss_rate", 0.0)
+
+                msg = f"  🟦 매도 (트렌드/전략 조건 이탈): {symbol}"
+                msg += f"\n     매도 수량: {shares}주"
+                msg += f"\n     현재가: ${price:.2f}"
+                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
+
+                if profit_loss != 0:
+                    profit_sign = "+" if profit_loss >= 0 else ""
+                    rate_sign = "+" if profit_rate >= 0 else ""
+                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+
+                message.append(msg)
+            else:
+                message.append(f"  🟦 매도 (트렌드/전략 조건 이탈): {symbol}")
 
     if has_changes:
         return message
@@ -675,42 +707,62 @@ def main() -> None:
         else:
             logger.warning("Failed to calculate investment amounts")
 
-    # Check for AVSL sell signals on holdings
-    avsl_sell_items = []
+    # Evaluate sell decisions using 3-tier system
+    sell_decisions = {}
     current_holdings_detail = fetch_holdings_detail()
     if current_holdings_detail:
-        # Get symbols from holdings
-        holdings_symbols = [holding.get("symbol", "") for holding in current_holdings_detail if holding.get("symbol")]
-
-        # Check AVSL for all symbols in finder (includes candidate stocks)
-        # But we only care about holdings that are in the finder
+        # Get AVSL signals for all symbols in finder
         avsl_signals = finder.check_avsl_sell_signal()
 
-        # Filter AVSL signals to only include holdings
-        for symbol in holdings_symbols:
-            if symbol in avsl_signals and avsl_signals[symbol]:
-                avsl_sell_items.append(symbol)
-                logger.info("AVSL sell signal detected for %s", symbol)
+        # Evaluate sell decisions using 3-tier system
+        sell_decisions = evaluate_sell_decisions(
+            finder=finder,
+            holdings=current_holdings_detail,
+            selected_buy=buy_items,
+            selected_not_sell=not_sell_items,
+            avsl_signals=avsl_signals,
+        )
 
-    # Calculate sell quantities for stocks to sell (including AVSL signals)
-    keep_items = set(buy_items) | set(not_sell_items)
-    # Regular sell items (no longer in buy/not_sell)
-    regular_sell_items = [item for item in us_stock_holdings if item not in keep_items]
-    # Combine regular sell items and AVSL sell items (avoid duplicates)
-    all_sell_items = list(set(regular_sell_items + avsl_sell_items))
+        # Log sell decisions by reason
+        stop_loss_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.STOP_LOSS)
+        avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
+        trend_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TREND)
+        hold_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.NONE)
+
+        logger.info(
+            "Sell decisions evaluated: Stop Loss=%d, AVSL=%d, Trend=%d, Hold=%d",
+            stop_loss_count,
+            avsl_count,
+            trend_count,
+            hold_count,
+        )
+
+        # Log individual sell decisions
+        for symbol, decision in sell_decisions.items():
+            if decision.reason != SellReason.NONE:
+                logger.info(
+                    "Sell decision: %s - Reason: %s, Quantity: %.2f",
+                    symbol,
+                    decision.reason.value,
+                    decision.quantity,
+                )
+
+    # Get list of symbols to sell (for calculate_sell_quantities)
+    all_sell_items = [
+        symbol
+        for symbol, decision in sell_decisions.items()
+        if decision.reason != SellReason.NONE and decision.quantity > 0
+    ]
 
     if all_sell_items:
-        sell_quantities = calculate_sell_quantities(all_sell_items, finder)
+        sell_quantities = calculate_sell_quantities(all_sell_items, finder, current_holdings_detail)
         if sell_quantities:
-            logger.info(
-                "Sell quantities calculated for %d stocks (%d regular, %d AVSL)",
-                len(sell_quantities),
-                len(regular_sell_items),
-                len(avsl_sell_items),
-            )
+            logger.info("Sell quantities calculated for %d stocks", len(sell_quantities))
+    else:
+        sell_quantities = None
 
     telegram_message = generate_telegram_message(
-        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, avsl_sell_items
+        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, sell_decisions
     )
 
     if telegram_message:
