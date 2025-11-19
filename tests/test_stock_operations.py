@@ -6,7 +6,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from stock_operations import APIError, fetch_us_stock_holdings, fetch_account_balance, fetch_holdings_detail
+from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 
 
 class TestStockOperations(unittest.TestCase):
@@ -44,7 +44,7 @@ class TestStockOperations(unittest.TestCase):
         # Now raises APIError instead of returning empty list
         with self.assertRaises(APIError):
             fetch_us_stock_holdings()
-        
+
         mock_korea_investment.assert_called()
         mock_broker.fetch_present_balance.assert_called()
 

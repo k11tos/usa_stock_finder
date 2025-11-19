@@ -23,8 +23,6 @@ load_dotenv()
 class ConfigError(Exception):
     """Custom exception for configuration errors."""
 
-    pass
-
 
 class EnvironmentConfig:
     """Environment variable configuration and validation."""
@@ -65,7 +63,7 @@ class EnvironmentConfig:
                     hints.append(f"{var} (또는 {', '.join(cls.ENV_VAR_ALIASES[var])})")
                 else:
                     hints.append(var)
-            
+
             raise ConfigError(
                 f"Missing required environment variables: {', '.join(hints)}. "
                 f"Please set these variables in your .env file or environment."
@@ -218,4 +216,3 @@ def get_config() -> dict[str, Any]:
             "retry_delay_seconds": APIConfig.RETRY_DELAY_SECONDS,
         },
     }
-

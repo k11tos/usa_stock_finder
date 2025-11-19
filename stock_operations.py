@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 class APIError(Exception):
     """Custom exception for API-related errors."""
 
-    pass
-
 
 def fetch_us_stock_holdings():
     """
@@ -94,7 +92,12 @@ def fetch_us_stock_holdings():
                 os.remove("token.dat")
         except Exception as e:
             last_error = str(e)
-            logger.error("Unexpected error fetching stock tickers (attempt %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e))
+            logger.error(
+                "Unexpected error fetching stock tickers (attempt %d/%d): %s",
+                attempt + 1,
+                APIConfig.MAX_RETRIES,
+                str(e),
+            )
 
     # All retries failed - raise exception instead of returning empty list
     error_msg = f"Failed to fetch stock tickers after {APIConfig.MAX_RETRIES} attempts"
@@ -131,14 +134,14 @@ def fetch_account_balance() -> dict[str, float] | None:
     """
     Fetches account balance and cash reserves from the stock account.
 
-    Retrieves available cash balance (예수금) and other account balance information
+    Retrieves available cash balance and other account balance information
     from both NASDAQ and NYSE exchanges, then returns the combined balance.
 
     Returns:
         dict[str, float] | None: Dictionary containing:
-            - "available_cash": Available cash balance (예수금) - 합산된 값
-            - "total_balance": Total account balance - 합산된 값
-            - "buyable_cash": Buyable cash amount (매수가능금액) - 합산된 값
+            - "available_cash": Available cash balance - Summed value
+            - "total_balance": Total account balance - Summed value
+            - "buyable_cash": Buyable cash amount - Summed value
             Returns None on failure
 
     Raises:
@@ -147,207 +150,244 @@ def fetch_account_balance() -> dict[str, float] | None:
     Note:
         - Retries up to configured number of times
         - Queries both NASDAQ and NYSE exchanges
-        - Combines balances from both exchanges (합산)
+        - Combines balances from both exchanges (summed)
         - Raises APIError on final failure instead of silently returning None
     """
     logger.info("=" * 60)
-    logger.info("fetch_account_balance() 함수 시작")
+    logger.info("fetch_account_balance() function started")
     exchanges = ["나스닥", "뉴욕"]
     last_error = None
 
     for attempt in range(APIConfig.MAX_RETRIES):
         try:
-            logger.info("계좌 잔액 조회 시도 %d/%d", attempt + 1, APIConfig.MAX_RETRIES)
+            logger.info("Fetching account balance attempt %d/%d", attempt + 1, APIConfig.MAX_RETRIES)
             total_available_cash = 0.0
             total_balance = 0.0
             total_buyable_cash = 0.0
-            
+
             for exchange in exchanges:
-                logger.info("%s 거래소 조회 시작", exchange)
+                logger.info("Fetching %s exchange", exchange)
                 broker = _get_broker(exchange)
                 balance = broker.fetch_present_balance()
-                
-                logger.info("%s 거래소 API 호출 완료, rt_cd: %s", exchange, balance.get("rt_cd", "N/A"))
+
+                logger.info("%s exchange API call completed, rt_cd: %s", exchange, balance.get("rt_cd", "N/A"))
 
                 if balance["rt_cd"] != "0":
                     error_msg = balance.get("msg1", "Unknown error")
-                    logger.error("%s 거래소 API 오류: %s", exchange, error_msg)
+                    logger.error("%s exchange API error: %s", exchange, error_msg)
                     raise ValueError(f"API error for {exchange}: {error_msg}")
 
-                # 디버깅: API 응답 구조 확인 (INFO 레벨로 출력하여 항상 보이도록)
+                # Debug: Check API response structure (INFO level to always show)
                 logger.info("=" * 60)
-                logger.info("%s 거래소 API 응답 키: %s", exchange, list(balance.keys()))
-                logger.info("%s 거래소 API 응답 rt_cd: %s, msg1: %s", exchange, balance.get("rt_cd"), balance.get("msg1", "N/A"))
-                
+                logger.info("%s exchange API response keys: %s", exchange, list(balance.keys()))
+                logger.info(
+                    "%s exchange API response rt_cd: %s, msg1: %s",
+                    exchange,
+                    balance.get("rt_cd"),
+                    balance.get("msg1", "N/A"),
+                )
+
                 # output2 contains account balance information
                 # Common field names in Korean Investment API:
-                # - dnca_tot_amt: 예수금 총액 (total cash)
-                # - nxdy_excc_amt: 익일 정산 금액
-                # - prvs_rcdl_excc_amt: 전일 정산 금액
-                # - cma_evlu_amt: CMA 평가 금액
-                # - bfdx_tot_amt: 전일 총액
-                # - tot_evlu_amt: 총 평가 금액
-                # - ord_psbl_cash: 주문 가능 현금
-                # - nrcvb_buy_amt: 미수매수금액
+                # - dnca_tot_amt: Total cash (available cash)
+                # - nxdy_excc_amt: Next day settlement amount
+                # - prvs_rcdl_excc_amt: Previous day settlement amount
+                # - cma_evlu_amt: CMA evaluation amount
+                # - bfdx_tot_amt: Previous day total amount
+                # - tot_evlu_amt: Total evaluation amount
+                # - ord_psbl_cash: Orderable cash
+                # - nrcvb_buy_amt: Unpaid buy amount
                 output2 = balance.get("output2", [])
-                logger.info("%s 거래소 output2 존재 여부: %s, 타입: %s, 길이: %s", 
-                           exchange, output2 is not None, type(output2), len(output2) if isinstance(output2, (list, dict)) else "N/A")
-                
+                logger.info(
+                    "%s exchange output2 exists: %s, type: %s, length: %s",
+                    exchange,
+                    output2 is not None,
+                    type(output2),
+                    len(output2) if isinstance(output2, (list, dict)) else "N/A",
+                )
+
                 if output2 and isinstance(output2, list) and len(output2) > 0:
-                    logger.info("%s 거래소 output2[0] 타입: %s", exchange, type(output2[0]) if len(output2) > 0 else "N/A")
+                    logger.info(
+                        "%s exchange output2[0] type: %s", exchange, type(output2[0]) if len(output2) > 0 else "N/A"
+                    )
                     account_info = output2[0] if isinstance(output2[0], dict) else {}
-                    
-                    # 디버깅: account_info의 모든 키와 값 출력 (INFO 레벨로 출력)
+
+                    # Debug: Print all keys and values of account_info (INFO level)
                     if isinstance(account_info, dict):
                         logger.info(
-                            "%s 거래소 account_info 모든 키: %s",
+                            "%s exchange account_info all keys: %s",
                             exchange,
                             list(account_info.keys()),
                         )
-                        # 모든 필드와 값을 출력 (숫자 필드 중심)
-                        numeric_fields = {k: v for k, v in account_info.items() if isinstance(v, (int, float, str)) and str(v).replace('.', '').replace('-', '').isdigit()}
+                        # Print all fields and values (focus on numeric fields)
+                        numeric_fields = {
+                            k: v
+                            for k, v in account_info.items()
+                            if isinstance(v, (int, float, str)) and str(v).replace(".", "").replace("-", "").isdigit()
+                        }
                         if numeric_fields:
                             logger.info(
-                                "%s 거래소 account_info 숫자 필드: %s",
+                                "%s exchange account_info numeric fields: %s",
                                 exchange,
                                 numeric_fields,
                             )
-                        # 모든 필드 출력 (처음 10개)
+                        # Print all fields (first 10)
                         logger.info(
-                            "%s 거래소 account_info 전체 필드 (처음 10개): %s",
+                            "%s exchange account_info all fields (first 10): %s",
                             exchange,
                             {k: v for k, v in list(account_info.items())[:10]},
                         )
                     else:
-                        logger.warning("%s 거래소 account_info가 dict가 아님: %s", exchange, type(account_info))
-                    
-                    # Try different possible field names for available cash (예수금)
-                    # 실제 API 응답 필드명 사용
+                        logger.warning("%s exchange account_info is not a dict: %s", exchange, type(account_info))
+
+                    # Try different possible field names for available cash
+                    # Using actual API response field names
                     available_cash = 0.0
                     for field in [
-                        "frcr_dncl_amt_2",  # 외화 예수금 (실제 필드)
-                        "dnca_tot_amt",  # 일반 예수금
+                        "frcr_dncl_amt_2",  # Foreign currency available cash (actual field)
+                        "dnca_tot_amt",  # General available cash
                         "dnca_tot_amt_2",
                         "dnca_tot_amt_1",
                         "cash",
-                        "예수금"
                     ]:
                         value = account_info.get(field, 0) or 0
                         if value:
                             try:
                                 available_cash = float(value)
-                                logger.info("%s 거래소: 예수금 필드 '%s'에서 값 발견: %.2f", exchange, field, available_cash)
+                                logger.info(
+                                    "%s exchange: Available cash value found in field '%s': %.2f",
+                                    exchange,
+                                    field,
+                                    available_cash,
+                                )
                                 break
                             except (ValueError, TypeError):
                                 continue
-                    
-                    # 총액 (평가금액)
+
+                    # Total balance (evaluation amount)
                     exchange_balance = 0.0
                     for field in [
-                        "frcr_evlu_amt2",  # 외화 평가금액 (실제 필드)
-                        "tot_evlu_amt",  # 일반 총 평가금액
+                        "frcr_evlu_amt2",  # Foreign currency evaluation amount (actual field)
+                        "tot_evlu_amt",  # General total evaluation amount
                         "bfdx_tot_amt",
                         "evlu_amt",
                         "total_amt",
-                        "총액"
                     ]:
                         value = account_info.get(field, 0) or 0
                         if value:
                             try:
                                 exchange_balance = float(value)
-                                logger.info("%s 거래소: 총액 필드 '%s'에서 값 발견: %.2f", exchange, field, exchange_balance)
+                                logger.info(
+                                    "%s exchange: Total balance value found in field '%s': %.2f",
+                                    exchange,
+                                    field,
+                                    exchange_balance,
+                                )
                                 break
                             except (ValueError, TypeError):
                                 continue
-                    
-                    # 매수가능금액
+
+                    # Buyable cash amount
                     buyable_cash = 0.0
                     for field in [
-                        "nxdy_frcr_drwg_psbl_amt",  # 익일 외화 출금가능금액 (실제 필드)
-                        "frcr_drwg_psbl_amt_1",  # 외화 출금가능금액 (실제 필드)
-                        "nxdy_excc_amt",  # 익일 정산 금액
-                        "prvs_rcdl_excc_amt",  # 전일 정산 금액
-                        "ord_psbl_cash",  # 주문 가능 현금
+                        "nxdy_frcr_drwg_psbl_amt",  # Next day foreign currency withdrawable amount (actual field)
+                        "frcr_drwg_psbl_amt_1",  # Foreign currency withdrawable amount (actual field)
+                        "nxdy_excc_amt",  # Next day settlement amount
+                        "prvs_rcdl_excc_amt",  # Previous day settlement amount
+                        "ord_psbl_cash",  # Orderable cash
                         "buyable_cash",
-                        "매수가능"
                     ]:
                         value = account_info.get(field, 0) or 0
                         if value:
                             try:
                                 buyable_cash = float(value)
-                                logger.info("%s 거래소: 매수가능 필드 '%s'에서 값 발견: %.2f", exchange, field, buyable_cash)
+                                logger.info(
+                                    "%s exchange: Buyable cash value found in field '%s': %.2f",
+                                    exchange,
+                                    field,
+                                    buyable_cash,
+                                )
                                 break
                             except (ValueError, TypeError):
                                 continue
-                    
-                    # 매수가능금액이 없으면 예수금 사용
+
+                    # Use available cash if buyable cash is not available
                     if buyable_cash == 0.0:
                         buyable_cash = available_cash
 
-                    # 두 거래소의 잔액을 합산
+                    # Sum balances from both exchanges
                     total_available_cash += available_cash
-                    total_balance += exchange_balance  # 수정: 누적 합산
+                    total_balance += exchange_balance  # Modified: Accumulated sum
                     total_buyable_cash += buyable_cash
 
                     logger.info(
-                        "%s 거래소: 예수금=%.2f, 총액=%.2f, 매수가능=%.2f",
+                        "%s exchange: Available cash=%.2f, Total balance=%.2f, Buyable cash=%.2f",
                         exchange,
                         available_cash,
                         exchange_balance,
                         buyable_cash,
                     )
                 else:
-                    logger.warning("%s 거래소: output2가 비어있거나 유효하지 않음", exchange)
-                    logger.info("%s 거래소: balance 구조 - output2 타입: %s", exchange, type(output2))
+                    logger.warning("%s exchange: output2 is empty or invalid", exchange)
+                    logger.info("%s exchange: balance structure - output2 type: %s", exchange, type(output2))
                     if output2:
-                        logger.info("%s 거래소: output2 값: %s", exchange, str(output2)[:200])
-                    # output2가 없을 때 다른 가능한 키 확인
-                    other_keys = [k for k in balance.keys() if k not in ["rt_cd", "msg1", "msg_cd", "output1", "output2"]]
+                        logger.info("%s exchange: output2 value: %s", exchange, str(output2)[:200])
+                    # Check other possible keys when output2 is not available
+                    other_keys = [
+                        k for k in balance.keys() if k not in ["rt_cd", "msg1", "msg_cd", "output1", "output2"]
+                    ]
                     if other_keys:
-                        logger.info("%s 거래소: balance의 다른 키들: %s", exchange, other_keys)
+                        logger.info("%s exchange: balance other keys: %s", exchange, other_keys)
 
             # Return combined balance from both exchanges
-            # 잔액이 0이어도 정상 응답 반환 (0은 유효한 값)
+            # Return normal response even if balance is 0 (0 is a valid value)
             result = {
                 "available_cash": total_available_cash,
                 "total_balance": total_balance if total_balance > 0 else total_available_cash,
                 "buyable_cash": total_buyable_cash if total_buyable_cash > 0 else total_available_cash,
             }
-            
+
             if total_available_cash > 0 or total_balance > 0:
                 logger.info(
-                    "계좌 잔액 조회 성공: 예수금=%.2f, 총액=%.2f, 매수가능=%.2f",
+                    "Account balance fetched successfully: Available cash=%.2f, Total balance=%.2f, Buyable cash=%.2f",
                     result["available_cash"],
                     result["total_balance"],
                     result["buyable_cash"],
                 )
             else:
                 logger.warning(
-                    "계좌 잔액이 0입니다: 예수금=%.2f, 총액=%.2f, 매수가능=%.2f",
+                    "Account balance is 0: Available cash=%.2f, Total balance=%.2f, Buyable cash=%.2f",
                     result["available_cash"],
                     result["total_balance"],
                     result["buyable_cash"],
                 )
-            
+
             return result
 
         except (ValueError, KeyError, TypeError) as e:
             last_error = str(e)
             logger.error("=" * 60)
-            logger.error("계좌 잔액 조회 중 오류 발생 (시도 %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e))
-            logger.error("오류 타입: %s", type(e).__name__)
+            logger.error(
+                "Error occurred while fetching account balance (attempt %d/%d): %s",
+                attempt + 1,
+                APIConfig.MAX_RETRIES,
+                str(e),
+            )
+            logger.error("Error type: %s", type(e).__name__)
             import traceback
-            logger.error("상세 오류:\n%s", traceback.format_exc())
+
+            logger.error("Detailed error:\n%s", traceback.format_exc())
             if os.path.exists("token.dat"):
-                logger.info("token.dat 파일 삭제")
+                logger.info("Removing token.dat file")
                 os.remove("token.dat")
         except Exception as e:
             last_error = str(e)
             logger.error("=" * 60)
-            logger.error("예상치 못한 오류 발생 (시도 %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e))
-            logger.error("오류 타입: %s", type(e).__name__)
+            logger.error("Unexpected error occurred (attempt %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e))
+            logger.error("Error type: %s", type(e).__name__)
             import traceback
-            logger.error("상세 오류:\n%s", traceback.format_exc())
+
+            logger.error("Detailed error:\n%s", traceback.format_exc())
 
     # All retries failed - raise exception instead of returning None
     error_msg = f"Failed to fetch account balance after {APIConfig.MAX_RETRIES} attempts"
@@ -445,7 +485,7 @@ def fetch_holdings_detail() -> list[dict[str, Any]] | None:
                             }
                             all_holdings.append(holding_detail)
                             logger.debug(
-                                "보유 종목: %s (%s) - 수량: %.2f, 평균가: %.2f, 현재가: %.2f",
+                                "Holding: %s (%s) - Quantity: %.2f, Avg Price: %.2f, Current Price: %.2f",
                                 symbol,
                                 exchange,
                                 quantity,
@@ -454,19 +494,26 @@ def fetch_holdings_detail() -> list[dict[str, Any]] | None:
                             )
 
             if all_holdings:
-                logger.info("보유 종목 조회 성공: %d개 종목", len(all_holdings))
+                logger.info("Holdings fetched successfully: %d stocks", len(all_holdings))
                 return all_holdings
-            logger.info("보유 종목 없음")
+            logger.info("No holdings")
             return []
 
         except (ValueError, KeyError, TypeError) as e:
             last_error = str(e)
-            logger.error("Error fetching holdings detail (attempt %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e))
+            logger.error(
+                "Error fetching holdings detail (attempt %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e)
+            )
             if os.path.exists("token.dat"):
                 os.remove("token.dat")
         except Exception as e:
             last_error = str(e)
-            logger.error("Unexpected error fetching holdings detail (attempt %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e))
+            logger.error(
+                "Unexpected error fetching holdings detail (attempt %d/%d): %s",
+                attempt + 1,
+                APIConfig.MAX_RETRIES,
+                str(e),
+            )
 
     # All retries failed - raise exception instead of returning None
     error_msg = f"Failed to fetch holdings detail after {APIConfig.MAX_RETRIES} attempts"

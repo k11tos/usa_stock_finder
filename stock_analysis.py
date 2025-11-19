@@ -19,11 +19,7 @@ from typing import Dict, List
 
 import yfinance as yf
 
-from config import (
-    AVSLConfig,
-    DataQualityConfig,
-    StrategyConfig,
-)
+from config import AVSLConfig, DataQualityConfig, StrategyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -61,20 +57,20 @@ class UsaStockFinder:
         self.current_price = {}
         for symbol in self.symbols:
             try:
-                # 데이터 유효성 검증을 헬퍼 함수로 분리
+                # Separate data validation into helper function
                 if self._is_symbol_data_valid(symbol):
 
                     self.last_high[symbol] = self.stock_data["High"][symbol].max()
                     self.current_price[symbol] = self.stock_data["Close"][symbol].iloc[-1]
                     self.last_low[symbol] = self.stock_data["Low"][symbol].min()
                 else:
-                    # 데이터가 없는 경우 기본값 설정
+                    # Set default values when data is not available
                     self.last_high[symbol] = 0.0
                     self.current_price[symbol] = 0.0
                     self.last_low[symbol] = 0.0
                     print(f"Warning: No data available for {symbol}")
             except (IndexError, KeyError, AttributeError) as e:
-                # 에러 발생 시 기본값 설정
+                # Set default values when error occurs
                 self.last_high[symbol] = 0.0
                 self.current_price[symbol] = 0.0
                 self.last_low[symbol] = 0.0
@@ -145,7 +141,7 @@ class UsaStockFinder:
             if last_high < DataQualityConfig.MIN_PRICE_THRESHOLD:
                 result[symbol] = False
                 logger.debug(
-                    "%s: 52주 고가가 너무 낮음 (%.2f < %.2f), 조건 미충족",
+                    "%s: 52-week high too low (%.2f < %.2f), condition not met",
                     symbol,
                     last_high,
                     DataQualityConfig.MIN_PRICE_THRESHOLD,
@@ -156,7 +152,7 @@ class UsaStockFinder:
             result[symbol] = current > threshold_price * (1 - margin)
 
             logger.debug(
-                "%s: 현재가 %.2f, 52주 고가 %.2f, 기준가(%.0f%%) %.2f, 마진 적용 %.2f -> %s",
+                "%s: Current price %.2f, 52-week high %.2f, Threshold(%.0f%%) %.2f, With margin %.2f -> %s",
                 symbol,
                 current,
                 last_high,
@@ -185,24 +181,24 @@ class UsaStockFinder:
             current = self.current_price.get(symbol, 0.0)
             last_low = self.last_low.get(symbol, 0.0)
 
-            # ZeroDivision 방지: last_low가 0이거나 너무 작으면 False 반환
+            # Prevent ZeroDivision: Return False if last_low is 0 or too small
             if last_low < DataQualityConfig.MIN_PRICE_THRESHOLD:
                 result[symbol] = False
                 logger.debug(
-                    "%s: 52주 저가가 너무 낮음 (%.2f < %.2f), 조건 미충족",
+                    "%s: 52-week low too low (%.2f < %.2f), condition not met",
                     symbol,
                     last_low,
                     DataQualityConfig.MIN_PRICE_THRESHOLD,
                 )
                 continue
 
-            # 안전한 계산: (current - last_low) / last_low * 100
+            # Safe calculation: (current - last_low) / last_low * 100
             increase_percent = ((current - last_low) / last_low) * 100
             threshold = threshold_percent * (1 - margin)
             result[symbol] = increase_percent >= threshold
 
             logger.debug(
-                "%s: 52주 저가 대비 상승률 %.2f%% (기준: %.2f%%, 마진: %.2f%%) -> %s",
+                "%s: Increase from 52-week low %.2f%% (Threshold: %.2f%%, Margin: %.2f%%) -> %s",
                 symbol,
                 increase_percent,
                 threshold_percent,
@@ -237,7 +233,7 @@ class UsaStockFinder:
                 else:
                     result[symbol] = 0.0
                     logger.debug(
-                        "%s: 데이터 부족 (필요: %d일, 실제: %d일), MA%d 계산 불가",
+                        "%s: Insufficient data (Required: %d days, Actual: %d days), Cannot calculate MA%d",
                         symbol,
                         days,
                         len(self.stock_data["Close"][symbol]) if symbol in self.stock_data["Close"] else 0,
@@ -245,7 +241,7 @@ class UsaStockFinder:
                     )
             except (IndexError, KeyError, AttributeError) as e:
                 result[symbol] = 0.0
-                logger.debug("%s: MA%d 계산 중 오류: %s", symbol, days, str(e))
+                logger.debug("%s: Error calculating MA%d: %s", symbol, days, str(e))
         return result
 
     def is_200_ma_increasing_recently(self, margin: float) -> Dict[str, bool]:
@@ -275,7 +271,7 @@ class UsaStockFinder:
                         past_ma = ma_200.iloc[-check_days]
                         result[symbol] = current_ma >= past_ma * (1 - margin)
                         logger.debug(
-                            "%s: MA200 증가 확인 (현재: %.2f, %d일 전: %.2f, 마진: %.2f%%) -> %s",
+                            "%s: MA200 increase check (Current: %.2f, %d days ago: %.2f, Margin: %.2f%%) -> %s",
                             symbol,
                             current_ma,
                             check_days,
@@ -286,7 +282,7 @@ class UsaStockFinder:
                     else:
                         result[symbol] = False
                         logger.debug(
-                            "%s: MA200 데이터 부족 (필요: %d일, 실제: %d일)",
+                            "%s: MA200 insufficient data (Required: %d days, Actual: %d days)",
                             symbol,
                             check_days,
                             len(ma_200),
@@ -294,14 +290,14 @@ class UsaStockFinder:
                 else:
                     result[symbol] = False
                     logger.debug(
-                        "%s: MA200 계산 불가 (필요: %d일, 실제: %d일)",
+                        "%s: Cannot calculate MA200 (Required: %d days, Actual: %d days)",
                         symbol,
                         required_days,
                         len(self.stock_data["Close"][symbol]) if symbol in self.stock_data["Close"] else 0,
                     )
             except (IndexError, KeyError, AttributeError) as e:
                 result[symbol] = False
-                logger.debug("%s: MA200 증가 확인 중 오류: %s", symbol, str(e))
+                logger.debug("%s: Error checking MA200 increase: %s", symbol, str(e))
         return result
 
     def has_valid_trend_template(self, margin: float) -> Dict[str, bool]:
@@ -329,24 +325,24 @@ class UsaStockFinder:
         latest_200_ma = self.get_moving_averages(StrategyConfig.MA_200_DAYS)
         current_price = self.current_price
         is_ma_increasing = self.is_200_ma_increasing_recently(margin)
-        is_increasing_with_volume_and_price = self.compare_volume_price_movement(
-            StrategyConfig.MA_200_DAYS, margin
-        )
+        is_increasing_with_volume_and_price = self.compare_volume_price_movement(StrategyConfig.MA_200_DAYS, margin)
 
         valid = {}
         for symbol in self.symbols:
-            # 데이터 부족 종목 제외: MA 값이 0이면 데이터 부족으로 간주
-            if (
-                latest_50_ma[symbol] == 0.0
-                or latest_150_ma[symbol] == 0.0
-                or latest_200_ma[symbol] == 0.0
-            ):
+            # Exclude stocks with insufficient data: MA value of 0 indicates insufficient data
+            if latest_50_ma[symbol] == 0.0 or latest_150_ma[symbol] == 0.0 or latest_200_ma[symbol] == 0.0:
                 valid[symbol] = False
-                logger.debug("%s: 데이터 부족으로 트렌드 템플릿 평가 불가 (MA50: %.2f, MA150: %.2f, MA200: %.2f)", 
-                           symbol, latest_50_ma[symbol], latest_150_ma[symbol], latest_200_ma[symbol])
+                logger.debug(
+                    "%s: Cannot evaluate trend template due to insufficient data "
+                    "(MA50: %.2f, MA150: %.2f, MA200: %.2f)",
+                    symbol,
+                    latest_50_ma[symbol],
+                    latest_150_ma[symbol],
+                    latest_200_ma[symbol],
+                )
                 continue
 
-            # 각 조건을 개별적으로 평가
+            # Evaluate each condition individually
             cond1 = current_price[symbol] >= latest_150_ma[symbol] * (1 - margin)
             cond2 = current_price[symbol] >= latest_200_ma[symbol] * (1 - margin)
             cond3 = latest_150_ma[symbol] >= latest_200_ma[symbol] * (1 - margin)
@@ -362,20 +358,20 @@ class UsaStockFinder:
                 cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond8 and cond9 and cond10
             )
 
-            # 상세 로그: 각 조건의 평가 결과
+            # Detailed log: Evaluation result of each condition
             logger.debug(
-                "%s: 트렌드 템플릿 평가 (마진: %.2f%%)\n"
-                "  현재가 >= MA150: %s (%.2f >= %.2f)\n"
-                "  현재가 >= MA200: %s (%.2f >= %.2f)\n"
+                "%s: Trend template evaluation (Margin: %.2f%%)\n"
+                "  Current price >= MA150: %s (%.2f >= %.2f)\n"
+                "  Current price >= MA200: %s (%.2f >= %.2f)\n"
                 "  MA150 >= MA200: %s (%.2f >= %.2f)\n"
-                "  MA200 증가: %s\n"
+                "  MA200 increasing: %s\n"
                 "  MA50 >= MA150: %s (%.2f >= %.2f)\n"
                 "  MA50 >= MA200: %s (%.2f >= %.2f)\n"
-                "  현재가 >= MA50: %s (%.2f >= %.2f)\n"
-                "  52주 저가 대비 상승: %s\n"
-                "  52주 고가 %.0f%% 이상: %s\n"
-                "  거래량-가격 상관: %s\n"
-                "  최종 결과: %s",
+                "  Current price >= MA50: %s (%.2f >= %.2f)\n"
+                "  Increase from 52-week low: %s\n"
+                "  52-week high >= %.0f%%: %s\n"
+                "  Volume-price correlation: %s\n"
+                "  Final result: %s",
                 symbol,
                 margin * 100,
                 cond1,
@@ -562,15 +558,15 @@ class UsaStockFinder:
                 result[symbol] = bool(is_volume_below_support and (is_price_declining or is_latest_volume_low))
 
                 logger.debug(
-                    "%s: AVSL 신호 평가\n"
-                    "  평균 거래량: %.2f\n"
-                    "  최근 평균 거래량: %.2f (비율: %.2f)\n"
-                    "  최신 거래량: %.2f\n"
-                    "  가격 변화: %.2f%%\n"
-                    "  거래량 하락: %s\n"
-                    "  가격 하락: %s\n"
-                    "  최신 거래량 낮음: %s\n"
-                    "  AVSL 매도 신호: %s",
+                    "%s: AVSL signal evaluation\n"
+                    "  Average volume: %.2f\n"
+                    "  Recent average volume: %.2f (ratio: %.2f)\n"
+                    "  Latest volume: %.2f\n"
+                    "  Price change: %.2f%%\n"
+                    "  Volume decline: %s\n"
+                    "  Price decline: %s\n"
+                    "  Latest volume low: %s\n"
+                    "  AVSL sell signal: %s",
                     symbol,
                     avg_volume,
                     recent_avg_volume,
@@ -585,6 +581,6 @@ class UsaStockFinder:
 
             except (IndexError, KeyError, AttributeError, ZeroDivisionError) as e:
                 result[symbol] = False
-                logger.debug("AVSL 신호 확인 중 오류 (%s): %s", symbol, str(e))
+                logger.debug("Error checking AVSL signal (%s): %s", symbol, str(e))
 
         return result

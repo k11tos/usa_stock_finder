@@ -36,12 +36,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from config import (
-    EnvironmentConfig,
-    InvestmentConfig,
-    StrategyConfig,
-    ConfigError,
-)
+from config import ConfigError, EnvironmentConfig, InvestmentConfig, StrategyConfig
 from file_utils import read_csv_first_column, save_json
 from logging_setup import setup_logging
 from stock_analysis import UsaStockFinder
@@ -97,14 +92,14 @@ def select_stocks(finder: UsaStockFinder, correlations: dict[str, dict[str, floa
         if valid_trend[symbol] and correlation_50 >= StrategyConfig.CORRELATION_THRESHOLD_STRICT:
             selected_buy.append(symbol)
             logger.info(
-                "매수 신호: %s (트렌드: True, 상관계수: %.2f%%)",
+                "Buy signal: %s (Trend: True, Correlation: %.2f%%)",
                 symbol,
                 correlation_50,
             )
         elif valid_trend_margin[symbol] and correlation_50 >= StrategyConfig.CORRELATION_THRESHOLD_RELAXED:
             selected_not_sell.append(symbol)
             logger.info(
-                "보유 신호: %s (트렌드(마진): True, 상관계수: %.2f%%)",
+                "Hold signal: %s (Trend(Margin): True, Correlation: %.2f%%)",
                 symbol,
                 correlation_50,
             )
@@ -169,7 +164,7 @@ def generate_telegram_message(
     # Generate buy messages with investment details
     new_buy_items = [item for item in buy_items if item not in prev_items]
     if new_buy_items:
-        message.append("\n📈 매수 신호:")
+        message.append("\n📈 Buy Signals:")
         has_changes = True
 
         for item in new_buy_items:
@@ -182,31 +177,31 @@ def generate_telegram_message(
                 total_qty = info.get("total_after_buy", 0)
 
                 if current_qty > 0:
-                    msg = f"  🔄 추가 매수: {item}"
-                    msg += f"\n     현재 보유: {current_qty}주"
-                    msg += f"\n     추가 매수: {shares}주"
-                    msg += f"\n     총 보유: {total_qty}주"
+                    msg = f"  🔄 Additional Buy: {item}"
+                    msg += f"\n     Current Holdings: {current_qty} shares"
+                    msg += f"\n     Additional Buy: {shares} shares"
+                    msg += f"\n     Total Holdings: {total_qty} shares"
                 else:
-                    msg = f"  ✅ 신규 매수: {item}"
-                    msg += f"\n     매수 수량: {shares}주"
+                    msg = f"  ✅ New Buy: {item}"
+                    msg += f"\n     Buy Quantity: {shares} shares"
 
-                msg += f"\n     투자 금액: ${investment:,.2f}"
-                msg += f"\n     현재가: ${price:.2f}"
+                msg += f"\n     Investment Amount: ${investment:,.2f}"
+                msg += f"\n     Current Price: ${price:.2f}"
                 message.append(msg)
             else:
-                message.append(f"  ✅ 매수: {item}")
+                message.append(f"  ✅ Buy: {item}")
 
     # Generate sell messages with quantity details
     sell_items = [item for item in prev_items if item not in keep_items]
     if sell_items or (avsl_sell_items and len(avsl_sell_items) > 0):
-        message.append("\n📉 매도 신호:")
+        message.append("\n📉 Sell Signals:")
         has_changes = True
 
         # Regular sell items
         for item in sell_items:
             if item in (avsl_sell_items or []):
                 continue  # Skip if already in AVSL list (will be handled below)
-            
+
             if sell_quantities and item in sell_quantities:
                 info = sell_quantities[item]
                 shares = info.get("shares_to_sell", 0)
@@ -215,19 +210,19 @@ def generate_telegram_message(
                 profit_loss = info.get("profit_loss", 0.0)
                 profit_rate = info.get("profit_loss_rate", 0.0)
 
-                msg = f"  ❌ 매도: {item}"
-                msg += f"\n     매도 수량: {shares}주"
-                msg += f"\n     현재가: ${price:.2f}"
-                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
+                msg = f"  ❌ Sell: {item}"
+                msg += f"\n     Sell Quantity: {shares} shares"
+                msg += f"\n     Current Price: ${price:.2f}"
+                msg += f"\n     Sell Amount: ${sell_amount:,.2f}"
 
                 if profit_loss != 0:
                     profit_sign = "+" if profit_loss >= 0 else ""
                     rate_sign = "+" if profit_rate >= 0 else ""
-                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+                    msg += f"\n     P&L: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
 
                 message.append(msg)
             else:
-                message.append(f"  ❌ 매도: {item}")
+                message.append(f"  ❌ Sell: {item}")
 
         # AVSL sell items (with special marking)
         if avsl_sell_items:
@@ -240,19 +235,19 @@ def generate_telegram_message(
                     profit_loss = info.get("profit_loss", 0.0)
                     profit_rate = info.get("profit_loss_rate", 0.0)
 
-                    msg = f"  ⚠️ AVSL 하락신호: {item}"
-                    msg += f"\n     매도 수량: {shares}주"
-                    msg += f"\n     현재가: ${price:.2f}"
-                    msg += f"\n     매도 금액: ${sell_amount:,.2f}"
+                    msg = f"  ⚠️ AVSL Decline Signal: {item}"
+                    msg += f"\n     Sell Quantity: {shares} shares"
+                    msg += f"\n     Current Price: ${price:.2f}"
+                    msg += f"\n     Sell Amount: ${sell_amount:,.2f}"
 
                     if profit_loss != 0:
                         profit_sign = "+" if profit_loss >= 0 else ""
                         rate_sign = "+" if profit_rate >= 0 else ""
-                        msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+                        msg += f"\n     P&L: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
 
                     message.append(msg)
                 else:
-                    message.append(f"  ⚠️ AVSL 하락신호: {item}")
+                    message.append(f"  ⚠️ AVSL Decline Signal: {item}")
 
     if has_changes:
         return message
@@ -306,7 +301,7 @@ def calculate_investment_per_stock(
     try:
         account_balance = fetch_account_balance()
     except APIError as e:
-        logger.error("계좌 잔액 조회 실패: %s", str(e))
+        logger.error("Failed to fetch account balance: %s", str(e))
         return None
 
     if not account_balance:
@@ -318,7 +313,9 @@ def calculate_investment_per_stock(
     total_balance = account_balance.get("total_balance", available_cash)
 
     if buyable_cash <= 0:
-        logger.warning("매수 가능 금액이 없습니다 (예수금: %.2f, 매수가능: %.2f)", available_cash, buyable_cash)
+        logger.warning(
+            "No buyable cash available (Available cash: %.2f, Buyable cash: %.2f)", available_cash, buyable_cash
+        )
         return None
 
     # Calculate total investment amount (excluding reserve)
@@ -356,7 +353,7 @@ def calculate_investment_per_stock(
             affordable_stocks.append((symbol, stock_investment))
         else:
             logger.debug(
-                "종목 %s 제외: 투자금액 %.2f < 최소투자금액 %.2f",
+                "Excluding stock %s: Investment amount %.2f < Minimum investment %.2f",
                 symbol,
                 stock_investment,
                 min_investment,
@@ -374,7 +371,7 @@ def calculate_investment_per_stock(
     investment_map = {symbol: round(investment, 2) for symbol, investment in affordable_stocks}
 
     logger.info(
-        "Investment calculation: Total: %s, Reserve: %s, Per stock: %s, Stocks: %d (원래: %d)",
+        "Investment calculation: Total: %s, Reserve: %s, Per stock: %s, Stocks: %d (original: %d)",
         buyable_cash,
         buyable_cash * reserve_ratio,
         investment_per_stock,
@@ -460,12 +457,12 @@ def calculate_share_quantities(
         current_quantity = holdings_map.get(symbol, 0.0)
 
         # Calculate additional buy (if already holding) or total shares to buy
-        # 추가매수 = 목표 수량 - 현재 보유 수량 (단, 현재 보유가 0이면 신규매수)
+        # Additional buy = Target quantity - Current holdings (if current holdings is 0, it's a new buy)
         if current_quantity == 0:
-            additional_buy = shares_to_buy  # 신규매수
+            additional_buy = shares_to_buy  # New buy
         else:
-            additional_buy = max(shares_to_buy - current_quantity, 0)  # 추가매수 (목표 수량까지)
-        
+            additional_buy = max(shares_to_buy - current_quantity, 0)  # Additional buy (up to target quantity)
+
         total_after_buy = current_quantity + additional_buy
 
         # Calculate actual investment amount (additional shares * price)
@@ -474,9 +471,9 @@ def calculate_share_quantities(
         result[symbol] = {
             "investment_amount": round(investment_amount, 2),
             "current_price": round(current_price, 2),
-            "shares_to_buy": shares_to_buy,  # 목표 총 수량
+            "shares_to_buy": shares_to_buy,  # Target total quantity
             "current_quantity": int(current_quantity),
-            "additional_buy": additional_buy,  # 실제 추가 매수 수량
+            "additional_buy": additional_buy,  # Actual additional buy quantity
             "total_after_buy": total_after_buy,
             "actual_investment": round(actual_investment, 2),
         }
@@ -636,7 +633,7 @@ def main() -> None:
         EnvironmentConfig.validate()
         logger.info("Environment variables validated successfully")
     except ConfigError as e:
-        logger.error("환경 변수 검증 실패: %s", str(e))
+        logger.error("Environment variable validation failed: %s", str(e))
         raise
 
     try:
@@ -645,7 +642,7 @@ def main() -> None:
             logger.warning("No stock holdings found in account")
             us_stock_holdings = []
     except APIError as e:
-        logger.error("API 오류로 인해 보유 종목 조회 실패: %s", str(e))
+        logger.error("Failed to fetch holdings due to API error: %s", str(e))
         return
 
     candidate_stocks = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
@@ -684,11 +681,11 @@ def main() -> None:
     if current_holdings_detail:
         # Get symbols from holdings
         holdings_symbols = [holding.get("symbol", "") for holding in current_holdings_detail if holding.get("symbol")]
-        
+
         # Check AVSL for all symbols in finder (includes candidate stocks)
         # But we only care about holdings that are in the finder
         avsl_signals = finder.check_avsl_sell_signal()
-        
+
         # Filter AVSL signals to only include holdings
         for symbol in holdings_symbols:
             if symbol in avsl_signals and avsl_signals[symbol]:
@@ -701,12 +698,16 @@ def main() -> None:
     regular_sell_items = [item for item in us_stock_holdings if item not in keep_items]
     # Combine regular sell items and AVSL sell items (avoid duplicates)
     all_sell_items = list(set(regular_sell_items + avsl_sell_items))
-    
+
     if all_sell_items:
         sell_quantities = calculate_sell_quantities(all_sell_items, finder)
         if sell_quantities:
-            logger.info("Sell quantities calculated for %d stocks (%d regular, %d AVSL)", 
-                       len(sell_quantities), len(regular_sell_items), len(avsl_sell_items))
+            logger.info(
+                "Sell quantities calculated for %d stocks (%d regular, %d AVSL)",
+                len(sell_quantities),
+                len(regular_sell_items),
+                len(avsl_sell_items),
+            )
 
     telegram_message = generate_telegram_message(
         us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, avsl_sell_items
