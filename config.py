@@ -123,6 +123,15 @@ class StrategyConfig:
     # Stop loss threshold (absolute loss percentage from average purchase price)
     STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.10"))  # 10% loss threshold
 
+    # Stop Loss 쿨다운 관련 설정
+    STOP_LOSS_COOLDOWN_BASE_DAYS = int(os.getenv("STOP_LOSS_COOLDOWN_BASE_DAYS", "5"))  # 기본 쿨다운 일수
+    STOP_LOSS_COOLDOWN_EXTRA_DAYS_PER_10PCT = int(
+        os.getenv("STOP_LOSS_COOLDOWN_EXTRA_DAYS_PER_10PCT", "5")
+    )  # 손실률 10%당 추가되는 일수
+    STOP_LOSS_COOLDOWN_MAX_DAYS = int(
+        os.getenv("STOP_LOSS_COOLDOWN_MAX_DAYS", "60")
+    )  # (선택) 최대 쿨다운 기간 상한 (0이면 제한 없음)
+
 
 class InvestmentConfig:
     """Investment calculation parameters."""
@@ -204,6 +213,9 @@ def get_config() -> dict[str, Any]:
             "margin_relaxed": StrategyConfig.MARGIN_RELAXED,
             "ma_increase_check_days": StrategyConfig.MA_INCREASE_CHECK_DAYS,
             "stop_loss_pct": StrategyConfig.STOP_LOSS_PCT,
+            "stop_loss_cooldown_base_days": StrategyConfig.STOP_LOSS_COOLDOWN_BASE_DAYS,
+            "stop_loss_cooldown_extra_days_per_10pct": StrategyConfig.STOP_LOSS_COOLDOWN_EXTRA_DAYS_PER_10PCT,
+            "stop_loss_cooldown_max_days": StrategyConfig.STOP_LOSS_COOLDOWN_MAX_DAYS,
         },
         "investment": {
             "reserve_ratio": InvestmentConfig.RESERVE_RATIO,

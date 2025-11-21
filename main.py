@@ -42,6 +42,7 @@ from logging_setup import setup_logging
 from sell_signals import SellDecision, SellReason, evaluate_sell_decisions
 from stock_analysis import UsaStockFinder
 from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
+from stop_loss_cooldown import is_in_cooldown
 from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -733,6 +734,24 @@ def main() -> None:
 
     correlation = calculate_correlations(finder)
     buy_items, not_sell_items = select_stocks(finder, correlation)
+
+    # 🔵 Stop Loss 쿨다운 필터링: 쿨다운 기간 내 종목은 매수 후보에서 제외
+    today = date.today()
+    original_buy_count = len(buy_items)
+    filtered_buy_items = []
+    for symbol in buy_items:
+        if is_in_cooldown(symbol, today):
+            logger.info("Symbol %s is in stop-loss cooldown. Skipping buy signal.", symbol)
+        else:
+            filtered_buy_items.append(symbol)
+    buy_items = filtered_buy_items
+
+    if len(buy_items) < original_buy_count:
+        logger.info(
+            "Stop Loss 쿨다운 필터링 완료 - 원래: %d개, 필터링 후: %d개",
+            original_buy_count,
+            len(buy_items),
+        )
 
     # Calculate investment amount per stock
     investment_map = None

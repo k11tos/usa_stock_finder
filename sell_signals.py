@@ -14,11 +14,13 @@ would not trigger a sell signal.
 
 import logging
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 from typing import Any, Dict, List
 
 from config import StrategyConfig
 from stock_analysis import UsaStockFinder
+from stop_loss_cooldown import record_stop_loss_event
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,9 @@ def evaluate_sell_decisions(
 
             if loss_pct <= -StrategyConfig.STOP_LOSS_PCT:
                 # Stop loss triggered - sell immediately regardless of other conditions
+                # 🔴 Stop Loss 이벤트 기록 (쿨다운 관리를 위해)
+                record_stop_loss_event(symbol, loss_pct, date.today())
+
                 logger.info(
                     "%s: 🟥 STOP_LOSS 매도 결정 - loss_pct=%.4f (%.2f%%) <= -STOP_LOSS_PCT=%.4f (%.2f%%), quantity=%.2f",
                     symbol,
