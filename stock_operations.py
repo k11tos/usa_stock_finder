@@ -451,6 +451,11 @@ def fetch_holdings_detail() -> list[dict[str, Any]] | None:
                 # output1 contains holdings information
                 output1 = balance.get("output1", [])
                 if output1 and isinstance(output1, list):
+                    logger.debug(
+                        "API 응답 output1: %d개 항목, 첫 번째 항목 키: %s",
+                        len(output1),
+                        list(output1[0].keys()) if output1 and isinstance(output1[0], dict) else "N/A",
+                    )
                     for holding in output1:
                         if not isinstance(holding, dict):
                             continue
@@ -458,18 +463,75 @@ def fetch_holdings_detail() -> list[dict[str, Any]] | None:
                         # Extract common field names from Korean Investment API
                         symbol = holding.get("pdno", "").replace("-US", "")
                         name = holding.get("prdt_name", "")
-                        quantity = float(holding.get("hldg_qty", holding.get("quantity", 0)) or 0)
-                        avg_price = float(holding.get("pchs_avg_pric", holding.get("avg_price", 0)) or 0)
-                        current_price = float(holding.get("prpr", holding.get("evlu_pric", avg_price)) or 0)
-                        evaluation_amount = float(holding.get("evlu_amt", 0) or 0)
 
-                        # Calculate profit/loss
-                        if avg_price > 0 and quantity > 0:
-                            profit_loss = (current_price - avg_price) * quantity
-                            profit_loss_rate = ((current_price - avg_price) / avg_price) * 100
+                        # 실제 API 필드명 사용 (로그에서 확인된 실제 키)
+                        # cblc_qty13: 정산수량 (보유 수량)
+                        # avg_unpr3: 평균단가
+                        # ovrs_now_pric1: 해외현재가
+                        # evlu_pfls_rt1: 평가손익률
+                        # evlu_pfls_amt2: 평가손익금액
+                        # frcr_evlu_amt2: 외화평가금액
+
+                        # 디버그: 원본 데이터 확인
+                        cblc_qty13_raw = holding.get("cblc_qty13", "N/A")
+                        avg_unpr3_raw = holding.get("avg_unpr3", "N/A")
+                        ovrs_now_pric1_raw = holding.get("ovrs_now_pric1", "N/A")
+                        evlu_pfls_rt1_raw = holding.get("evlu_pfls_rt1", "N/A")
+
+                        # 실제 API 필드명으로 데이터 추출 (기존 필드명도 fallback으로 유지)
+                        quantity = float(
+                            holding.get("cblc_qty13", holding.get("hldg_qty", holding.get("quantity", 0))) or 0
+                        )
+                        avg_price = float(
+                            holding.get("avg_unpr3", holding.get("pchs_avg_pric", holding.get("avg_price", 0))) or 0
+                        )
+                        current_price = float(
+                            holding.get("ovrs_now_pric1", holding.get("prpr", holding.get("evlu_pric", avg_price))) or 0
+                        )
+                        evaluation_amount = float(holding.get("frcr_evlu_amt2", holding.get("evlu_amt", 0)) or 0)
+
+                        # 평가손익률이 있으면 사용, 없으면 계산
+                        profit_loss_rate_from_api = holding.get("evlu_pfls_rt1")
+                        if profit_loss_rate_from_api and profit_loss_rate_from_api != "N/A":
+                            try:
+                                profit_loss_rate = float(profit_loss_rate_from_api)
+                            except (ValueError, TypeError):
+                                profit_loss_rate = 0.0
+                        else:
+                            profit_loss_rate = 0.0
+
+                        # 평가손익금액
+                        profit_loss_from_api = holding.get("evlu_pfls_amt2")
+                        if profit_loss_from_api and profit_loss_from_api != "N/A":
+                            try:
+                                profit_loss = float(profit_loss_from_api)
+                            except (ValueError, TypeError):
+                                profit_loss = 0.0
                         else:
                             profit_loss = 0.0
-                            profit_loss_rate = 0.0
+
+                        # 디버그: 파싱된 값 확인
+                        logger.debug(
+                            "Holding: %s (%s) - Quantity: %.2f, Avg Price: %.2f, Current Price: %.2f, "
+                            "Profit/Loss Rate: %.2f%%, Raw data: pdno=%s, cblc_qty13=%s, "
+                            "avg_unpr3=%s, ovrs_now_pric1=%s, evlu_pfls_rt1=%s",
+                            symbol,
+                            exchange,
+                            quantity,
+                            avg_price,
+                            current_price,
+                            profit_loss_rate,
+                            symbol,
+                            cblc_qty13_raw,
+                            avg_unpr3_raw,
+                            ovrs_now_pric1_raw,
+                            evlu_pfls_rt1_raw,
+                        )
+
+                        # Calculate profit/loss (API에서 제공하지 않으면 계산)
+                        if profit_loss == 0.0 and profit_loss_rate == 0.0 and avg_price > 0 and quantity > 0:
+                            profit_loss = (current_price - avg_price) * quantity
+                            profit_loss_rate = ((current_price - avg_price) / avg_price) * 100
 
                         if symbol:  # Only add if symbol exists
                             holding_detail = {
