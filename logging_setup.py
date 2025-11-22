@@ -51,6 +51,16 @@ def setup_logging() -> None:
     with open(config_file, encoding="utf-8") as f_in:
         config = json.load(f_in)
 
+    # 로그 디렉토리 생성 (필요한 경우)
+    # RotatingFileHandler는 파일은 생성하지만 디렉토리는 생성하지 않음
+    handlers = config.get("handlers", {})
+    for handler_name, handler_config in handlers.items():
+        if "filename" in handler_config:
+            log_file_path = pathlib.Path(handler_config["filename"])
+            log_dir = log_file_path.parent
+            if log_dir and not log_dir.exists():
+                log_dir.mkdir(parents=True, exist_ok=True)
+
     logging.config.dictConfig(config)
     queue_handler = logging.getLogger().handlers[0]  # Adjust as needed
     if hasattr(queue_handler, "listener"):

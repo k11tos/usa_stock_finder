@@ -208,4 +208,3 @@ def is_in_cooldown(symbol: str, today: date) -> bool:
     except (KeyError, ValueError) as e:
         logger.warning("%s: Stop Loss 로그 항목 파싱 실패: %s, 쿨다운 아님으로 처리", symbol, str(e))
         return False
-

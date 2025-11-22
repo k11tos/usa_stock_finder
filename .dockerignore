@@ -8,6 +8,9 @@ Dockerfile
 .venv
 __pycache__
 log.json
+logs/
+data/
+data.json
 test.ipynb
 token.dat
 portfolio/*
