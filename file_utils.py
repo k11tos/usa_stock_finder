@@ -80,10 +80,28 @@ def save_json(data: Any, file_path: str) -> None:
     Note:
         - Creates parent directories if they don't exist
     """
+    # 경로 끝의 슬래시 제거 (파일 경로가 아닌 디렉토리 경로로 오인되는 것을 방지)
+    # 예: "data.json/" -> "data.json"으로 정규화
+    file_path = file_path.rstrip(os.sep).rstrip("/")
+
     # 디렉토리 생성 (필요한 경우)
     file_dir = os.path.dirname(file_path)
-    if file_dir and not os.path.exists(file_dir):
-        os.makedirs(file_dir, exist_ok=True)
+    file_basename = os.path.basename(file_path)
+
+    # file_dir이 빈 문자열이 아니고, 실제 디렉토리 경로인 경우에만 생성
+    # os.path.dirname("data.json/")은 "data.json"을 반환하므로, 이를 방지하기 위해
+    # file_dir이 파일명과 같지 않은 경우에만 디렉토리 생성
+    # 또한 file_dir이 file_basename과 같은 경우도 방지 (예: "data.json/" -> dirname="data.json")
+    # file_dir에 파일 확장자가 있는 경우도 디렉토리로 생성하지 않음 (예: "data.json")
+    if file_dir and file_dir != file_path and file_dir != file_basename:
+        # file_dir이 이미 존재하는 파일인 경우 디렉토리로 생성하지 않음
+        if os.path.exists(file_dir) and os.path.isfile(file_dir):
+            raise ValueError(f"Cannot create directory '{file_dir}': it already exists as a file")
+        # file_dir에 파일 확장자가 있는 경우 디렉토리로 생성하지 않음
+        # (예: "data.json" 같은 경우) - 이는 파일명이 디렉토리로 오인되는 것을 방지
+        if not os.path.splitext(file_dir)[1]:  # 확장자가 없을 때만 디렉토리 생성
+            if not os.path.exists(file_dir):
+                os.makedirs(file_dir, exist_ok=True)
 
     with open(file_path, "w", encoding="utf-8") as json_file:
         json.dump(data, json_file)
