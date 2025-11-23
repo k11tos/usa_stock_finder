@@ -97,6 +97,87 @@ class UsaStockFinder:
             and not self.stock_data["Low"][symbol].empty
         )
 
+    def _get_symbol_df(self, symbol: str) -> pd.DataFrame | None:
+        """
+        Get a DataFrame for a specific symbol with High, Low, Close columns.
+
+        Args:
+            symbol (str): Stock symbol to get data for
+
+        Returns:
+            pd.DataFrame | None: DataFrame with High, Low, Close columns, or None if data is invalid
+        """
+        try:
+            if not self._is_symbol_data_valid(symbol):
+                return None
+
+            df = pd.DataFrame(
+                {
+                    "High": self.stock_data["High"][symbol],
+                    "Low": self.stock_data["Low"][symbol],
+                    "Close": self.stock_data["Close"][symbol],
+                }
+            )
+            return df
+        except (IndexError, KeyError, AttributeError) as e:
+            logger.debug("Error getting symbol DataFrame for %s: %s", symbol, str(e))
+            return None
+
+    def get_atr(self, symbol: str, period: int | None = None) -> float:
+        """
+        주어진 심볼에 대해 ATR(평균 진폭 범위)을 계산해 반환한다.
+
+        - period 기간 동안의 ATR을 구하고, 가장 최신 ATR 값을 반환.
+        - 데이터가 부족하거나 계산이 불가능하면 0.0을 반환한다.
+
+        Args:
+            symbol (str): Stock symbol to calculate ATR for
+            period (int | None): ATR calculation period (None = use config default)
+
+        Returns:
+            float: Latest ATR value, or 0.0 if calculation fails
+        """
+        if period is None:
+            period = StrategyConfig.TRAILING_ATR_PERIOD
+
+        df = self._get_symbol_df(symbol)
+        if df is None or len(df) < period + 1:
+            logger.debug(
+                "%s: ATR 계산 불가 - 데이터 부족 (필요: %d일, 실제: %d일)",
+                symbol,
+                period + 1,
+                len(df) if df is not None else 0,
+            )
+            return 0.0
+
+        try:
+            high = df["High"]
+            low = df["Low"]
+            close = df["Close"]
+
+            # True Range 계산
+            prev_close = close.shift(1)
+            tr1 = high - low
+            tr2 = (high - prev_close).abs()
+            tr3 = (low - prev_close).abs()
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+            # ATR = TR의 period 이동 평균 (단순 평균)
+            atr = tr.rolling(window=period, min_periods=period).mean()
+
+            latest_atr = atr.iloc[-1]
+            if pd.isna(latest_atr):
+                logger.debug("%s: ATR 계산 결과 NaN", symbol)
+                return 0.0
+
+            atr_value = float(latest_atr)
+            logger.debug("%s: ATR 계산 완료 - period=%d, ATR=%.4f", symbol, period, atr_value)
+            return atr_value
+
+        except (IndexError, KeyError, AttributeError, ValueError) as e:
+            logger.debug("Error calculating ATR for %s: %s", symbol, str(e))
+            return 0.0
+
     def is_data_valid(self) -> bool:
         """
         Check if the loaded stock data is valid and not empty.

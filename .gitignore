@@ -1,5 +1,6 @@
 data.json
 data/stop_loss_log.json
+data/trailing_state.json
 *.ipynb
 *.csv
 run.sh

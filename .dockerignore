@@ -11,6 +11,7 @@ log.json
 logs/
 data/
 data.json
+data/trailing_state.json
 test.ipynb
 token.dat
 portfolio/*

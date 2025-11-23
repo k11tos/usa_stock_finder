@@ -131,7 +131,7 @@ def log_stock_info(symbol: str, correlations: dict[str, dict[str, float]]) -> No
 def generate_telegram_message(
     prev_items: list[str],
     buy_items: list[str],
-    not_sell_items: list[str],
+    _not_sell_items: list[str],  # pylint: disable=unused-argument
     share_quantities: dict[str, dict[str, Any]] | None = None,
     sell_quantities: dict[str, dict[str, Any]] | None = None,
     sell_decisions: dict[str, SellDecision] | None = None,
@@ -147,7 +147,7 @@ def generate_telegram_message(
     Args:
         prev_items (list[str]): List of previously selected stock symbols
         buy_items (list[str]): List of stock symbols recommended for buying
-        not_sell_items (list[str]): List of stock symbols not recommended for selling
+        _not_sell_items (list[str]): List of stock symbols not recommended for selling (currently unused)
         share_quantities (dict[str, dict[str, Any]] | None): Dictionary containing share
             quantity information for buy signals
         sell_quantities (dict[str, dict[str, Any]] | None): Dictionary containing share
@@ -206,6 +206,7 @@ def generate_telegram_message(
 
         # Group by reason for better organization
         stop_loss_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.STOP_LOSS]
+        trailing_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.TRAILING]
         avsl_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.AVSL]
         trend_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.TREND]
 
@@ -232,6 +233,30 @@ def generate_telegram_message(
                 message.append(msg)
             else:
                 message.append(f"  🟥 매도 (절대 손절): {symbol}")
+
+        # Display trailing items
+        for symbol, decision in trailing_items:
+            if sell_quantities and symbol in sell_quantities:
+                info = sell_quantities[symbol]
+                shares = info.get("shares_to_sell", 0)
+                price = info.get("current_price", 0)
+                sell_amount = info.get("sell_amount", 0)
+                profit_loss = info.get("profit_loss", 0.0)
+                profit_rate = info.get("profit_loss_rate", 0.0)
+
+                msg = f"  🟨 매도 (ATR 트레일링 스탑): {symbol}"
+                msg += f"\n     매도 수량: {shares}주"
+                msg += f"\n     현재가: ${price:.2f}"
+                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
+
+                if profit_loss != 0:
+                    profit_sign = "+" if profit_loss >= 0 else ""
+                    rate_sign = "+" if profit_rate >= 0 else ""
+                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+
+                message.append(msg)
+            else:
+                message.append(f"  🟨 매도 (ATR 트레일링 스탑): {symbol}")
 
         # Display AVSL items
         for symbol, decision in avsl_items:
@@ -827,13 +852,15 @@ def main() -> None:
 
         # Log sell decisions by reason
         stop_loss_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.STOP_LOSS)
+        trailing_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TRAILING)
         avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
         trend_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TREND)
         hold_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.NONE)
 
         logger.info(
-            "매도 결정 평가 완료 - Stop Loss=%d, AVSL=%d, Trend=%d, Hold=%d",
+            "매도 결정 평가 완료 - Stop Loss=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d",
             stop_loss_count,
+            trailing_count,
             avsl_count,
             trend_count,
             hold_count,

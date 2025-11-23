@@ -132,6 +132,14 @@ class StrategyConfig:
         os.getenv("STOP_LOSS_COOLDOWN_MAX_DAYS", "60")
     )  # (선택) 최대 쿨다운 기간 상한 (0이면 제한 없음)
 
+    # ATR 기반 트레일링 스탑 설정
+    TRAILING_ENABLED = os.getenv("TRAILING_ENABLED", "True").lower() == "true"  # 전체 기능 on/off 스위치
+    TRAILING_ATR_PERIOD = int(os.getenv("TRAILING_ATR_PERIOD", "20"))  # ATR 계산 기간 (예: 20일)
+    TRAILING_ATR_MULTIPLIER = float(os.getenv("TRAILING_ATR_MULTIPLIER", "3.0"))  # 스탑 라인 = 최고가 - ATR * K
+    TRAILING_MIN_PROFIT_PCT = float(
+        os.getenv("TRAILING_MIN_PROFIT_PCT", "0.10")
+    )  # 평단 대비 최소 수익률 (예: +10% 이상에서만 트레일링 활성화)
+
 
 class InvestmentConfig:
     """Investment calculation parameters."""
@@ -216,6 +224,10 @@ def get_config() -> dict[str, Any]:
             "stop_loss_cooldown_base_days": StrategyConfig.STOP_LOSS_COOLDOWN_BASE_DAYS,
             "stop_loss_cooldown_extra_days_per_10pct": StrategyConfig.STOP_LOSS_COOLDOWN_EXTRA_DAYS_PER_10PCT,
             "stop_loss_cooldown_max_days": StrategyConfig.STOP_LOSS_COOLDOWN_MAX_DAYS,
+            "trailing_enabled": StrategyConfig.TRAILING_ENABLED,
+            "trailing_atr_period": StrategyConfig.TRAILING_ATR_PERIOD,
+            "trailing_atr_multiplier": StrategyConfig.TRAILING_ATR_MULTIPLIER,
+            "trailing_min_profit_pct": StrategyConfig.TRAILING_MIN_PROFIT_PCT,
         },
         "investment": {
             "reserve_ratio": InvestmentConfig.RESERVE_RATIO,

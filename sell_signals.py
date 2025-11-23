@@ -21,6 +21,7 @@ from typing import Any, Dict, List
 from config import StrategyConfig
 from stock_analysis import UsaStockFinder
 from stop_loss_cooldown import record_stop_loss_event
+from trailing_stop import load_trailing_state, save_trailing_state, update_highest_close
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class SellReason(str, Enum):
 
     NONE = "HOLD"  # No sell signal - hold the stock
     STOP_LOSS = "STOP_LOSS"  # Absolute stop loss threshold exceeded
+    TRAILING = "TRAILING"  # ATR 기반 트레일링 스탑
     AVSL = "AVSL"  # Average Volume Support Level broken
     TREND = "TREND"  # Trend/strategy conditions no longer met
 
@@ -85,6 +87,10 @@ def evaluate_sell_decisions(
         - Stocks in selected_buy or selected_not_sell are not sold due to trend failure
     """
     decisions: Dict[str, SellDecision] = {}
+
+    # 트레일링 스탑 상태 로드 (한 번만)
+    trailing_state = load_trailing_state()
+    trailing_state_modified = False
 
     for holding in holdings:
         symbol = holding.get("symbol", "")
@@ -170,7 +176,90 @@ def evaluate_sell_decisions(
                     holding_price,
                 )
 
-        # Tier 2: AVSL (Volume Support Level Broken)
+        # Tier 2: ATR 기반 TRAILING STOP (수익 보호용)
+        if StrategyConfig.TRAILING_ENABLED and avg_price > 0 and current_price > 0:
+            profit_pct = (current_price - avg_price) / avg_price
+
+            # 최소 수익률 기준 이상인 경우에만 트레일링 적용
+            if profit_pct >= StrategyConfig.TRAILING_MIN_PROFIT_PCT:
+                today = date.today()
+
+                # 트레일링에 사용할 "종가" 개념: 여기서는 current_price를 사용
+                close_for_trailing = current_price
+
+                # 최고 종가 갱신
+                highest_close = update_highest_close(
+                    trailing_state,
+                    symbol,
+                    close_for_trailing,
+                    today,
+                )
+                trailing_state_modified = True
+
+                # ATR 계산
+                atr_value = finder.get_atr(symbol, StrategyConfig.TRAILING_ATR_PERIOD)
+
+                if atr_value > 0 and highest_close > 0:
+                    trailing_stop_price = highest_close - atr_value * StrategyConfig.TRAILING_ATR_MULTIPLIER
+
+                    logger.debug(
+                        "%s: TRAILING 체크 - profit_pct=%.4f (%.2f%%), highest_close=%.4f, "
+                        "ATR=%.4f, multiplier=%.2f, trailing_stop_price=%.4f, current_price=%.4f",
+                        symbol,
+                        profit_pct,
+                        profit_pct * 100,
+                        highest_close,
+                        atr_value,
+                        StrategyConfig.TRAILING_ATR_MULTIPLIER,
+                        trailing_stop_price,
+                        current_price,
+                    )
+
+                    # 현재가가 트레일링 스탑 아래로 내려가면 매도
+                    if current_price <= trailing_stop_price:
+                        logger.info(
+                            "%s: 🟨 TRAILING 매도 결정 - current_price=%.4f <= trailing_stop_price=%.4f, "
+                            "highest_close=%.4f, ATR=%.4f, quantity=%.2f",
+                            symbol,
+                            current_price,
+                            trailing_stop_price,
+                            highest_close,
+                            atr_value,
+                            quantity,
+                        )
+                        decisions[symbol] = SellDecision(symbol, SellReason.TRAILING, quantity)
+                        continue
+                else:
+                    if atr_value <= 0:
+                        logger.debug(
+                            "%s: TRAILING 체크 스킵 - ATR 계산 실패 (atr_value=%.4f)",
+                            symbol,
+                            atr_value,
+                        )
+                    if highest_close <= 0:
+                        logger.debug(
+                            "%s: TRAILING 체크 스킵 - highest_close=%.4f <= 0",
+                            symbol,
+                            highest_close,
+                        )
+            else:
+                logger.debug(
+                    "%s: TRAILING 체크 스킵 - profit_pct=%.4f (%.2f%%) < TRAILING_MIN_PROFIT_PCT=%.4f (%.2f%%)",
+                    symbol,
+                    profit_pct,
+                    profit_pct * 100,
+                    StrategyConfig.TRAILING_MIN_PROFIT_PCT,
+                    StrategyConfig.TRAILING_MIN_PROFIT_PCT * 100,
+                )
+        else:
+            if not StrategyConfig.TRAILING_ENABLED:
+                logger.debug("%s: TRAILING 체크 스킵 - TRAILING_ENABLED=False", symbol)
+            elif avg_price <= 0:
+                logger.debug("%s: TRAILING 체크 스킵 - avg_price=%.4f <= 0", symbol, avg_price)
+            elif current_price <= 0:
+                logger.debug("%s: TRAILING 체크 스킵 - current_price=%.4f <= 0", symbol, current_price)
+
+        # Tier 3: AVSL (Volume Support Level Broken)
         avsl_signal = avsl_signals.get(symbol, False)
         logger.debug("%s: AVSL 체크 - avsl_signal=%s", symbol, avsl_signal)
 
@@ -206,9 +295,13 @@ def evaluate_sell_decisions(
 
         # No sell signal - hold
         logger.debug(
-            "%s: HOLD 결정 - 모든 매도 조건 미충족 (Stop Loss, AVSL, Trend 모두 통과)",
+            "%s: HOLD 결정 - 모든 매도 조건 미충족 (Stop Loss, Trailing, AVSL, Trend 모두 통과)",
             symbol,
         )
         decisions[symbol] = SellDecision(symbol, SellReason.NONE, 0.0)
+
+    # 트레일링 스탑 상태 저장 (수정된 경우에만)
+    if trailing_state_modified:
+        save_trailing_state(trailing_state)
 
     return decisions
