@@ -99,12 +99,25 @@ class TestFileUtils(unittest.TestCase):
         self.assertEqual(saved_data, test_data)
 
     def test_save_json_directory_not_exists(self):
-        """Test JSON saving to non-existent directory"""
-        non_existent_path = "/non/existent/path/test.json"
+        """Test JSON saving to non-existent directory (should auto-create directory)"""
+        # Use a nested path within temp directory to test auto-creation
+        nested_dir = os.path.join(self.temp_dir, "nested", "subdir")
+        non_existent_path = os.path.join(nested_dir, "test.json")
         test_data = {"test": "data"}
 
-        with self.assertRaises(FileNotFoundError):
-            save_json(test_data, non_existent_path)
+        # Directory should be auto-created and file should be saved successfully
+        save_json(test_data, non_existent_path)
+
+        # Verify file was created
+        self.assertTrue(os.path.exists(non_existent_path))
+        with open(non_existent_path, "r", encoding="utf-8") as f:
+            loaded_data = json.load(f)
+        self.assertEqual(loaded_data, test_data)
+
+        # Clean up nested directories
+        os.remove(non_existent_path)
+        os.rmdir(nested_dir)
+        os.rmdir(os.path.join(self.temp_dir, "nested"))
 
     def test_load_json_success(self):
         """Test successful JSON loading"""

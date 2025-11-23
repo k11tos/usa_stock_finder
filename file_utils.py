@@ -22,6 +22,7 @@ Note:
 
 import csv
 import json
+import os
 import re
 from typing import Any, List
 
@@ -73,9 +74,17 @@ def save_json(data: Any, file_path: str) -> None:
         file_path (str): Path where the JSON file should be saved
 
     Raises:
-        FileNotFoundError: If the directory does not exist
+        FileNotFoundError: If the directory cannot be created
         TypeError: If the data is not JSON serializable
+
+    Note:
+        - Creates parent directories if they don't exist
     """
+    # 디렉토리 생성 (필요한 경우)
+    file_dir = os.path.dirname(file_path)
+    if file_dir and not os.path.exists(file_dir):
+        os.makedirs(file_dir, exist_ok=True)
+
     with open(file_path, "w", encoding="utf-8") as json_file:
         json.dump(data, json_file)
 

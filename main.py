@@ -700,7 +700,7 @@ def main() -> None:
     Note:
         - Requires environment variables for Telegram API and account information
         - Expects a portfolio.csv file in the portfolio directory
-        - Saves the final portfolio to data.json
+        - Saves the final portfolio to data/data.json
 
     Raises:
         ConfigError: If required environment variables are missing
@@ -925,7 +925,7 @@ def main() -> None:
             logger.error("Missing Telegram API credentials")
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items)
-    save_json(final_items, "data.json")
+    save_json(final_items, "data/data.json")
 
 
 if __name__ == "__main__":
