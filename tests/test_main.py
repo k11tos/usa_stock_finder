@@ -370,20 +370,22 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIn("AAPL", result)
         self.assertIn("MSFT", result)
 
-        # AAPL: 3000 / 150 = 20 shares (target), already holding 10
-        # additional_buy = max(20 - 10, 0) = 10 shares
+        # AAPL: 3000 / 150 = 20 shares (target total quantity)
+        # Currently holding 10 shares
+        # shares_to_buy = max(20 - 10, 0) = 10 shares (additional buy)
         # total_after_buy = 10 + 10 = 20 shares
         aapl_info = result["AAPL"]
-        self.assertEqual(aapl_info["shares_to_buy"], 20)  # Target total shares
+        self.assertEqual(aapl_info["shares_to_buy"], 10)  # Actual shares to buy (additional)
         self.assertEqual(aapl_info["current_quantity"], 10)  # Currently holding
-        self.assertEqual(aapl_info["additional_buy"], 10)  # Additional shares to buy
+        self.assertEqual(aapl_info["additional_buy"], 10)  # Additional shares to buy (same as shares_to_buy)
         self.assertEqual(aapl_info["total_after_buy"], 20)  # Total after buying
 
-        # MSFT: 3000 / 300 = 10 shares, not holding
+        # MSFT: 3000 / 300 = 10 shares (target total), not holding any
+        # shares_to_buy = 10 shares (new buy)
         msft_info = result["MSFT"]
-        self.assertEqual(msft_info["shares_to_buy"], 10)
-        self.assertEqual(msft_info["current_quantity"], 0)
-        self.assertEqual(msft_info["total_after_buy"], 10)
+        self.assertEqual(msft_info["shares_to_buy"], 10)  # New buy quantity
+        self.assertEqual(msft_info["current_quantity"], 0)  # Not holding
+        self.assertEqual(msft_info["total_after_buy"], 10)  # Total after buying
 
     @patch("main.fetch_holdings_detail")
     def test_calculate_sell_quantities_success(self, mock_fetch_holdings):

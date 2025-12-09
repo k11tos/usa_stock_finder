@@ -300,6 +300,20 @@ def evaluate_sell_decisions(
         )
         decisions[symbol] = SellDecision(symbol, SellReason.NONE, 0.0)
 
+    # 매도 결정된 종목의 트레일링 상태 초기화 (재매수 시 새로운 최고가부터 시작)
+    for symbol, decision in decisions.items():
+        if decision.reason != SellReason.NONE and decision.quantity > 0:
+            # 매도 결정된 종목의 트레일링 상태 삭제
+            if symbol in trailing_state:
+                del trailing_state[symbol]
+                trailing_state_modified = True
+                logger.info(
+                    "%s: 매도로 인한 트레일링 상태 초기화 완료 (reason=%s, quantity=%.2f)",
+                    symbol,
+                    decision.reason.value,
+                    decision.quantity,
+                )
+
     # 트레일링 스탑 상태 저장 (수정된 경우에만)
     if trailing_state_modified:
         save_trailing_state(trailing_state)

@@ -501,10 +501,11 @@ def calculate_share_quantities(
             logger.warning("Invalid price for %s: %s", symbol, current_price)
             continue
 
-        # Calculate shares to buy (round down to whole shares)
-        shares_to_buy = int(investment_amount / current_price)
+        # Calculate target total quantity (목표 총 보유 수량)
+        # 투자금으로 살 수 있는 최대 수량 (소수점 이하 절삭)
+        target_total_quantity = int(investment_amount / current_price)
 
-        if shares_to_buy <= 0:
+        if target_total_quantity <= 0:
             logger.warning(
                 "Investment amount %s too small for %s at price %s", investment_amount, symbol, current_price
             )
@@ -513,37 +514,55 @@ def calculate_share_quantities(
         # Get current holding quantity
         current_quantity = holdings_map.get(symbol, 0.0)
 
-        # Calculate additional buy (if already holding) or total shares to buy
-        # Additional buy = Target quantity - Current holdings (if current holdings is 0, it's a new buy)
+        # Calculate actual shares to buy
+        # 신규 매수: 현재 보유 없음 → 목표 수량 전체 매수
+        # 추가 매수: 현재 보유 있음 → (목표 수량 - 현재 보유)만큼 추가 매수
+        #            단, 이미 목표 수량 이상 보유 중이면 추가 매수 0
         if current_quantity == 0:
-            additional_buy = shares_to_buy  # New buy
+            shares_to_buy = target_total_quantity  # 신규 매수
+            is_new_buy = True
         else:
-            additional_buy = max(shares_to_buy - current_quantity, 0)  # Additional buy (up to target quantity)
+            shares_to_buy = max(target_total_quantity - int(current_quantity), 0)  # 추가 매수
+            is_new_buy = False
 
-        total_after_buy = current_quantity + additional_buy
+        total_after_buy = int(current_quantity) + shares_to_buy
 
-        # Calculate actual investment amount (additional shares * price)
-        actual_investment = additional_buy * current_price
+        # Calculate actual investment amount (actual shares to buy * price)
+        actual_investment = shares_to_buy * current_price
 
         result[symbol] = {
             "investment_amount": round(investment_amount, 2),
             "current_price": round(current_price, 2),
-            "shares_to_buy": shares_to_buy,  # Target total quantity
+            "shares_to_buy": shares_to_buy,  # Actual shares to buy (신규 매수 or 추가 매수 수량)
             "current_quantity": int(current_quantity),
-            "additional_buy": additional_buy,  # Actual additional buy quantity
+            "additional_buy": shares_to_buy,  # Same as shares_to_buy (kept for backward compatibility)
             "total_after_buy": total_after_buy,
             "actual_investment": round(actual_investment, 2),
         }
 
-        logger.debug(
-            "%s: Investment=%s, Price=%s, Shares=%d, Current=%d, Total=%d",
-            symbol,
-            investment_amount,
-            current_price,
-            shares_to_buy,
-            int(current_quantity),
-            total_after_buy,
-        )
+        # 명확한 로깅: 신규 매수 vs 추가 매수
+        if is_new_buy:
+            logger.debug(
+                "%s: 신규 매수 계산 - 투자금=$%.2f, 현재가=$%.2f, 매수 수량=%d주, 실제 투자금=$%.2f",
+                symbol,
+                investment_amount,
+                current_price,
+                shares_to_buy,
+                actual_investment,
+            )
+        else:
+            logger.debug(
+                "%s: 추가 매수 계산 - 투자금=$%.2f, 현재가=$%.2f, 목표 총 수량=%d주, 현재 보유=%d주, "
+                "추가 매수=%d주, 매수 후 총=%d주, 실제 투자금=$%.2f",
+                symbol,
+                investment_amount,
+                current_price,
+                target_total_quantity,
+                int(current_quantity),
+                shares_to_buy,
+                total_after_buy,
+                actual_investment,
+            )
 
     if not result:
         logger.warning("No valid share quantities calculated")
