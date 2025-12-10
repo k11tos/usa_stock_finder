@@ -135,6 +135,7 @@ def generate_telegram_message(
     share_quantities: dict[str, dict[str, Any]] | None = None,
     sell_quantities: dict[str, dict[str, Any]] | None = None,
     sell_decisions: dict[str, SellDecision] | None = None,
+    finder: UsaStockFinder | None = None,
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
@@ -163,9 +164,12 @@ def generate_telegram_message(
     has_changes = False
 
     # Generate buy messages with investment details
+    # new_buy_items (prev_items에 없는 것)만 표시하되, share_quantities가 있으면 상세 정보 표시
     new_buy_items = [item for item in buy_items if item not in prev_items]
+    
+    # buy_items 전체를 표시하되, 실제 변경사항(new_buy_items 또는 매도 신호)이 있을 때만 메시지 생성
     if new_buy_items:
-        message.append("\n📈 Buy Signals:")
+        message.append("\n📈 매수 신호:")
         has_changes = True
 
         for item in new_buy_items:
@@ -178,19 +182,25 @@ def generate_telegram_message(
                 total_qty = info.get("total_after_buy", 0)
 
                 if current_qty > 0:
-                    msg = f"  🔄 Additional Buy: {item}"
-                    msg += f"\n     Current Holdings: {current_qty} shares"
-                    msg += f"\n     Additional Buy: {shares} shares"
-                    msg += f"\n     Total Holdings: {total_qty} shares"
+                    msg = f"  🔄 추가 매수: {item}"
+                    msg += f"\n     현재 보유: {current_qty}주"
+                    msg += f"\n     추가 매수: {shares}주"
+                    msg += f"\n     매수 후 총 보유: {total_qty}주"
                 else:
-                    msg = f"  ✅ New Buy: {item}"
-                    msg += f"\n     Buy Quantity: {shares} shares"
+                    msg = f"  ✅ 신규 매수: {item}"
+                    msg += f"\n     매수 수량: {shares}주"
 
-                msg += f"\n     Investment Amount: ${investment:,.2f}"
-                msg += f"\n     Current Price: ${price:.2f}"
+                msg += f"\n     투자 금액: ${investment:,.2f}"
+                msg += f"\n     현재가: ${price:.2f}"
                 message.append(msg)
             else:
-                message.append(f"  ✅ Buy: {item}")
+                # share_quantities가 없어도 최소한의 정보 표시
+                msg = f"  ✅ 신규 매수: {item}"
+                if finder and item in finder.current_price:
+                    current_price = finder.current_price.get(item, 0.0)
+                    if current_price > 0:
+                        msg += f"\n     현재가: ${current_price:.2f}"
+                message.append(msg)
 
     # Generate sell messages with quantity details and reasons
     sell_items_to_display = []
@@ -201,7 +211,7 @@ def generate_telegram_message(
                 sell_items_to_display.append((symbol, decision))
 
     if sell_items_to_display:
-        message.append("\n📉 Sell Signals:")
+        message.append("\n📉 매도 신호:")
         has_changes = True
 
         # Group by reason for better organization
@@ -951,7 +961,7 @@ def main() -> None:
         sell_quantities = None
 
     telegram_message = generate_telegram_message(
-        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, sell_decisions
+        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, sell_decisions, finder
     )
 
     if telegram_message:
