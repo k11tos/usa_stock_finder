@@ -31,12 +31,13 @@ import asyncio
 import logging.config
 import logging.handlers
 import os.path
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-from config import ConfigError, EnvironmentConfig, InvestmentConfig, StrategyConfig
+from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
 from file_utils import read_csv_first_column, save_json
 from logging_setup import setup_logging
 from sell_signals import SellDecision, SellReason, evaluate_sell_decisions
@@ -46,6 +47,72 @@ from stop_loss_cooldown import is_in_cooldown
 from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
+
+
+def is_within_execution_window() -> bool:
+    """
+    Check if current time is within the execution window (KST 기준).
+
+    The execution window is defined as:
+    - Target time: EXECUTION_HOUR:EXECUTION_MINUTE (default: 20:00 KST)
+    - Margin: EXECUTION_MARGIN_MINUTES (default: 10 minutes)
+    - Window: (target_time - margin) ~ (target_time + margin)
+    - Example: 19:50 ~ 20:10 KST for 20:00 with 10-minute margin
+
+    Returns:
+        bool: True if current time is within execution window, False otherwise
+    """
+    if not ScheduleConfig.TIME_CHECK_ENABLED:
+        logger.debug("Time check is disabled, allowing execution")
+        return True
+
+    # 한국 시간(KST) 기준으로 현재 시간 가져오기
+    try:
+        kst = ZoneInfo(ScheduleConfig.TIMEZONE)
+        now = datetime.now(kst)
+    except Exception as e:
+        # zoneinfo가 없는 경우 (Python < 3.9) 또는 타임존 설정 오류
+        logger.warning("타임존 설정 실패, 시스템 로컬 시간 사용: %s", str(e))
+        now = datetime.now()
+
+    current_time = now.time()
+    target_time = time(ScheduleConfig.EXECUTION_HOUR, ScheduleConfig.EXECUTION_MINUTE)
+
+    # Calculate window boundaries
+    target_datetime = datetime.combine(now.date(), target_time)
+    margin_delta = timedelta(minutes=ScheduleConfig.EXECUTION_MARGIN_MINUTES)
+    window_start = (target_datetime - margin_delta).time()
+    window_end = (target_datetime + margin_delta).time()
+
+    # Check if current time is within window
+    # Handle case where window crosses midnight
+    if window_start <= window_end:
+        # Normal case: window is within same day (e.g., 7:50 ~ 8:10)
+        is_within = window_start <= current_time <= window_end
+    else:
+        # Edge case: window crosses midnight (e.g., 23:50 ~ 00:10)
+        is_within = current_time >= window_start or current_time <= window_end
+
+    if is_within:
+        logger.info(
+            "현재 시간이 실행 시간 범위 내입니다 (KST) - 현재: %s, 목표: %s, 마진: ±%d분, 범위: %s ~ %s",
+            current_time.strftime("%H:%M:%S"),
+            target_time.strftime("%H:%M"),
+            ScheduleConfig.EXECUTION_MARGIN_MINUTES,
+            window_start.strftime("%H:%M"),
+            window_end.strftime("%H:%M"),
+        )
+    else:
+        logger.info(
+            "현재 시간이 실행 시간 범위 밖입니다 (KST) - 현재: %s, 목표: %s, 마진: ±%d분, 범위: %s ~ %s (실행 건너뜀)",
+            current_time.strftime("%H:%M:%S"),
+            target_time.strftime("%H:%M"),
+            ScheduleConfig.EXECUTION_MARGIN_MINUTES,
+            window_start.strftime("%H:%M"),
+            window_end.strftime("%H:%M"),
+        )
+
+    return is_within
 
 
 def calculate_correlations(finder: UsaStockFinder) -> dict[str, dict[str, float]]:
@@ -761,6 +828,11 @@ def main() -> None:
     """
     setup_logging()
     load_dotenv()
+
+    # Check if current time is within execution window
+    if not is_within_execution_window():
+        logger.info("현재 시간이 실행 시간 범위 밖이므로 프로그램을 종료합니다.")
+        return
 
     # Validate environment variables at startup
     try:

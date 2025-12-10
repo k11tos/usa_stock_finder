@@ -198,6 +198,24 @@ class APIConfig:
     RETRY_DELAY_SECONDS = float(os.getenv("API_RETRY_DELAY_SECONDS", "1.0"))
 
 
+class ScheduleConfig:
+    """Schedule and execution time configuration."""
+
+    # 실행 시간 설정 (24시간 형식, 한국 시간 기준)
+    EXECUTION_HOUR = int(os.getenv("EXECUTION_HOUR", "20"))  # 기본값: 20시 (오후 8시)
+    EXECUTION_MINUTE = int(os.getenv("EXECUTION_MINUTE", "0"))  # 기본값: 0분
+
+    # 실행 시간 마진 (분 단위)
+    # 예: 10분이면 19:50 ~ 20:10 사이에만 실행
+    EXECUTION_MARGIN_MINUTES = int(os.getenv("EXECUTION_MARGIN_MINUTES", "10"))  # 기본값: 10분
+
+    # 시간 체크 활성화 여부
+    TIME_CHECK_ENABLED = os.getenv("TIME_CHECK_ENABLED", "True").lower() == "true"  # 기본값: True
+
+    # 타임존 설정 (한국 시간)
+    TIMEZONE = os.getenv("TIMEZONE", "Asia/Seoul")  # 기본값: Asia/Seoul (KST)
+
+
 def get_config() -> dict[str, Any]:
     """
     Get all configuration as a dictionary.
