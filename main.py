@@ -449,7 +449,8 @@ def calculate_investment_per_stock(
         return None
 
     available_cash = account_balance.get("available_cash", 0.0)
-    buyable_cash = account_balance.get("buyable_cash", available_cash)
+    original_buyable_cash = account_balance.get("buyable_cash", available_cash)
+    buyable_cash = original_buyable_cash
     total_balance = account_balance.get("total_balance", available_cash)
 
     # 매도로 확보된 현금을 매수 가능 금액에 추가
@@ -457,17 +458,18 @@ def calculate_investment_per_stock(
         buyable_cash += additional_cash
         logger.info(
             "매도 금액을 매수 가능 금액에 반영 - 원래 buyable_cash=%.2f, 추가 현금=%.2f, 최종 buyable_cash=%.2f",
-            account_balance.get("buyable_cash", available_cash),
+            original_buyable_cash,
             additional_cash,
             buyable_cash,
         )
 
     if buyable_cash <= 0:
         logger.warning(
-            "No buyable cash available (Available cash: %.2f, Buyable cash: %.2f, Additional cash: %.2f)",
+            "No buyable cash available (Available cash: %.2f, Original buyable cash: %.2f, Additional cash: %.2f, Final buyable cash: %.2f)",
             available_cash,
-            buyable_cash,
+            original_buyable_cash,
             additional_cash,
+            buyable_cash,
         )
         return None
 
