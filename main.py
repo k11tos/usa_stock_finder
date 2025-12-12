@@ -232,8 +232,11 @@ def generate_telegram_message(
 
     # Generate buy messages with investment details
     # new_buy_items (prev_items에 없는 것)만 표시하되, share_quantities가 있으면 상세 정보 표시
-    new_buy_items = [item for item in buy_items if item not in prev_items]
-    
+    # 매수 수량이 0인 종목은 share_quantities에 포함되지 않으므로 필터링
+    new_buy_items = [
+        item for item in buy_items if item not in prev_items and (not share_quantities or item in share_quantities)
+    ]
+
     # buy_items 전체를 표시하되, 실제 변경사항(new_buy_items 또는 매도 신호)이 있을 때만 메시지 생성
     if new_buy_items:
         message.append("\n📈 매수 신호:")
@@ -393,6 +396,7 @@ def calculate_investment_per_stock(
     reserve_ratio: float | None = None,
     min_investment: float | None = None,
     max_investment: float | None = None,
+    additional_cash: float = 0.0,
 ) -> dict[str, float] | None:
     """
     Calculate investment amount per stock based on available cash and buy signals.
@@ -408,6 +412,7 @@ def calculate_investment_per_stock(
         reserve_ratio (float | None): Ratio of cash to reserve (None = use config default)
         min_investment (float | None): Minimum investment amount per stock (None = use config default)
         max_investment (float | None): Maximum investment amount per stock (None = use config default)
+        additional_cash (float): Additional cash to add to buyable_cash (e.g., from sell proceeds). Default: 0.0
 
     Returns:
         dict[str, float] | None: Dictionary mapping stock symbols to investment amounts,
@@ -419,6 +424,7 @@ def calculate_investment_per_stock(
         - Respects min/max investment constraints
         - Returns None if account balance fetch fails
         - Automatically excludes stocks that cannot afford minimum investment
+        - Additional cash (e.g., from sell proceeds) is added to buyable_cash before calculation
     """
     if not buy_items:
         logger.warning("No buy signals to calculate investment amounts")
@@ -446,9 +452,22 @@ def calculate_investment_per_stock(
     buyable_cash = account_balance.get("buyable_cash", available_cash)
     total_balance = account_balance.get("total_balance", available_cash)
 
+    # 매도로 확보된 현금을 매수 가능 금액에 추가
+    if additional_cash > 0:
+        buyable_cash += additional_cash
+        logger.info(
+            "매도 금액을 매수 가능 금액에 반영 - 원래 buyable_cash=%.2f, 추가 현금=%.2f, 최종 buyable_cash=%.2f",
+            account_balance.get("buyable_cash", available_cash),
+            additional_cash,
+            buyable_cash,
+        )
+
     if buyable_cash <= 0:
         logger.warning(
-            "No buyable cash available (Available cash: %.2f, Buyable cash: %.2f)", available_cash, buyable_cash
+            "No buyable cash available (Available cash: %.2f, Buyable cash: %.2f, Additional cash: %.2f)",
+            available_cash,
+            buyable_cash,
+            additional_cash,
         )
         return None
 
@@ -606,6 +625,16 @@ def calculate_share_quantities(
 
         # Calculate actual investment amount (actual shares to buy * price)
         actual_investment = shares_to_buy * current_price
+
+        # 매수 수량이 0인 경우 필터링 (이미 목표 수량 이상 보유 중인 경우)
+        if shares_to_buy <= 0:
+            logger.debug(
+                "%s: 매수 수량 0 - 목표 수량=%d주, 현재 보유=%d주, 추가 매수 불필요",
+                symbol,
+                target_total_quantity,
+                int(current_quantity),
+            )
+            continue
 
         result[symbol] = {
             "investment_amount": round(investment_amount, 2),
@@ -879,27 +908,7 @@ def main() -> None:
             len(buy_items),
         )
 
-    # Calculate investment amount per stock
-    investment_map = None
-    share_quantities = None
-    sell_quantities = None
-
-    if buy_items:
-        investment_map = calculate_investment_per_stock(buy_items)
-        if investment_map:
-            logger.info(
-                "Investment amounts calculated: %d stocks, total investment: %s",
-                len(investment_map),
-                sum(investment_map.values()),
-            )
-            # Calculate share quantities for buy signals
-            share_quantities = calculate_share_quantities(investment_map, finder)
-            if share_quantities:
-                logger.info("Share quantities calculated for %d stocks", len(share_quantities))
-        else:
-            logger.warning("Failed to calculate investment amounts")
-
-    # Evaluate sell decisions using 3-tier system
+    # Evaluate sell decisions using 3-tier system (매도 결정을 먼저 평가하여 매도 금액을 계산)
     sell_decisions = {}
     current_holdings_detail = fetch_holdings_detail()
     if current_holdings_detail:
@@ -1031,6 +1040,45 @@ def main() -> None:
     else:
         logger.info("매도 대상 종목 없음")
         sell_quantities = None
+
+    # 매도 금액 계산 (매수 가능 금액에 반영하기 위해)
+    additional_cash_from_sell = 0.0
+    if sell_quantities:
+        additional_cash_from_sell = sum(info.get("sell_amount", 0.0) for info in sell_quantities.values())
+        if additional_cash_from_sell > 0:
+            logger.info(
+                "매도로 확보될 현금 계산 완료 - 총 매도 금액: $%.2f (%d개 종목)",
+                additional_cash_from_sell,
+                len(sell_quantities),
+            )
+
+    # Calculate investment amount per stock (매도 금액 반영)
+    investment_map = None
+    share_quantities = None
+
+    if buy_items:
+        investment_map = calculate_investment_per_stock(buy_items, additional_cash=additional_cash_from_sell)
+        if investment_map:
+            logger.info(
+                "Investment amounts calculated: %d stocks, total investment: %s",
+                len(investment_map),
+                sum(investment_map.values()),
+            )
+            # Calculate share quantities for buy signals
+            share_quantities = calculate_share_quantities(investment_map, finder)
+            if share_quantities:
+                logger.info("Share quantities calculated for %d stocks", len(share_quantities))
+                # 매수 수량이 0인 종목이 필터링되었을 수 있으므로 로그
+                filtered_count = len(investment_map) - len(share_quantities)
+                if filtered_count > 0:
+                    logger.info(
+                        "매수 수량 0인 종목 필터링 완료 - 원래: %d개, 필터링 후: %d개 (제외: %d개)",
+                        len(investment_map),
+                        len(share_quantities),
+                        filtered_count,
+                    )
+        else:
+            logger.warning("Failed to calculate investment amounts")
 
     telegram_message = generate_telegram_message(
         us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, sell_decisions, finder

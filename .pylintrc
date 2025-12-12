@@ -24,6 +24,7 @@ disable=
     R1702,  # too-many-nested-blocks (API response handling needs nesting)
     R0916,  # too-many-boolean-expressions (complex condition checks)
     R0904,  # too-many-public-methods (test classes need many test methods)
+    C0302,  # too-many-lines (main.py is a large orchestration module)
 
 [DESIGN]
 max-args=10

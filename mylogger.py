@@ -18,7 +18,15 @@ Main Classes:
 import datetime as dt
 import json
 import logging
-from typing import override
+
+# typing.override는 Python 3.12+에서만 사용 가능하므로 조건부 import
+try:
+    from typing import override
+except ImportError:
+    # Python < 3.12에서는 override 데코레이터를 사용하지 않음
+    def override(func):  # pylint: disable=unused-argument
+        """Placeholder decorator for Python < 3.12"""
+        return func
 
 # Set of built-in attributes in LogRecord objects
 LOG_RECORD_BUILTIN_ATTRS = {
