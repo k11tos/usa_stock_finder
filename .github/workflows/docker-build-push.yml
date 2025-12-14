@@ -14,7 +14,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: usa-stock-finder
+  IMAGE_NAME: usa_stock_finder
 
 permissions:
   contents: read
