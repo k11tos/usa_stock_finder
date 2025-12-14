@@ -142,7 +142,29 @@ pytest --cov=. --cov-report=html
 - 투자 손실에 대한 책임은 사용자에게 있습니다
 - 이 시스템은 투자 조언이 아닙니다
 
+## 🛡️ 보안
+
+### Pre-commit Hook
+프로젝트에는 실수로 민감한 파일을 커밋하는 것을 방지하는 pre-commit hook이 포함되어 있습니다.
+
+**자동으로 설정됨**: 저장소를 클론하면 hook이 자동으로 활성화됩니다.
+
+**수동 설정** (필요한 경우):
+```bash
+chmod +x .git/hooks/pre-commit
+```
+
+**테스트**:
+```bash
+.git/hooks/pre-commit-test.sh
+```
+
+Hook이 차단하는 항목:
+- `.env` 파일 및 환경 변수 파일
+- `portfolio/*.csv` 파일
+- `data/*.json` 파일
+- 코드에 하드코딩된 API 키/토큰
+
 ## 📧 문의
 
 이슈나 질문이 있으시면 GitHub Issues를 이용해주세요.
-

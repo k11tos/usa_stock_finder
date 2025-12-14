@@ -28,6 +28,7 @@ except ImportError:
         """Placeholder decorator for Python < 3.12"""
         return func
 
+
 # Set of built-in attributes in LogRecord objects
 LOG_RECORD_BUILTIN_ATTRS = {
     "args",

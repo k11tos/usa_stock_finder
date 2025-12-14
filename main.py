@@ -464,7 +464,8 @@ def calculate_investment_per_stock(
 
     if buyable_cash <= 0:
         logger.warning(
-            "No buyable cash available (Available cash: %.2f, Original buyable cash: %.2f, Additional cash: %.2f, Final buyable cash: %.2f)",
+            "No buyable cash available (Available cash: %.2f, Original buyable cash: %.2f, "
+            "Additional cash: %.2f, Final buyable cash: %.2f)",
             available_cash,
             original_buyable_cash,
             additional_cash,
