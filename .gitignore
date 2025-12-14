@@ -5,11 +5,14 @@ data/*
 # General data files
 data.json
 *.ipynb
-*.csv  # 모든 CSV 파일 (포트폴리오 포함)
+# 모든 CSV 파일 (포트폴리오 포함)
+*.csv
 run.sh
-token.dat  # API 인증 토큰
+# API 인증 토큰
+token.dat
 log.json*
-logs/*.json  # 로그 파일
+# 로그 파일
+logs/*.json
 
 # Created by https://www.toptal.com/developers/gitignore/api/macos,linux,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,linux,python
