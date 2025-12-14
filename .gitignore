@@ -1,11 +1,15 @@
+# Trading strategy sensitive files (핵심 경쟁력 보호)
+portfolio/*
+data/*
+
+# General data files
 data.json
-data/stop_loss_log.json
-data/trailing_state.json
 *.ipynb
-*.csv
+*.csv  # 모든 CSV 파일 (포트폴리오 포함)
 run.sh
-token.dat
+token.dat  # API 인증 토큰
 log.json*
+logs/*.json  # 로그 파일
 
 # Created by https://www.toptal.com/developers/gitignore/api/macos,linux,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,linux,python
