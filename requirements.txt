@@ -1,6 +1,8 @@
-pip==25.0.1
+# Core dependencies
 jmespath==1.0.1
-mojito2==0.1.6
+mojito2==0.1.6  # Note: installed as mojito2 but imported as 'mojito'
+numpy>=1.24.0  # Required by pandas and used directly in stock_analysis.py
+pandas>=2.0.0  # Required by yfinance and used directly in stock_analysis.py
+python-dotenv==1.0.1
 python-telegram-bot==21.0.1
 yfinance==0.2.65
-python-dotenv==1.0.1
