@@ -45,6 +45,21 @@ source env/bin/activate  # Windows: env\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### Docker를 사용한 실행 (권장)
+```bash
+# GitHub Container Registry에서 이미지 가져오기
+docker pull ghcr.io/k11tos/usa-stock-finder:latest
+
+# 실행
+docker run --env-file .env ghcr.io/k11tos/usa-stock-finder:latest
+```
+
+또는 로컬에서 빌드:
+```bash
+docker build -t usa-stock-finder .
+docker run --env-file .env usa-stock-finder
+```
+
 ## ⚙️ 설정
 
 1. `.env` 파일 생성

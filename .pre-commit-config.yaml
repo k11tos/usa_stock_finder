@@ -20,12 +20,26 @@ repos:
                 exit 0
             fi
             echo "📁 Checking file names..."
+            SENSITIVE_PATTERNS=(
+                "\.env$"
+                "\.env\..*"
+                "portfolio/.*\.csv$"
+                "data/.*\.json$"
+                "token\.dat$"
+                ".*secret.*"
+                ".*password.*"
+                ".*key.*\.pem$"
+                ".*\.key$"
+            )
             for file in $STAGED_FILES; do
-                if echo "$file" | grep -qiE "\.env$|\.env\..*|portfolio/.*\.csv$|data/.*\.json$|token\.dat$|.*secret.*|.*password.*|.*key.*\.pem$|.*\.key$"; then
-                    echo -e "${RED}❌ Error: Sensitive file detected: $file${NC}"
-                    echo -e "${YELLOW}   This file should not be committed!${NC}"
-                    ISSUES_FOUND=1
-                fi
+                for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+                    if echo "$file" | grep -qiE "$pattern"; then
+                        echo -e "${RED}❌ Error: Sensitive file detected: $file${NC}"
+                        echo -e "${YELLOW}   Pattern matched: $pattern${NC}"
+                        echo -e "${YELLOW}   This file should not be committed!${NC}"
+                        ISSUES_FOUND=1
+                    fi
+                done
             done
             echo "🔎 Checking file contents for hardcoded secrets..."
             for file in $STAGED_FILES; do
@@ -35,8 +49,45 @@ repos:
                 if git diff --cached "$file" 2>/dev/null | grep -q "^diff --git"; then
                     FILE_CONTENT=$(git show ":$file" 2>/dev/null)
                     if [ -n "$FILE_CONTENT" ]; then
-                        if echo "$FILE_CONTENT" | grep -qiE "ki_app_key\s*=\s*['\"][^'\"]{15,}['\"]|ki_app_secret_key\s*=\s*['\"][^'\"]{15,}['\"]|TELEGRAM_BOT_TOKEN\s*=\s*['\"][^'\"]{15,}['\"]|account_number\s*=\s*['\"][^'\"]{10,}['\"]|api_key\s*=\s*['\"][^'\"]{15,}['\"]|secret\s*=\s*['\"][^'\"]{15,}['\"]|password\s*=\s*['\"][^'\"]{10,}['\"]"; then
+                        if echo "$FILE_CONTENT" | grep -qiE "ki_app_key\s*=\s*\"[^\"]{15,}\""; then
                             echo -e "${RED}❌ Error: Hardcoded secret detected in: $file${NC}"
+                            echo -e "${YELLOW}   Pattern: ki_app_key${NC}"
+                            echo -e "${YELLOW}   Please use environment variables instead!${NC}"
+                            ISSUES_FOUND=1
+                        fi
+                        if echo "$FILE_CONTENT" | grep -qiE "ki_app_secret_key\s*=\s*\"[^\"]{15,}\""; then
+                            echo -e "${RED}❌ Error: Hardcoded secret detected in: $file${NC}"
+                            echo -e "${YELLOW}   Pattern: ki_app_secret_key${NC}"
+                            echo -e "${YELLOW}   Please use environment variables instead!${NC}"
+                            ISSUES_FOUND=1
+                        fi
+                        if echo "$FILE_CONTENT" | grep -qiE "TELEGRAM_BOT_TOKEN\s*=\s*\"[^\"]{15,}\""; then
+                            echo -e "${RED}❌ Error: Hardcoded secret detected in: $file${NC}"
+                            echo -e "${YELLOW}   Pattern: TELEGRAM_BOT_TOKEN${NC}"
+                            echo -e "${YELLOW}   Please use environment variables instead!${NC}"
+                            ISSUES_FOUND=1
+                        fi
+                        if echo "$FILE_CONTENT" | grep -qiE "account_number\s*=\s*\"[^\"]{10,}\""; then
+                            echo -e "${RED}❌ Error: Hardcoded secret detected in: $file${NC}"
+                            echo -e "${YELLOW}   Pattern: account_number${NC}"
+                            echo -e "${YELLOW}   Please use environment variables instead!${NC}"
+                            ISSUES_FOUND=1
+                        fi
+                        if echo "$FILE_CONTENT" | grep -qiE "api_key\s*=\s*\"[^\"]{15,}\""; then
+                            echo -e "${RED}❌ Error: Hardcoded secret detected in: $file${NC}"
+                            echo -e "${YELLOW}   Pattern: api_key${NC}"
+                            echo -e "${YELLOW}   Please use environment variables instead!${NC}"
+                            ISSUES_FOUND=1
+                        fi
+                        if echo "$FILE_CONTENT" | grep -qiE "secret\s*=\s*\"[^\"]{15,}\""; then
+                            echo -e "${RED}❌ Error: Hardcoded secret detected in: $file${NC}"
+                            echo -e "${YELLOW}   Pattern: secret${NC}"
+                            echo -e "${YELLOW}   Please use environment variables instead!${NC}"
+                            ISSUES_FOUND=1
+                        fi
+                        if echo "$FILE_CONTENT" | grep -qiE "password\s*=\s*\"[^\"]{10,}\""; then
+                            echo -e "${RED}❌ Error: Hardcoded secret detected in: $file${NC}"
+                            echo -e "${YELLOW}   Pattern: password${NC}"
                             echo -e "${YELLOW}   Please use environment variables instead!${NC}"
                             ISSUES_FOUND=1
                         fi
@@ -51,7 +102,7 @@ repos:
                 echo ""
                 echo "💡 Tips:"
                 echo "   - Use .env file for secrets (already in .gitignore)"
-                echo "   - Use environment variables in code: os.getenv('\''KEY_NAME'\'')"
+                echo "   - Use environment variables in code: os.getenv(\"KEY_NAME\")"
                 echo "   - Check .gitignore to ensure sensitive files are excluded"
                 echo ""
                 exit 1

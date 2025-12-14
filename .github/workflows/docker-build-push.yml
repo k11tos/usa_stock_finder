@@ -1,0 +1,137 @@
+name: Docker Build & Push to GHCR
+
+# 이 워크플로우는 Docker 이미지 빌드와 GitHub Container Registry에 푸시를 담당합니다
+# ARM64 (Raspberry Pi 등) 및 AMD64 플랫폼을 지원합니다
+
+on:
+  push:
+    branches: [main]  # main 브랜치에 푸시될 때만 실행
+    tags:
+      - "v*"  # 버전 태그가 푸시될 때도 실행
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # 수동 실행 가능
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: usa-stock-finder
+
+permissions:
+  contents: read
+  packages: write  # GitHub Container Registry에 푸시하기 위해 필요
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ARM 빌드를 위한 QEMU 설정 (Raspberry Pi 등 지원)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (for tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        if: github.event_name != 'pull_request'
+        run: echo "Image pushed with digest ${{ steps.build.outputs.digest }}"
+
+  deploy-to-raspberry-pi:
+    name: Deploy to Raspberry Pi
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Deploy to Raspberry Pi
+        uses: appleboy/ssh-action@v1.2.3
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.PI_SSH_KEY }}
+          port: ${{ secrets.PI_PORT }}
+          script: |
+            cd ${{ secrets.PI_PROJECT_PATH }}
+            docker login -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }} ${{ env.REGISTRY }}
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+            docker compose up -d stock
+            docker image prune -f
+            docker ps
+
+      # 선택사항: Slack 알림 (SLACK_WEBHOOK_URL secret이 설정된 경우에만)
+      # 주의: secrets.SLACK_WEBHOOK_URL을 GitHub 저장소 Settings > Secrets에 추가해야 합니다
+      - name: Slack Notification (Success)
+        if: success() && github.event_name != 'pull_request'
+        uses: rtCamp/action-slack-notify@v2
+        continue-on-error: true  # Slack 알림 실패해도 워크플로우는 계속 진행
+        with:
+          status: custom
+          fields: 'repo,message,commit,author,action,eventName,ref,workflow,job,took'
+          custom_payload: |
+            {
+              "text": ":white_check_mark: *USA Stock Finder CI/CD 성공* :rocket:\n \
+              리포지토리: ${{ github.repository }}\n \
+              워크플로우: ${{ github.workflow }} #${{ github.run_number }}\n \
+              커밋: `${{ github.sha }}`\n \
+              작성자: ${{ github.actor }}\n \
+              이미지: `${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest`"
+            }
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Slack Notification (Failure)
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        continue-on-error: true  # Slack 알림 실패해도 워크플로우는 계속 진행
+        with:
+          status: custom
+          fields: 'repo,message,commit,author,action,eventName,ref,workflow,job,took'
+          custom_payload: |
+            {
+              "text": ":x: *USA Stock Finder CI/CD 실패* :fire:\n \
+              리포지토리: ${{ github.repository }}\n \
+              워크플로우: ${{ github.workflow }} #${{ github.run_number }}\n \
+              커밋: `${{ github.sha }}`\n \
+              작성자: ${{ github.actor }}"
+            }
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
