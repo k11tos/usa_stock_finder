@@ -107,21 +107,23 @@ class TestStopLossCooldown(unittest.TestCase):
         self.assertEqual(log[symbol]["last_stop_loss_date"], today.isoformat())
         self.assertEqual(log[symbol]["loss_pct"], loss_pct)
 
-    def test_record_stop_loss_event_positive_loss_ignored(self):
-        """Test that positive loss_pct is ignored"""
+    def test_record_stop_loss_event_positive_loss_applies_base_cooldown(self):
+        """Test that positive loss_pct (profit sell) applies base cooldown"""
         log_file = os.path.join(self.temp_data_dir, "stop_loss_log.json")
         symbol = "TEST"
-        loss_pct = 0.10  # 양수 (손실이 아님)
+        loss_pct = 0.10  # 양수 (수익 매도)
         today = date(2025, 1, 20)
 
         with patch("stop_loss_cooldown.STOP_LOSS_LOG_PATH", log_file):
             record_stop_loss_event(symbol, loss_pct, today)
 
-        # 로그 파일이 생성되지 않았거나 비어있어야 함
-        if os.path.exists(log_file):
-            with open(log_file, "r", encoding="utf-8") as f:
-                log = json.load(f)
-            self.assertNotIn(symbol, log)
+        # 로그 파일에 기록되어야 하고, loss_pct는 0.0으로 기록됨 (기본 쿨다운)
+        self.assertTrue(os.path.exists(log_file))
+        with open(log_file, "r", encoding="utf-8") as f:
+            log = json.load(f)
+        self.assertIn(symbol, log)
+        self.assertEqual(log[symbol]["last_stop_loss_date"], today.isoformat())
+        self.assertEqual(log[symbol]["loss_pct"], 0.0)  # 수익 매도는 0.0으로 기록
 
     def test_record_stop_loss_event_overwrite(self):
         """Test that recording multiple times overwrites previous entry"""
@@ -157,6 +159,10 @@ class TestStopLossCooldown(unittest.TestCase):
 
         # -9% 손절 → 5일 (base만, 10% 미만이므로)
         self.assertEqual(calculate_cooldown_days(-0.09), 5)
+
+        # 수익 매도 (0 이상) → 기본 쿨다운만 (5일)
+        self.assertEqual(calculate_cooldown_days(0.0), 5)
+        self.assertEqual(calculate_cooldown_days(0.10), 5)  # 10% 수익 매도도 기본 쿨다운
 
     def test_is_in_cooldown_no_entry(self):
         """Test is_in_cooldown when symbol is not in log"""

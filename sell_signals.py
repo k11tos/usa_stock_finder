@@ -217,6 +217,10 @@ def evaluate_sell_decisions(
 
                     # 현재가가 트레일링 스탑 아래로 내려가면 매도
                     if current_price <= trailing_stop_price:
+                        # 쿨다운 이벤트 기록 (손익률 계산)
+                        trailing_loss_pct = (current_price - avg_price) / avg_price if avg_price > 0 else None
+                        record_stop_loss_event(symbol, trailing_loss_pct, date.today())
+
                         logger.info(
                             "%s: 🟨 TRAILING 매도 결정 - current_price=%.4f <= trailing_stop_price=%.4f, "
                             "highest_close=%.4f, ATR=%.4f, quantity=%.2f",
@@ -264,6 +268,10 @@ def evaluate_sell_decisions(
         logger.debug("%s: AVSL 체크 - avsl_signal=%s", symbol, avsl_signal)
 
         if avsl_signal:
+            # 쿨다운 이벤트 기록 (손익률 계산)
+            avsl_loss_pct = (current_price - avg_price) / avg_price if avg_price > 0 and current_price > 0 else None
+            record_stop_loss_event(symbol, avsl_loss_pct, date.today())
+
             logger.info(
                 "%s: 🟧 AVSL 매도 결정 - 거래량 지지선 붕괴, quantity=%.2f",
                 symbol,
@@ -285,6 +293,10 @@ def evaluate_sell_decisions(
         )
 
         if symbol not in selected_buy and symbol not in selected_not_sell:
+            # 쿨다운 이벤트 기록 (손익률 계산)
+            trend_loss_pct = (current_price - avg_price) / avg_price if avg_price > 0 and current_price > 0 else None
+            record_stop_loss_event(symbol, trend_loss_pct, date.today())
+
             logger.info(
                 "%s: 🟦 TREND 매도 결정 - 트렌드/전략 조건 이탈, quantity=%.2f",
                 symbol,

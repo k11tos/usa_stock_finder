@@ -79,41 +79,52 @@ def save_stop_loss_log(log: Dict[str, Dict[str, Any]]) -> None:
         raise
 
 
-def record_stop_loss_event(symbol: str, loss_pct: float, today: date) -> None:
+def record_stop_loss_event(symbol: str, loss_pct: float | None, today: date) -> None:
     """
-    특정 종목에 대한 Stop Loss 이벤트를 기록한다.
+    특정 종목에 대한 매도 이벤트를 기록한다 (쿨다운 관리를 위해).
 
-    - loss_pct는 음수 값이어야 한다. (0 또는 양수면 기록하지 않고 무시)
-    - 동일 종목이 여러 번 손절되면 가장 최근 이벤트로 덮어쓴다.
+    - loss_pct가 음수이면 손실률에 비례한 쿨다운 적용
+    - loss_pct가 None이거나 0 이상이면 기본 쿨다운만 적용 (수익 매도 등)
+    - 동일 종목이 여러 번 매도되면 가장 최근 이벤트로 덮어쓴다.
 
     Args:
         symbol (str): 종목 심볼
-        loss_pct (float): 손실률 (음수 값, 예: -0.24 == -24%)
+        loss_pct (float | None): 손실률 (음수 값, 예: -0.24 == -24%). 
+                                  None이거나 0 이상이면 기본 쿨다운만 적용
         today (date): 오늘 날짜
     """
-    # loss_pct가 0 이상이면 기록하지 않음
-    if loss_pct >= 0:
+    # loss_pct가 None이거나 0 이상이면 기본 쿨다운만 적용 (손실률 0으로 기록)
+    if loss_pct is None or loss_pct >= 0:
+        loss_pct_to_record = 0.0
         logger.debug(
-            "%s: Stop Loss 이벤트 기록 건너뜀 - loss_pct=%.4f (0 이상, 손실이 아님)",
+            "%s: 매도 이벤트 기록 (기본 쿨다운) - loss_pct=%s (수익 매도 또는 손실률 없음)",
             symbol,
             loss_pct,
         )
-        return
+    else:
+        loss_pct_to_record = loss_pct
 
     log = load_stop_loss_log()
     log[symbol] = {
         "last_stop_loss_date": today.isoformat(),
-        "loss_pct": loss_pct,
+        "loss_pct": loss_pct_to_record,
     }
     save_stop_loss_log(log)
 
-    logger.info(
-        "%s: Stop Loss 이벤트 기록 완료 - loss_pct=%.4f (%.2f%%), date=%s",
-        symbol,
-        loss_pct,
-        loss_pct * 100,
-        today.isoformat(),
-    )
+    if loss_pct_to_record < 0:
+        logger.info(
+            "%s: 매도 이벤트 기록 완료 - loss_pct=%.4f (%.2f%%), date=%s",
+            symbol,
+            loss_pct_to_record,
+            loss_pct_to_record * 100,
+            today.isoformat(),
+        )
+    else:
+        logger.info(
+            "%s: 매도 이벤트 기록 완료 (기본 쿨다운 적용), date=%s",
+            symbol,
+            today.isoformat(),
+        )
 
 
 def calculate_cooldown_days(loss_pct: float) -> int:
@@ -121,17 +132,30 @@ def calculate_cooldown_days(loss_pct: float) -> int:
     손실률에 기반하여 쿨다운 일수를 계산한다.
 
     공식:
-        abs_loss = abs(loss_pct)
-        extra_blocks = int(abs_loss / 0.10)  # 10% 단위 블록 수
-        cooldown_days = BASE_DAYS + extra_blocks * EXTRA_DAYS_PER_10PCT
+        loss_pct가 0 이상이면 기본 쿨다운만 적용
+        loss_pct가 음수이면:
+            abs_loss = abs(loss_pct)
+            extra_blocks = int(abs_loss / 0.10)  # 10% 단위 블록 수
+            cooldown_days = BASE_DAYS + extra_blocks * EXTRA_DAYS_PER_10PCT
         (선택) MAX_DAYS가 0보다 크면 상한 적용
 
     Args:
-        loss_pct (float): 손실률 (음수 값, 예: -0.23 == -23%)
+        loss_pct (float): 손실률 (음수 값, 예: -0.23 == -23%). 0 이상이면 기본 쿨다운만 적용
 
     Returns:
         int: 쿨다운 일수
     """
+    # 손실률이 0 이상이면 기본 쿨다운만 적용
+    if loss_pct >= 0:
+        cooldown_days = StrategyConfig.STOP_LOSS_COOLDOWN_BASE_DAYS
+        logger.debug(
+            "쿨다운 일수 계산 (기본 쿨다운) - loss_pct=%.4f (%.2f%%), cooldown_days=%d",
+            loss_pct,
+            loss_pct * 100,
+            cooldown_days,
+        )
+        return cooldown_days
+
     abs_loss = abs(loss_pct)  # 0.23
     extra_blocks = int(abs_loss / 0.10)  # 10% 단위 블록 수 (0.23 → 2)
 
