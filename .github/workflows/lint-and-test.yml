@@ -36,5 +36,5 @@ jobs:
         SLACK_MESSAGE: Workflow ${{ job.status }}
         SLACK_MESSAGE_ON_SUCCESS: '✅ 워크플로우가 성공적으로 완료되었습니다. (Pylint, Unittest)'
         SLACK_MESSAGE_ON_FAILURE: '❌ 워크플로우 실행 중 오류가 발생했습니다.'
-        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
         SLACK_USERNAME: ${{ vars.SLACK_USERNAME }}
