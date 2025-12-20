@@ -91,11 +91,14 @@ jobs:
           port: ${{ secrets.PI_PORT }}
           script: |
             cd ${{ secrets.PI_PROJECT_PATH }}
-            docker login -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }} ${{ env.REGISTRY }}
-            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+            docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin <<GITHUB_TOKEN_EOF
+            ${{ secrets.GITHUB_TOKEN }}
+            GITHUB_TOKEN_EOF
+            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
             docker compose up -d stock
             docker image prune -f
             docker ps
+            docker logout ${{ env.REGISTRY }}
 
       # 선택사항: Slack 알림 (SLACK_WEBHOOK_URL secret이 설정된 경우에만)
       # 주의: secrets.SLACK_WEBHOOK_URL을 GitHub 저장소 Settings > Secrets에 추가해야 합니다
