@@ -91,10 +91,10 @@ jobs:
           port: ${{ secrets.PI_PORT }}
           script: |
             cd ${{ secrets.PI_PROJECT_PATH }}
-            docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin <<GITHUB_TOKEN_EOF
+            docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }} <<GITHUB_TOKEN_EOF
             ${{ secrets.GITHUB_TOKEN }}
             GITHUB_TOKEN_EOF
-            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
             docker compose up -d stock
             docker image prune -f
             docker ps
