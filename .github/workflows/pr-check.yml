@@ -15,8 +15,6 @@ jobs:
       account_number: test_account
       TELEGRAM_BOT_TOKEN: test_bot_token
       TELEGRAM_CHAT_ID: test_chat_id
-      telegram_bot_token: test_bot_token
-      telegram_chat_id: test_chat_id
 
     steps:
       - name: Checkout
