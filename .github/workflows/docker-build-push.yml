@@ -4,12 +4,6 @@ name: Docker Build & Push to GHCR
 # ARM64 (Raspberry Pi 등) 및 AMD64 플랫폼을 지원합니다
 
 on:
-  push:
-    branches: [main]  # main 브랜치에 푸시될 때만 실행
-    tags:
-      - "v*"  # 버전 태그가 푸시될 때도 실행
-  pull_request:
-    branches: [main]
   workflow_dispatch:  # 수동 실행 가능
 
 env:
