@@ -16,6 +16,7 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
+from config import StrategyConfig
 from stop_loss_cooldown import (
     calculate_cooldown_days,
     is_in_cooldown,
@@ -164,6 +165,15 @@ class TestStopLossCooldown(unittest.TestCase):
         self.assertEqual(calculate_cooldown_days(0.0), 5)
         self.assertEqual(calculate_cooldown_days(0.10), 5)  # 10% 수익 매도도 기본 쿨다운
 
+    def test_calculate_cooldown_days_regression_non_loss_mild_and_larger_loss(self):
+        """Regression: lock exact day-bucket behavior for representative losses."""
+        base = StrategyConfig.STOP_LOSS_COOLDOWN_BASE_DAYS
+        extra = StrategyConfig.STOP_LOSS_COOLDOWN_EXTRA_DAYS_PER_10PCT
+
+        self.assertEqual(calculate_cooldown_days(0.05), base)  # 비손실/수익 매도
+        self.assertEqual(calculate_cooldown_days(-0.08), base)  # 10% 미만 손실
+        self.assertEqual(calculate_cooldown_days(-0.22), base + (2 * extra))  # 20%대 손실
+
     def test_is_in_cooldown_no_entry(self):
         """Test is_in_cooldown when symbol is not in log"""
         log_file = os.path.join(self.temp_data_dir, "stop_loss_log.json")
@@ -205,6 +215,17 @@ class TestStopLossCooldown(unittest.TestCase):
             # 16일 후 체크 (쿨다운 종료)
             result = is_in_cooldown(symbol, today + timedelta(days=16))
         self.assertFalse(result)
+
+    def test_is_in_cooldown_boundary_day_is_not_in_cooldown(self):
+        """Regression: elapsed_days == cooldown_days should be treated as cooldown ended."""
+        log_file = os.path.join(self.temp_data_dir, "stop_loss_log.json")
+        symbol = "BOUNDARY"
+        today = date(2025, 1, 20)
+        loss_pct = -0.15  # 10일 쿨다운
+
+        with patch("stop_loss_cooldown.STOP_LOSS_LOG_PATH", log_file):
+            record_stop_loss_event(symbol, loss_pct, today)
+            self.assertFalse(is_in_cooldown(symbol, today + timedelta(days=10)))
 
     def test_is_in_cooldown_different_loss_percentages(self):
         """Test is_in_cooldown with different loss percentages"""
