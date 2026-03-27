@@ -4,7 +4,7 @@ on:
  push:
   paths:
   - '**.py'
-  - .github/workflows/pylint.yml
+  - .github/workflows/lint-and-test.yml
  workflow_dispatch:
 
 jobs:
@@ -15,9 +15,9 @@ jobs:
         python-version: ["3.12"]
     steps:
     - name: Get code
-      uses: actions/checkout@main
+      uses: actions/checkout@v4
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@main
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
