@@ -1,0 +1,41 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ki_app_key: test_key
+      ki_app_secret_key: test_secret
+      account_number: test_account
+      TELEGRAM_BOT_TOKEN: test_bot_token
+      TELEGRAM_CHAT_ID: test_chat_id
+      telegram_bot_token: test_bot_token
+      telegram_chat_id: test_chat_id
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements_dev.txt
+
+      - name: Syntax and import sanity check
+        run: python -m compileall .
+
+      - name: Run tests
+        run: pytest
