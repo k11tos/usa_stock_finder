@@ -1,11 +1,11 @@
 name: Lint and Test
 
 on:
- push:
-  paths:
-  - '**.py'
-  - .github/workflows/lint-and-test.yml
- workflow_dispatch:
+  push:
+    paths:
+      - '**/*.py'
+      - '.github/workflows/lint-and-test.yml'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,29 +14,29 @@ jobs:
       matrix:
         python-version: ["3.12"]
     steps:
-    - name: Get code
-      uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements_dev.txt
-    - name: Analysing the code with pylint
-      run: |
-        pylint $(git ls-files '*.py')
-    - name: Run tests
-      run: python -m unittest discover -s tests
-    - name: Slack Notification
-      if: ${{ always() && secrets.SLACK_WEBHOOK_URL != '' }}
-      continue-on-error: true
-      uses: rtCamp/action-slack-notify@v2
-      env:
-        SLACK_COLOR: ${{ job.status }}
-        SLACK_MESSAGE: Workflow ${{ job.status }}
-        SLACK_MESSAGE_ON_SUCCESS: '✅ 워크플로우가 성공적으로 완료되었습니다. (Pylint, Unittest)'
-        SLACK_MESSAGE_ON_FAILURE: '❌ 워크플로우 실행 중 오류가 발생했습니다.'
-        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-        SLACK_USERNAME: ${{ vars.SLACK_USERNAME }}
+      - name: Get code
+        uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_dev.txt
+      - name: Analysing the code with pylint
+        run: |
+          pylint $(git ls-files '*.py')
+      - name: Run tests
+        run: python -m unittest discover -s tests
+      - name: Slack Notification
+        if: ${{ always() && secrets.SLACK_WEBHOOK_URL != '' }}
+        continue-on-error: true
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_COLOR: ${{ job.status }}
+          SLACK_MESSAGE: Workflow ${{ job.status }}
+          SLACK_MESSAGE_ON_SUCCESS: '✅ 워크플로우가 성공적으로 완료되었습니다. (Pylint, Unittest)'
+          SLACK_MESSAGE_ON_FAILURE: '❌ 워크플로우 실행 중 오류가 발생했습니다.'
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_USERNAME: ${{ vars.SLACK_USERNAME }}
