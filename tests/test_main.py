@@ -440,8 +440,10 @@ class TestMainFunctions(unittest.TestCase):
 
     @patch("main.fetch_account_balance")
     @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "equal")
-    def test_calculate_investment_per_stock_mixed_affordability_filters_candidates(self, mock_fetch_balance):
-        """Current equal-distribution behavior returns None when all candidates are below minimum."""
+    def test_calculate_investment_per_stock_equal_distribution_min_filtering_is_all_or_nothing(
+        self, mock_fetch_balance
+    ):
+        """Equal-distribution min filtering currently behaves as all-or-nothing across candidates."""
         mock_fetch_balance.return_value = {
             "available_cash": 500.0,
             "buyable_cash": 500.0,
@@ -455,6 +457,8 @@ class TestMainFunctions(unittest.TestCase):
             min_investment=200.0,
         )
 
+        # Under current implementation, all symbols receive the same target investment,
+        # so filtering by min investment is all-or-nothing.
         # NOTE: Mixed-subset affordability could be explored in a future behavior-change PR.
         self.assertIsNone(result)
 
