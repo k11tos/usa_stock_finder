@@ -95,12 +95,12 @@ jobs:
             ${{ secrets.GITHUB_TOKEN }}
             GITHUB_TOKEN_EOF
             docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
-            docker compose up -d stock
+            docker-compose up -d stock
             docker image prune -f
-            echo "== docker compose ps =="
-            docker compose ps
+            echo "== docker-compose ps =="
+            docker-compose ps
 
-            container_id=$(docker compose ps -q stock)
+            container_id=$(docker-compose ps -q stock)
             if [ -z "$container_id" ]; then
               echo "ERROR: stock service container was not created."
               exit 1
@@ -139,7 +139,7 @@ jobs:
             echo "stock container health: $health_state"
 
             echo "== recent stock service logs =="
-            docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
+            docker-compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
             docker ps
             docker logout ${{ env.REGISTRY }}
 
