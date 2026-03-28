@@ -534,6 +534,57 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(msft_info["current_quantity"], 0)  # Not holding
         self.assertEqual(msft_info["total_after_buy"], 10)  # Total after buying
 
+    def test_calculate_share_quantities_filters_symbol_when_existing_holding_above_target(self):
+        """Symbol should be filtered out when current holding already exceeds target quantity."""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"AAPL": 100.0}
+
+        investment_map = {"AAPL": 500.0}  # target_total_quantity = 5
+        current_holdings = [{"symbol": "AAPL", "quantity": 8.0}]
+
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+
+        self.assertIsNone(result)
+
+    def test_calculate_share_quantities_skips_invalid_current_price(self):
+        """Invalid current price should cause symbol to be skipped."""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"AAPL": 0.0}
+
+        investment_map = {"AAPL": 1000.0}
+        current_holdings = []
+
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+
+        self.assertIsNone(result)
+
+    def test_calculate_share_quantities_skips_too_small_investment_amount(self):
+        """Too-small investment that results in zero shares should be skipped."""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"AAPL": 1000.0}
+
+        investment_map = {"AAPL": 10.0}  # target_total_quantity = 0
+        current_holdings = []
+
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+
+        self.assertIsNone(result)
+
+    def test_calculate_share_quantities_returns_partial_result_when_one_symbol_is_skipped(self):
+        """Should return only valid symbol when another symbol is skipped."""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"AAPL": 100.0, "MSFT": 0.0}
+
+        investment_map = {"AAPL": 1000.0, "MSFT": 1000.0}
+        current_holdings = []
+
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(list(result.keys()), ["AAPL"])
+        self.assertEqual(result["AAPL"]["shares_to_buy"], 10)
+        self.assertNotIn("MSFT", result)
+
     @patch("main.fetch_holdings_detail")
     def test_calculate_sell_quantities_success(self, mock_fetch_holdings):
         """Test calculate_sell_quantities with successful calculation"""
