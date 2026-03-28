@@ -357,12 +357,11 @@ class TestMainFunctions(unittest.TestCase):
         buy_items = ["AAPL", "MSFT", "GOOGL", "TSLA"]
 
         # With 1000 cash and 10% reserve = 900, divided by 4 = 225 per stock
-        # But min_investment is 300, so all stocks are below minimum
-        # New logic: excludes stocks that can't meet minimum investment
+        # But min_investment is 300, so the function should reduce candidate count
+        # and keep only affordable symbols.
         result = calculate_investment_per_stock(buy_items, min_investment=300.0)
 
-        # All stocks are below minimum investment, so result should be None
-        self.assertIsNone(result)
+        self.assertEqual(result, {"AAPL": 300.0, "MSFT": 300.0, "GOOGL": 300.0})
 
     @patch("main.fetch_account_balance")
     def test_calculate_investment_per_stock_with_max_investment(self, mock_fetch_balance):
@@ -380,6 +379,82 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIsNotNone(result)
         # Without max, would be 9000, but max is 5000
         self.assertLessEqual(result["AAPL"], 5000.0)
+
+    @patch("main.fetch_account_balance")
+    @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "equal")
+    def test_calculate_investment_per_stock_additional_cash_increases_buyable_cash(self, mock_fetch_balance):
+        """Additional cash should increase effective buyable cash before sizing."""
+        mock_fetch_balance.return_value = {
+            "available_cash": 100.0,
+            "buyable_cash": 100.0,
+            "total_balance": 1000.0,
+        }
+
+        buy_items = ["AAPL", "MSFT"]
+        result = calculate_investment_per_stock(
+            buy_items,
+            reserve_ratio=0.0,
+            min_investment=1.0,
+            additional_cash=100.0,
+        )
+
+        self.assertEqual(result, {"AAPL": 100.0, "MSFT": 100.0})
+
+    @patch("main.fetch_account_balance")
+    @patch("main.InvestmentConfig.PROPORTIONAL_PERCENTAGE", 0.1)
+    @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "proportional")
+    def test_calculate_investment_per_stock_proportional_distribution(self, mock_fetch_balance):
+        """Proportional strategy should use total balance percentage per stock."""
+        mock_fetch_balance.return_value = {
+            "available_cash": 10000.0,
+            "buyable_cash": 9000.0,
+            "total_balance": 50000.0,
+        }
+
+        buy_items = ["AAPL", "MSFT", "GOOGL"]
+        result = calculate_investment_per_stock(buy_items, min_investment=100.0)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result, {"AAPL": 5000.0, "MSFT": 5000.0, "GOOGL": 5000.0})
+
+    @patch("main.fetch_account_balance")
+    @patch("main.InvestmentConfig.PROPORTIONAL_PERCENTAGE", 0.2)
+    @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "proportional")
+    def test_calculate_investment_per_stock_proportional_distribution_with_max_cap(self, mock_fetch_balance):
+        """Proportional sizing should still respect max investment cap."""
+        mock_fetch_balance.return_value = {
+            "available_cash": 10000.0,
+            "buyable_cash": 9000.0,
+            "total_balance": 50000.0,
+        }
+
+        buy_items = ["AAPL", "MSFT"]
+        result = calculate_investment_per_stock(
+            buy_items,
+            min_investment=100.0,
+            max_investment=6000.0,
+        )
+
+        self.assertEqual(result, {"AAPL": 6000.0, "MSFT": 6000.0})
+
+    @patch("main.fetch_account_balance")
+    @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "equal")
+    def test_calculate_investment_per_stock_mixed_affordability_filters_candidates(self, mock_fetch_balance):
+        """When all candidates cannot meet minimum equally, keep only affordable subset."""
+        mock_fetch_balance.return_value = {
+            "available_cash": 500.0,
+            "buyable_cash": 500.0,
+            "total_balance": 500.0,
+        }
+
+        buy_items = ["AAPL", "MSFT", "GOOGL"]
+        result = calculate_investment_per_stock(
+            buy_items,
+            reserve_ratio=0.0,
+            min_investment=200.0,
+        )
+
+        self.assertEqual(result, {"AAPL": 250.0, "MSFT": 250.0})
 
     @patch("main.fetch_account_balance")
     def test_calculate_investment_per_stock_no_balance(self, mock_fetch_balance):
