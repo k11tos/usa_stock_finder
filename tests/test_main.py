@@ -6,6 +6,7 @@ It tests the main functions for stock analysis and selection.
 """
 
 import unittest
+from contextlib import ExitStack
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +18,7 @@ from main import (
     generate_telegram_message,
     is_within_execution_window,
     log_stock_info,
+    main,
     select_stocks,
     update_final_items,
 )
@@ -643,6 +645,104 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIn("TSLA", message_text)
         self.assertIn("AVSL", message_text)  # AVSL signal mentioned
         self.assertIn("5,000", message_text)  # Sell amount (formatted)
+
+
+class TestMainOrchestrationSmoke(unittest.TestCase):
+    """Conservative orchestration smoke tests for main.main()."""
+
+    def test_main_happy_path_smoke(self):
+        """Main orchestration should call critical integration points with mocked dependencies."""
+        with ExitStack() as stack:
+            mock_setup_logging = stack.enter_context(patch("main.setup_logging"))
+            mock_load_dotenv = stack.enter_context(patch("main.load_dotenv"))
+            mock_execution_window = stack.enter_context(patch("main.is_within_execution_window"))
+            mock_validate = stack.enter_context(patch("main.EnvironmentConfig.validate"))
+            mock_env_get = stack.enter_context(patch("main.EnvironmentConfig.get"))
+            mock_fetch_holdings = stack.enter_context(patch("main.fetch_us_stock_holdings"))
+            mock_read_csv = stack.enter_context(patch("main.read_csv_first_column"))
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            mock_calculate_correlations = stack.enter_context(patch("main.calculate_correlations"))
+            mock_select_stocks = stack.enter_context(patch("main.select_stocks"))
+            mock_in_cooldown = stack.enter_context(patch("main.is_in_cooldown"))
+            mock_fetch_holdings_detail = stack.enter_context(patch("main.fetch_holdings_detail"))
+            mock_evaluate_sell = stack.enter_context(patch("main.evaluate_sell_decisions"))
+            mock_calculate_sell_quantities = stack.enter_context(patch("main.calculate_sell_quantities"))
+            mock_calculate_investment = stack.enter_context(patch("main.calculate_investment_per_stock"))
+            mock_calculate_share_quantities = stack.enter_context(patch("main.calculate_share_quantities"))
+            mock_generate_message = stack.enter_context(patch("main.generate_telegram_message"))
+            mock_update_final_items = stack.enter_context(patch("main.update_final_items"))
+            mock_send_telegram = stack.enter_context(patch("main.send_telegram_message"))
+            mock_save_json = stack.enter_context(patch("main.save_json"))
+
+            mock_execution_window.return_value = True
+            env_values = {
+                "TELEGRAM_BOT_TOKEN": "fake-bot-token",
+                "TELEGRAM_CHAT_ID": "fake-chat-id",
+            }
+            mock_env_get.side_effect = env_values.get
+            mock_fetch_holdings.return_value = ["AAPL"]
+            mock_read_csv.return_value = ["AAPL", "MSFT"]
+
+            mock_finder = MagicMock()
+            mock_finder.is_data_valid.return_value = True
+            mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
+            mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder_cls.return_value = mock_finder
+
+            mock_calculate_correlations.return_value = {"50": {"AAPL": 55.0, "MSFT": 52.0}}
+            mock_select_stocks.return_value = (["MSFT"], ["AAPL"])
+            mock_in_cooldown.return_value = False
+            mock_fetch_holdings_detail.return_value = [{"symbol": "AAPL", "quantity": 1.0}]
+            mock_evaluate_sell.return_value = {}
+            mock_calculate_sell_quantities.return_value = None
+            mock_calculate_investment.return_value = {"MSFT": 500.0}
+            mock_calculate_share_quantities.return_value = {"MSFT": {"shares_to_buy": 2}}
+            mock_generate_message.return_value = ["2026-01-01", "Buy MSFT"]
+            mock_update_final_items.return_value = ["AAPL", "MSFT"]
+
+            main()
+
+            mock_setup_logging.assert_called_once()
+            mock_load_dotenv.assert_called_once()
+            mock_execution_window.assert_called_once()
+            mock_validate.assert_called_once()
+            mock_fetch_holdings.assert_called_once()
+            mock_read_csv.assert_called_once()
+            mock_finder_cls.assert_called_once_with(["AAPL", "MSFT"])
+            mock_calculate_correlations.assert_called_once_with(mock_finder)
+            mock_select_stocks.assert_called_once()
+            mock_evaluate_sell.assert_called_once()
+            mock_calculate_investment.assert_called_once()
+            mock_generate_message.assert_called_once()
+            mock_send_telegram.assert_called_once()
+            mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
+
+    @patch("main.save_json")
+    @patch("main.fetch_us_stock_holdings")
+    @patch("main.EnvironmentConfig.validate")
+    @patch("main.is_within_execution_window")
+    @patch("main.load_dotenv")
+    @patch("main.setup_logging")
+    def test_main_returns_early_outside_execution_window(
+        self,
+        mock_setup_logging,
+        mock_load_dotenv,
+        mock_execution_window,
+        mock_validate,
+        mock_fetch_holdings,
+        mock_save_json,
+    ):
+        """Main should exit before integration work when outside the allowed execution window."""
+        mock_execution_window.return_value = False
+
+        main()
+
+        mock_setup_logging.assert_called_once()
+        mock_load_dotenv.assert_called_once()
+        mock_execution_window.assert_called_once()
+        mock_validate.assert_not_called()
+        mock_fetch_holdings.assert_not_called()
+        mock_save_json.assert_not_called()
 
 
 if __name__ == "__main__":
