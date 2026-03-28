@@ -6,6 +6,7 @@ It tests the main functions for stock analysis and selection.
 """
 
 import unittest
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from main import (
@@ -14,6 +15,7 @@ from main import (
     calculate_sell_quantities,
     calculate_share_quantities,
     generate_telegram_message,
+    is_within_execution_window,
     log_stock_info,
     select_stocks,
     update_final_items,
@@ -278,6 +280,68 @@ class TestMainFunctions(unittest.TestCase):
         # With reserve_ratio=0.2, 10000 * 0.8 / 2 = 4000 per stock
         expected_investment = 10000.0 * 0.8 / 2
         self.assertAlmostEqual(result["AAPL"], expected_investment, places=2)
+
+    @patch("main.ScheduleConfig.TIME_CHECK_ENABLED", False)
+    def test_is_within_execution_window_time_check_disabled(self):
+        """Should always allow execution when time check is disabled."""
+        self.assertTrue(is_within_execution_window())
+
+    @patch("main.ScheduleConfig.TIME_CHECK_ENABLED", True)
+    @patch("main.ScheduleConfig.TIMEZONE", "Asia/Seoul")
+    @patch("main.ScheduleConfig.EXECUTION_HOUR", 20)
+    @patch("main.ScheduleConfig.EXECUTION_MINUTE", 0)
+    @patch("main.ScheduleConfig.EXECUTION_MARGIN_MINUTES", 10)
+    @patch("main.datetime")
+    def test_is_within_execution_window_inside_and_boundaries(self, mock_datetime):
+        """Should return True when current time is inside window or exactly on boundaries."""
+        mock_datetime.combine.side_effect = datetime.combine
+
+        # Exactly at target time
+        mock_datetime.now.return_value = datetime(2026, 1, 1, 20, 0, 0)
+        self.assertTrue(is_within_execution_window())
+
+        # Exactly at start boundary: 19:50
+        mock_datetime.now.return_value = datetime(2026, 1, 1, 19, 50, 0)
+        self.assertTrue(is_within_execution_window())
+
+        # Exactly at end boundary: 20:10
+        mock_datetime.now.return_value = datetime(2026, 1, 1, 20, 10, 0)
+        self.assertTrue(is_within_execution_window())
+
+    @patch("main.ScheduleConfig.TIME_CHECK_ENABLED", True)
+    @patch("main.ScheduleConfig.TIMEZONE", "Asia/Seoul")
+    @patch("main.ScheduleConfig.EXECUTION_HOUR", 20)
+    @patch("main.ScheduleConfig.EXECUTION_MINUTE", 0)
+    @patch("main.ScheduleConfig.EXECUTION_MARGIN_MINUTES", 10)
+    @patch("main.datetime")
+    def test_is_within_execution_window_outside_window(self, mock_datetime):
+        """Should return False when current time is outside execution window."""
+        mock_datetime.combine.side_effect = datetime.combine
+        mock_datetime.now.return_value = datetime(2026, 1, 1, 20, 11, 0)
+
+        self.assertFalse(is_within_execution_window())
+
+    @patch("main.ScheduleConfig.TIME_CHECK_ENABLED", True)
+    @patch("main.ScheduleConfig.TIMEZONE", "Asia/Seoul")
+    @patch("main.ScheduleConfig.EXECUTION_HOUR", 0)
+    @patch("main.ScheduleConfig.EXECUTION_MINUTE", 5)
+    @patch("main.ScheduleConfig.EXECUTION_MARGIN_MINUTES", 10)
+    @patch("main.datetime")
+    def test_is_within_execution_window_crossing_midnight(self, mock_datetime):
+        """Should handle execution windows that cross midnight."""
+        mock_datetime.combine.side_effect = datetime.combine
+
+        # In-window on previous day side (23:58)
+        mock_datetime.now.return_value = datetime(2026, 1, 1, 23, 58, 0)
+        self.assertTrue(is_within_execution_window())
+
+        # In-window on next day side (00:12)
+        mock_datetime.now.return_value = datetime(2026, 1, 1, 0, 12, 0)
+        self.assertTrue(is_within_execution_window())
+
+        # Out of window (00:16)
+        mock_datetime.now.return_value = datetime(2026, 1, 1, 0, 16, 0)
+        self.assertFalse(is_within_execution_window())
 
     @patch("main.fetch_account_balance")
     def test_calculate_investment_per_stock_with_min_investment(self, mock_fetch_balance):
