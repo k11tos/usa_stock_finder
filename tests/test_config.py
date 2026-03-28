@@ -1,7 +1,12 @@
 """Unit tests for config environment handling and defaults."""
 
+import importlib
 import os
+import shutil
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import config
@@ -87,6 +92,46 @@ class TestEnvironmentConfig(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("TELEGRAM_BOT_TOKEN (또는 telegram_api_key)", message)
         self.assertIn("TELEGRAM_CHAT_ID (또는 telegram_manager_id)", message)
+
+
+class TestImportTimeConfigParsing(unittest.TestCase):
+    """Small representative checks for import-time config parsing/defaults."""
+
+    @staticmethod
+    def _load_reloaded_temp_module() -> object:
+        source_path = Path(config.__file__)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module_name = "temp_config_for_import_tests"
+            copied_module = Path(temp_dir) / f"{module_name}.py"
+            shutil.copy2(source_path, copied_module)
+
+            with patch.dict(os.environ, {"PYTHONPATH": temp_dir}, clear=False):
+                sys.path.insert(0, temp_dir)
+                try:
+                    temp_module = importlib.import_module(module_name)
+                    return importlib.reload(temp_module)
+                finally:
+                    sys.path.pop(0)
+                    sys.modules.pop(module_name, None)
+
+    def test_time_check_enabled_parses_false(self):
+        with patch.dict(os.environ, {"TIME_CHECK_ENABLED": "False"}, clear=True):
+            temp_config = self._load_reloaded_temp_module()
+
+        self.assertFalse(temp_config.ScheduleConfig.TIME_CHECK_ENABLED)
+
+    def test_trailing_enabled_parses_false(self):
+        with patch.dict(os.environ, {"TRAILING_ENABLED": "False"}, clear=True):
+            temp_config = self._load_reloaded_temp_module()
+
+        self.assertFalse(temp_config.StrategyConfig.TRAILING_ENABLED)
+
+    def test_representative_numeric_defaults(self):
+        with patch.dict(os.environ, {}, clear=True):
+            temp_config = self._load_reloaded_temp_module()
+
+        self.assertEqual(temp_config.InvestmentConfig.RESERVE_RATIO, 0.1)
+        self.assertEqual(temp_config.ScheduleConfig.EXECUTION_MARGIN_MINUTES, 10)
 
 
 if __name__ == "__main__":
