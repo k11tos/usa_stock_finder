@@ -16,6 +16,7 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
+from config import StrategyConfig
 from stop_loss_cooldown import (
     calculate_cooldown_days,
     is_in_cooldown,
@@ -107,23 +108,18 @@ class TestStopLossCooldown(unittest.TestCase):
         self.assertEqual(log[symbol]["last_stop_loss_date"], today.isoformat())
         self.assertEqual(log[symbol]["loss_pct"], loss_pct)
 
-    def test_record_stop_loss_event_positive_loss_applies_base_cooldown(self):
-        """Test that positive loss_pct (profit sell) applies base cooldown"""
+    def test_record_stop_loss_event_none_or_non_negative_stores_zero(self):
+        """Test that None/non-negative loss is normalized to 0.0 in persisted log"""
         log_file = os.path.join(self.temp_data_dir, "stop_loss_log.json")
         symbol = "TEST"
-        loss_pct = 0.10  # 양수 (수익 매도)
         today = date(2025, 1, 20)
 
         with patch("stop_loss_cooldown.STOP_LOSS_LOG_PATH", log_file):
-            record_stop_loss_event(symbol, loss_pct, today)
-
-        # 로그 파일에 기록되어야 하고, loss_pct는 0.0으로 기록됨 (기본 쿨다운)
-        self.assertTrue(os.path.exists(log_file))
-        with open(log_file, "r", encoding="utf-8") as f:
-            log = json.load(f)
-        self.assertIn(symbol, log)
-        self.assertEqual(log[symbol]["last_stop_loss_date"], today.isoformat())
-        self.assertEqual(log[symbol]["loss_pct"], 0.0)  # 수익 매도는 0.0으로 기록
+            for idx, loss_pct in enumerate((None, 0.0, 0.10)):
+                record_stop_loss_event(symbol, loss_pct, today + timedelta(days=idx))
+                with open(log_file, "r", encoding="utf-8") as f:
+                    log = json.load(f)
+                self.assertEqual(log[symbol]["loss_pct"], 0.0)
 
     def test_record_stop_loss_event_overwrite(self):
         """Test that recording multiple times overwrites previous entry"""
@@ -143,26 +139,22 @@ class TestStopLossCooldown(unittest.TestCase):
         self.assertEqual(log[symbol]["last_stop_loss_date"], today2.isoformat())
         self.assertEqual(log[symbol]["loss_pct"], -0.25)
 
-    def test_calculate_cooldown_days(self):
-        """Test cooldown days calculation"""
-        # -8% 손절 → 5일 (base만)
-        self.assertEqual(calculate_cooldown_days(-0.08), 5)
+    def test_calculate_cooldown_days_positive_or_zero_uses_base_only(self):
+        """Test that non-negative loss values always use base cooldown only"""
+        expected_base = StrategyConfig.STOP_LOSS_COOLDOWN_BASE_DAYS
+        self.assertEqual(calculate_cooldown_days(0.0), expected_base)
+        self.assertEqual(calculate_cooldown_days(0.10), expected_base)
 
-        # -15% 손절 → 10일 (base 5 + 1 block * 5)
-        self.assertEqual(calculate_cooldown_days(-0.15), 10)
-
-        # -25% 손절 → 15일 (base 5 + 2 blocks * 5)
-        self.assertEqual(calculate_cooldown_days(-0.25), 15)
-
-        # -28% 손절 → 15일 (base 5 + 2 blocks * 5)
-        self.assertEqual(calculate_cooldown_days(-0.28), 15)
-
-        # -9% 손절 → 5일 (base만, 10% 미만이므로)
-        self.assertEqual(calculate_cooldown_days(-0.09), 5)
-
-        # 수익 매도 (0 이상) → 기본 쿨다운만 (5일)
-        self.assertEqual(calculate_cooldown_days(0.0), 5)
-        self.assertEqual(calculate_cooldown_days(0.10), 5)  # 10% 수익 매도도 기본 쿨다운
+    def test_calculate_cooldown_days_negative_loss_tiers_and_cap(self):
+        """Test cooldown tiers for -15%, -25% and max-cap behavior"""
+        with (
+            patch.object(StrategyConfig, "STOP_LOSS_COOLDOWN_BASE_DAYS", 5),
+            patch.object(StrategyConfig, "STOP_LOSS_COOLDOWN_EXTRA_DAYS_PER_10PCT", 5),
+            patch.object(StrategyConfig, "STOP_LOSS_COOLDOWN_MAX_DAYS", 60),
+        ):
+            self.assertEqual(calculate_cooldown_days(-0.15), 10)
+            self.assertEqual(calculate_cooldown_days(-0.25), 15)
+            self.assertEqual(calculate_cooldown_days(-2.0), 60)  # capped from 105 to 60
 
     def test_is_in_cooldown_no_entry(self):
         """Test is_in_cooldown when symbol is not in log"""
@@ -205,6 +197,16 @@ class TestStopLossCooldown(unittest.TestCase):
             # 16일 후 체크 (쿨다운 종료)
             result = is_in_cooldown(symbol, today + timedelta(days=16))
         self.assertFalse(result)
+
+    def test_is_in_cooldown_malformed_entry_is_safe_false(self):
+        """Test malformed log entry is handled safely and treated as not in cooldown"""
+        log_file = os.path.join(self.temp_data_dir, "stop_loss_log.json")
+        malformed_log = {"BROKEN": {"loss_pct": -0.25}}  # missing required date field
+        with open(log_file, "w", encoding="utf-8") as f:
+            json.dump(malformed_log, f)
+
+        with patch("stop_loss_cooldown.STOP_LOSS_LOG_PATH", log_file):
+            self.assertFalse(is_in_cooldown("BROKEN", date(2025, 1, 20)))
 
     def test_is_in_cooldown_different_loss_percentages(self):
         """Test is_in_cooldown with different loss percentages"""
