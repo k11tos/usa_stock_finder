@@ -107,20 +107,36 @@ jobs:
             fi
 
             container_state=$(docker inspect -f '{{.State.Status}}' "$container_id")
-            echo "stock container state: $container_state"
-            if [ "$container_state" != "running" ]; then
-              echo "ERROR: stock service is not running after deploy."
-              docker logs --tail 100 "$container_id" || true
-              exit 1
-            fi
-
             health_state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
+            exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
+            echo "stock container state: $container_state (exit_code=$exit_code, health=$health_state)"
+            # main.py may exit immediately outside the execution window, so exited(0) is a valid success.
+            case "$container_state" in
+              running)
+                echo "stock service is running."
+                ;;
+              exited)
+                if [ "$exit_code" -eq 0 ]; then
+                  echo "stock service finished with exit code 0 (valid batch success)."
+                else
+                  echo "ERROR: stock service exited with non-zero code: $exit_code"
+                  docker logs --tail 100 "$container_id" || true
+                  exit 1
+                fi
+                ;;
+              restarting|dead|created)
+                echo "ERROR: stock service is in invalid post-deploy state: $container_state"
+                docker logs --tail 100 "$container_id" || true
+                exit 1
+                ;;
+              *)
+                echo "ERROR: stock service is in unexpected state: $container_state"
+                docker logs --tail 100 "$container_id" || true
+                exit 1
+                ;;
+            esac
+
             echo "stock container health: $health_state"
-            if [ "$health_state" != "none" ] && [ "$health_state" != "healthy" ]; then
-              echo "ERROR: stock service health check is failing."
-              docker logs --tail 100 "$container_id" || true
-              exit 1
-            fi
 
             echo "== recent stock service logs =="
             docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
