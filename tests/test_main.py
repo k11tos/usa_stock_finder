@@ -671,7 +671,6 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_calculate_share_quantities = stack.enter_context(patch("main.calculate_share_quantities"))
             mock_generate_message = stack.enter_context(patch("main.generate_telegram_message"))
             mock_update_final_items = stack.enter_context(patch("main.update_final_items"))
-            mock_asyncio_run = stack.enter_context(patch("main.asyncio.run"))
             mock_send_telegram = stack.enter_context(patch("main.send_telegram_message"))
             mock_save_json = stack.enter_context(patch("main.save_json"))
 
@@ -716,7 +715,6 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_calculate_investment.assert_called_once()
             mock_generate_message.assert_called_once()
             mock_send_telegram.assert_called_once()
-            mock_asyncio_run.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
 
     @patch("main.save_json")
