@@ -484,6 +484,112 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(tsla_info["profit_loss"], 1000.0)
         self.assertEqual(tsla_info["profit_loss_rate"], 25.0)
 
+    def test_calculate_sell_quantities_uses_finder_price_when_available(self):
+        """Test sell sizing uses finder.current_price when it is positive"""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"TSLA": 250.0}
+
+        current_holdings = [
+            {
+                "symbol": "TSLA",
+                "quantity": 10.0,
+                "avg_price": 200.0,
+                "current_price": 240.0,
+                "profit_loss": 400.0,
+                "profit_loss_rate": 20.0,
+            }
+        ]
+
+        result = calculate_sell_quantities(["TSLA"], mock_finder, current_holdings)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["TSLA"]["current_price"], 250.0)
+        self.assertEqual(result["TSLA"]["sell_amount"], 2500.0)
+
+    def test_calculate_sell_quantities_falls_back_to_holdings_price(self):
+        """Test sell sizing uses holding.current_price when finder price is missing or zero"""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"TSLA": 0.0}
+
+        current_holdings = [
+            {
+                "symbol": "TSLA",
+                "quantity": 10.0,
+                "avg_price": 200.0,
+                "current_price": 245.0,
+                "profit_loss": 450.0,
+                "profit_loss_rate": 22.5,
+            },
+            {
+                "symbol": "AAPL",
+                "quantity": 5.0,
+                "avg_price": 180.0,
+                "current_price": 190.0,
+                "profit_loss": 50.0,
+                "profit_loss_rate": 5.56,
+            },
+        ]
+
+        result = calculate_sell_quantities(["TSLA", "AAPL"], mock_finder, current_holdings)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["TSLA"]["current_price"], 245.0)  # finder price is zero
+        self.assertEqual(result["AAPL"]["current_price"], 190.0)  # finder price is missing
+
+    def test_calculate_sell_quantities_skips_symbol_missing_from_holdings(self):
+        """Test symbols not in holdings are skipped"""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"TSLA": 250.0}
+
+        current_holdings = [
+            {
+                "symbol": "AAPL",
+                "quantity": 5.0,
+                "avg_price": 180.0,
+                "current_price": 190.0,
+            }
+        ]
+
+        result = calculate_sell_quantities(["TSLA"], mock_finder, current_holdings)
+
+        self.assertIsNone(result)
+
+    def test_calculate_sell_quantities_skips_zero_quantity_holding(self):
+        """Test holdings with zero quantity are skipped"""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"TSLA": 250.0}
+
+        current_holdings = [
+            {
+                "symbol": "TSLA",
+                "quantity": 0.0,
+                "avg_price": 200.0,
+                "current_price": 240.0,
+            }
+        ]
+
+        result = calculate_sell_quantities(["TSLA"], mock_finder, current_holdings)
+
+        self.assertIsNone(result)
+
+    def test_calculate_sell_quantities_skips_when_both_prices_invalid(self):
+        """Test symbol is skipped when both finder and holdings prices are invalid"""
+        mock_finder = MagicMock()
+        mock_finder.current_price = {"TSLA": 0.0}
+
+        current_holdings = [
+            {
+                "symbol": "TSLA",
+                "quantity": 10.0,
+                "avg_price": 200.0,
+                "current_price": 0.0,
+            }
+        ]
+
+        result = calculate_sell_quantities(["TSLA"], mock_finder, current_holdings)
+
+        self.assertIsNone(result)
+
     @patch("main.fetch_holdings_detail")
     def test_generate_telegram_message_with_share_quantities(self, _mock_fetch_holdings):
         """Test generate_telegram_message with share quantities"""
