@@ -494,31 +494,6 @@ def calculate_investment_per_stock(
         investment_per_stock = total_investment / num_stocks
         logger.info("Using equal distribution strategy")
 
-    # In equal distribution mode, reduce candidate count when minimum investment
-    # cannot be met for all symbols so that at least some buys can proceed.
-    if (
-        InvestmentConfig.DISTRIBUTION_STRATEGY != "proportional"
-        and min_investment > 0
-        and investment_per_stock < min_investment
-    ):
-        max_affordable_count = int(total_investment // min_investment)
-        if max_affordable_count <= 0:
-            logger.warning(
-                "Available cash (%s) is insufficient for minimum investment (%s) for any stock",
-                total_investment,
-                min_investment,
-            )
-            return None
-
-        buy_items = buy_items[:max_affordable_count]
-        num_stocks = len(buy_items)
-        investment_per_stock = total_investment / num_stocks
-        logger.info(
-            "Adjusted equal distribution candidate count to %d to satisfy minimum investment %.2f",
-            num_stocks,
-            min_investment,
-        )
-
     # Apply min/max constraints and filter affordable stocks
     affordable_stocks = []
     for symbol in buy_items:
