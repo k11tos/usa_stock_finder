@@ -89,6 +89,7 @@ jobs:
           key: ${{ secrets.PI_SSH_KEY }}
           port: ${{ secrets.PI_PORT }}
           script: |
+            set -eu
             cd ${{ secrets.PI_PROJECT_PATH }}
             docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }} <<GITHUB_TOKEN_EOF
             ${{ secrets.GITHUB_TOKEN }}
@@ -96,6 +97,33 @@ jobs:
             docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
             docker compose up -d stock
             docker image prune -f
+            echo "== docker compose ps =="
+            docker compose ps
+
+            container_id=$(docker compose ps -q stock)
+            if [ -z "$container_id" ]; then
+              echo "ERROR: stock service container was not created."
+              exit 1
+            fi
+
+            container_state=$(docker inspect -f '{{.State.Status}}' "$container_id")
+            echo "stock container state: $container_state"
+            if [ "$container_state" != "running" ]; then
+              echo "ERROR: stock service is not running after deploy."
+              docker logs --tail 100 "$container_id" || true
+              exit 1
+            fi
+
+            health_state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
+            echo "stock container health: $health_state"
+            if [ "$health_state" != "none" ] && [ "$health_state" != "healthy" ]; then
+              echo "ERROR: stock service health check is failing."
+              docker logs --tail 100 "$container_id" || true
+              exit 1
+            fi
+
+            echo "== recent stock service logs =="
+            docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
             docker ps
             docker logout ${{ env.REGISTRY }}
 
