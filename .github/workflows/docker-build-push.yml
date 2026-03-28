@@ -89,6 +89,7 @@ jobs:
           key: ${{ secrets.PI_SSH_KEY }}
           port: ${{ secrets.PI_PORT }}
           script: |
+            set -eu
             cd ${{ secrets.PI_PROJECT_PATH }}
             docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }} <<GITHUB_TOKEN_EOF
             ${{ secrets.GITHUB_TOKEN }}
@@ -96,6 +97,49 @@ jobs:
             docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
             docker compose up -d stock
             docker image prune -f
+            echo "== docker compose ps =="
+            docker compose ps
+
+            container_id=$(docker compose ps -q stock)
+            if [ -z "$container_id" ]; then
+              echo "ERROR: stock service container was not created."
+              exit 1
+            fi
+
+            container_state=$(docker inspect -f '{{.State.Status}}' "$container_id")
+            health_state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
+            exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
+            echo "stock container state: $container_state (exit_code=$exit_code, health=$health_state)"
+            # main.py may exit immediately outside the execution window, so exited(0) is a valid success.
+            case "$container_state" in
+              running)
+                echo "stock service is running."
+                ;;
+              exited)
+                if [ "$exit_code" -eq 0 ]; then
+                  echo "stock service finished with exit code 0 (valid batch success)."
+                else
+                  echo "ERROR: stock service exited with non-zero code: $exit_code"
+                  docker logs --tail 100 "$container_id" || true
+                  exit 1
+                fi
+                ;;
+              restarting|dead|created)
+                echo "ERROR: stock service is in invalid post-deploy state: $container_state"
+                docker logs --tail 100 "$container_id" || true
+                exit 1
+                ;;
+              *)
+                echo "ERROR: stock service is in unexpected state: $container_state"
+                docker logs --tail 100 "$container_id" || true
+                exit 1
+                ;;
+            esac
+
+            echo "stock container health: $health_state"
+
+            echo "== recent stock service logs =="
+            docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
             docker ps
             docker logout ${{ env.REGISTRY }}
 
