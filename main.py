@@ -1094,6 +1094,19 @@ def _prepare_buy_sizing_inputs(
     return investment_map, share_quantities
 
 
+def _prepare_buy_side_orchestration(
+    buy_items: list[str], finder: UsaStockFinder, additional_cash_from_sell: float
+) -> tuple[list[str], dict[str, float] | None, dict[str, dict[str, Any]] | None]:
+    """Apply buy-side filtering/sizing steps while keeping current behavior unchanged."""
+    filtered_buy_items = _filter_buy_candidates_by_cooldown(buy_items)
+    investment_map, share_quantities = _prepare_buy_sizing_inputs(
+        filtered_buy_items,
+        finder,
+        additional_cash_from_sell,
+    )
+    return filtered_buy_items, investment_map, share_quantities
+
+
 def main() -> None:
     """
     Main function that orchestrates the stock analysis and notification process.
@@ -1133,11 +1146,12 @@ def main() -> None:
 
     finder, buy_items, not_sell_items = finder_and_candidates
 
-    buy_items = _filter_buy_candidates_by_cooldown(buy_items)
     sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
         finder, buy_items, not_sell_items
     )
-    _investment_map, share_quantities = _prepare_buy_sizing_inputs(buy_items, finder, additional_cash_from_sell)
+    buy_items, _investment_map, share_quantities = _prepare_buy_side_orchestration(
+        buy_items, finder, additional_cash_from_sell
+    )
 
     telegram_message = generate_telegram_message(
         us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, sell_decisions, finder
