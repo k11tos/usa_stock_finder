@@ -899,6 +899,58 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             self.assertTrue(mock_evaluate_sell.called)
             self.assertEqual(mock_evaluate_sell.call_args.kwargs["selected_buy"], ["AAPL"])
 
+    def test_main_logs_end_of_run_summary(self):
+        """Main should log a concise run summary at the end of orchestration."""
+        with ExitStack() as stack:
+            stack.enter_context(patch("main.setup_logging"))
+            stack.enter_context(patch("main.load_dotenv"))
+            stack.enter_context(patch("main.is_within_execution_window", return_value=True))
+            stack.enter_context(patch("main.EnvironmentConfig.validate"))
+            stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
+            stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=["AAPL", "TSLA"]))
+            stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "MSFT"]))
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 60.0, "MSFT": 60.0}}))
+            stack.enter_context(patch("main.select_stocks", return_value=(["MSFT"], ["AAPL"])))
+            stack.enter_context(patch("main.is_in_cooldown", return_value=False))
+            stack.enter_context(patch("main.fetch_holdings_detail", return_value=[{"symbol": "TSLA", "quantity": 2.0}]))
+            stack.enter_context(
+                patch(
+                    "main.evaluate_sell_decisions",
+                    return_value={"TSLA": SellDecision("TSLA", SellReason.TREND, 2.0)},
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "main.calculate_sell_quantities",
+                    return_value={"TSLA": {"shares_to_sell": 2, "sell_amount": 500.0}},
+                )
+            )
+            stack.enter_context(patch("main.calculate_investment_per_stock", return_value={"MSFT": 300.0}))
+            stack.enter_context(patch("main.calculate_share_quantities", return_value={"MSFT": {"shares_to_buy": 1}}))
+            stack.enter_context(patch("main.generate_telegram_message", return_value=None))
+            stack.enter_context(patch("main.update_final_items", return_value=["AAPL", "MSFT"]))
+            stack.enter_context(patch("main.save_json"))
+            mock_logger = stack.enter_context(patch("main.logger"))
+
+            mock_finder = MagicMock()
+            mock_finder.is_data_valid.return_value = True
+            mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder_cls.return_value = mock_finder
+
+            main()
+
+            summary_calls = [
+                call
+                for call in mock_logger.info.call_args_list
+                if call.args and isinstance(call.args[0], str) and call.args[0].startswith("RUN_SUMMARY")
+            ]
+            self.assertEqual(len(summary_calls), 1)
+            summary_message = summary_calls[0].args[0]
+            self.assertIn("prev_holdings=%d", summary_message)
+            self.assertIn("buy_items=%d", summary_message)
+            self.assertIn("final_saved_items=%d", summary_message)
+
     @patch("main.save_json")
     @patch("main.fetch_us_stock_holdings")
     @patch("main.EnvironmentConfig.validate")

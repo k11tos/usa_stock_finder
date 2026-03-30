@@ -1102,6 +1102,42 @@ def _prepare_buy_side_orchestration(
     return buy_items, investment_map, share_quantities
 
 
+def _log_execution_summary(
+    prev_items: list[str],
+    buy_items: list[str],
+    not_sell_items: list[str],
+    sell_decisions: dict[str, SellDecision],
+    sell_quantities: dict[str, dict[str, Any]] | None,
+    additional_cash_from_sell: float,
+    final_items: list[str],
+) -> None:
+    """Log a concise, grep-friendly end-of-run summary."""
+    sell_counts_by_reason = {
+        reason.value: sum(
+            1
+            for decision in sell_decisions.values()
+            if decision.reason == reason and decision.quantity > 0
+        )
+        for reason in SellReason
+        if reason != SellReason.NONE
+    }
+    sell_counts_text = ",".join(f"{reason}={count}" for reason, count in sell_counts_by_reason.items() if count > 0)
+    if not sell_counts_text:
+        sell_counts_text = "none=0"
+
+    logger.info(
+        "RUN_SUMMARY prev_holdings=%d buy_items=%d not_sell_items=%d sell_decisions=%s "
+        "sell_quantities=%d expected_sell_cash=%.2f final_saved_items=%d",
+        len(prev_items),
+        len(buy_items),
+        len(not_sell_items),
+        sell_counts_text,
+        len(sell_quantities or {}),
+        additional_cash_from_sell,
+        len(final_items),
+    )
+
+
 def main() -> None:
     """
     Orchestrate the end-to-end daily analysis and notification flow.
@@ -1171,6 +1207,15 @@ def main() -> None:
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items)
     save_json(final_items, "data/data.json")
+    _log_execution_summary(
+        prev_items=us_stock_holdings,
+        buy_items=buy_items,
+        not_sell_items=not_sell_items,
+        sell_decisions=sell_decisions,
+        sell_quantities=sell_quantities,
+        additional_cash_from_sell=additional_cash_from_sell,
+        final_items=final_items,
+    )
 
 
 if __name__ == "__main__":
