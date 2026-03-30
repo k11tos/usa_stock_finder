@@ -1,10 +1,10 @@
 """
 main.py
 
-This module implements the main functionality for the USA Stock Finder application.
-It provides a comprehensive system for analyzing US stocks, generating trading signals,
-and sending notifications via Telegram. The system is based on Mark Minervini's
-trading principles and includes technical analysis features.
+This module orchestrates the USA Stock Finder runtime flow.
+It coordinates helper functions for stock analysis, buy/sell decision processing,
+position sizing, and Telegram notifications. The trading logic is based on
+Mark Minervini's principles and related technical analysis rules.
 
 Key Features:
     - Stock data fetching and analysis
@@ -1104,16 +1104,16 @@ def _prepare_buy_side_orchestration(
 
 def main() -> None:
     """
-    Main function that orchestrates the stock analysis and notification process.
+    Orchestrate the end-to-end daily analysis and notification flow.
 
     This function:
     1. Sets up logging and loads environment variables
-    2. Validates required environment variables
-    3. Fetches current stock holdings
-    4. Analyzes candidate stocks
-    5. Generates trading signals
-    6. Sends notifications via Telegram
-    7. Updates the portfolio data
+    2. Validates runtime/config prerequisites
+    3. Loads holdings and candidate symbols, then computes buy/hold candidates
+    4. Evaluates sell decisions and estimates sell proceeds
+    5. Calculates buy sizing (investment map/share quantities)
+    6. Sends Telegram notifications when there are portfolio changes
+    7. Saves the final symbol state to `data/data.json`
 
     Note:
         - Requires environment variables for Telegram API and account information
