@@ -849,6 +849,44 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
 
+    def test_main_filters_cooldown_before_sell_evaluation(self):
+        """Cooldown-filtered symbols should not be passed as selected_buy into sell evaluation."""
+        with ExitStack() as stack:
+            stack.enter_context(patch("main.setup_logging"))
+            stack.enter_context(patch("main.load_dotenv"))
+            mock_execution_window = stack.enter_context(patch("main.is_within_execution_window"))
+            stack.enter_context(patch("main.EnvironmentConfig.validate"))
+            stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
+            stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=["AAPL"]))
+            stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "MSFT"]))
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 55.0, "MSFT": 55.0}}))
+            stack.enter_context(patch("main.select_stocks", return_value=(["AAPL", "MSFT"], [])))
+            mock_in_cooldown = stack.enter_context(patch("main.is_in_cooldown"))
+            stack.enter_context(patch("main.fetch_holdings_detail", return_value=[{"symbol": "AAPL", "quantity": 1.0}]))
+            mock_evaluate_sell = stack.enter_context(patch("main.evaluate_sell_decisions", return_value={}))
+            stack.enter_context(patch("main.calculate_sell_quantities", return_value=None))
+            stack.enter_context(patch("main.calculate_investment_per_stock", return_value={"AAPL": 500.0}))
+            stack.enter_context(patch("main.calculate_share_quantities", return_value={"AAPL": {"shares_to_buy": 1}}))
+            stack.enter_context(patch("main.generate_telegram_message", return_value=None))
+            stack.enter_context(patch("main.update_final_items", return_value=["AAPL"]))
+            stack.enter_context(patch("main.send_telegram_message"))
+            stack.enter_context(patch("main.save_json"))
+
+            mock_execution_window.return_value = True
+            mock_in_cooldown.side_effect = lambda symbol, _today: symbol == "MSFT"
+
+            mock_finder = MagicMock()
+            mock_finder.is_data_valid.return_value = True
+            mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
+            mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder_cls.return_value = mock_finder
+
+            main()
+
+            self.assertTrue(mock_evaluate_sell.called)
+            self.assertEqual(mock_evaluate_sell.call_args.kwargs["selected_buy"], ["AAPL"])
+
     @patch("main.save_json")
     @patch("main.fetch_us_stock_holdings")
     @patch("main.EnvironmentConfig.validate")

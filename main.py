@@ -1097,14 +1097,9 @@ def _prepare_buy_sizing_inputs(
 def _prepare_buy_side_orchestration(
     buy_items: list[str], finder: UsaStockFinder, additional_cash_from_sell: float
 ) -> tuple[list[str], dict[str, float] | None, dict[str, dict[str, Any]] | None]:
-    """Apply buy-side filtering/sizing steps while keeping current behavior unchanged."""
-    filtered_buy_items = _filter_buy_candidates_by_cooldown(buy_items)
-    investment_map, share_quantities = _prepare_buy_sizing_inputs(
-        filtered_buy_items,
-        finder,
-        additional_cash_from_sell,
-    )
-    return filtered_buy_items, investment_map, share_quantities
+    """Apply buy-side sizing steps for already-filtered buy candidates."""
+    investment_map, share_quantities = _prepare_buy_sizing_inputs(buy_items, finder, additional_cash_from_sell)
+    return buy_items, investment_map, share_quantities
 
 
 def main() -> None:
@@ -1145,6 +1140,7 @@ def main() -> None:
         return
 
     finder, buy_items, not_sell_items = finder_and_candidates
+    buy_items = _filter_buy_candidates_by_cooldown(buy_items)
 
     sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
         finder, buy_items, not_sell_items
