@@ -836,36 +836,15 @@ def update_final_items(prev_items: list[str], buy_items: list[str], not_sell_ite
     return [item for item in prev_items + new_items if item in keep_items]
 
 
-def main() -> None:
-    """
-    Main function that orchestrates the stock analysis and notification process.
-
-    This function:
-    1. Sets up logging and loads environment variables
-    2. Validates required environment variables
-    3. Fetches current stock holdings
-    4. Analyzes candidate stocks
-    5. Generates trading signals
-    6. Sends notifications via Telegram
-    7. Updates the portfolio data
-
-    Note:
-        - Requires environment variables for Telegram API and account information
-        - Expects a portfolio.csv file in the portfolio directory
-        - Saves the final portfolio to data/data.json
-
-    Raises:
-        ConfigError: If required environment variables are missing
-    """
+def _load_and_validate_runtime_prerequisites() -> bool:
+    """Load runtime prerequisites and validate startup conditions."""
     setup_logging()
     load_dotenv()
 
-    # Check if current time is within execution window
     if not is_within_execution_window():
         logger.info("현재 시간이 실행 시간 범위 밖이므로 프로그램을 종료합니다.")
-        return
+        return False
 
-    # Validate environment variables at startup
     try:
         EnvironmentConfig.validate()
         logger.info("Environment variables validated successfully")
@@ -873,26 +852,25 @@ def main() -> None:
         logger.error("Environment variable validation failed: %s", str(e))
         raise
 
-    try:
-        us_stock_holdings = fetch_us_stock_holdings()
-        if not us_stock_holdings:
-            logger.warning("No stock holdings found in account")
-            us_stock_holdings = []
-    except APIError as e:
-        logger.error("Failed to fetch holdings due to API error: %s", str(e))
-        return
+    return True
 
+
+def _prepare_finder_and_candidates() -> tuple[UsaStockFinder, list[str], list[str]] | None:
+    """Prepare stock finder and initial buy/hold candidates."""
     candidate_stocks = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
     finder = UsaStockFinder(candidate_stocks)
 
     if not finder.is_data_valid():
         logger.error("Invalid data in UsaStockFinder")
-        return
+        return None
 
     correlation = calculate_correlations(finder)
     buy_items, not_sell_items = select_stocks(finder, correlation)
+    return finder, buy_items, not_sell_items
 
-    # 🔵 Stop Loss 쿨다운 필터링: 쿨다운 기간 내 종목은 매수 후보에서 제외
+
+def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
+    """Filter buy candidates that are in stop-loss cooldown period."""
     today = date.today()
     original_buy_count = len(buy_items)
     filtered_buy_items = []
@@ -901,22 +879,26 @@ def main() -> None:
             logger.info("Symbol %s is in stop-loss cooldown. Skipping buy signal.", symbol)
         else:
             filtered_buy_items.append(symbol)
-    buy_items = filtered_buy_items
 
-    if len(buy_items) < original_buy_count:
+    if len(filtered_buy_items) < original_buy_count:
         logger.info(
             "Stop Loss 쿨다운 필터링 완료 - 원래: %d개, 필터링 후: %d개",
             original_buy_count,
-            len(buy_items),
+            len(filtered_buy_items),
         )
 
-    # Evaluate sell decisions using 3-tier system (매도 결정을 먼저 평가하여 매도 금액을 계산)
+    return filtered_buy_items
+
+
+def _prepare_sell_decisions_and_quantities(
+    finder: UsaStockFinder, buy_items: list[str], not_sell_items: list[str]
+) -> tuple[dict[str, SellDecision], dict[str, dict[str, Any]] | None, float]:
+    """Evaluate sell decisions and calculate sell quantities/cash."""
     sell_decisions = {}
     current_holdings_detail = fetch_holdings_detail()
     if current_holdings_detail:
         logger.info("매도 평가 시작 - 보유 종목 수: %d", len(current_holdings_detail))
 
-        # 보유 종목 정보 검증 로그
         for holding in current_holdings_detail:
             symbol = holding.get("symbol", "")
             avg_price = holding.get("avg_price", 0.0)
@@ -936,10 +918,9 @@ def main() -> None:
                 profit_loss_rate,
             )
 
-            # 가격 불일치 경고
             if finder_price > 0 and current_price_holding > 0:
                 price_diff_pct = abs((finder_price - current_price_holding) / current_price_holding) * 100
-                if price_diff_pct > 1.0:  # 1% 이상 차이
+                if price_diff_pct > 1.0:
                     logger.warning(
                         "%s: 가격 불일치 - holding.current_price=%.4f, finder.current_price=%.4f, 차이=%.2f%%",
                         symbol,
@@ -948,12 +929,10 @@ def main() -> None:
                         price_diff_pct,
                     )
 
-        # Get AVSL signals for all symbols in finder
         avsl_signals = finder.check_avsl_sell_signal()
         avsl_count = sum(1 for v in avsl_signals.values() if v)
         logger.info("AVSL 시그널 확인 완료 - AVSL=True인 종목: %d개", avsl_count)
 
-        # Evaluate sell decisions using 3-tier system
         sell_decisions = evaluate_sell_decisions(
             finder=finder,
             holdings=current_holdings_detail,
@@ -962,7 +941,6 @@ def main() -> None:
             avsl_signals=avsl_signals,
         )
 
-        # Log sell decisions by reason
         stop_loss_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.STOP_LOSS)
         trailing_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TRAILING)
         avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
@@ -978,10 +956,8 @@ def main() -> None:
             hold_count,
         )
 
-        # Log individual sell decisions with detailed information
         for symbol, decision in sell_decisions.items():
             if decision.reason != SellReason.NONE:
-                # 해당 종목의 보유 정보 찾기
                 holding_info = next((h for h in current_holdings_detail if h.get("symbol") == symbol), None)
                 if holding_info:
                     avg_price = holding_info.get("avg_price", 0.0)
@@ -1005,7 +981,6 @@ def main() -> None:
                         decision.quantity,
                     )
 
-    # Get list of symbols to sell (for calculate_sell_quantities)
     all_sell_items = [
         symbol
         for symbol, decision in sell_decisions.items()
@@ -1024,8 +999,6 @@ def main() -> None:
         sell_quantities = calculate_sell_quantities(all_sell_items, finder, current_holdings_detail)
         if sell_quantities:
             logger.info("매도 수량 계산 완료 - %d개 종목", len(sell_quantities))
-
-            # 매도 수량 검증 로그
             for symbol, sell_info in sell_quantities.items():
                 decision = sell_decisions.get(symbol)
                 if decision:
@@ -1043,7 +1016,6 @@ def main() -> None:
         logger.info("매도 대상 종목 없음")
         sell_quantities = None
 
-    # 매도 금액 계산 (매수 가능 금액에 반영하기 위해)
     additional_cash_from_sell = 0.0
     if sell_quantities:
         additional_cash_from_sell = sum(info.get("sell_amount", 0.0) for info in sell_quantities.values())
@@ -1054,7 +1026,13 @@ def main() -> None:
                 len(sell_quantities),
             )
 
-    # Calculate investment amount per stock (매도 금액 반영)
+    return sell_decisions, sell_quantities, additional_cash_from_sell
+
+
+def _prepare_buy_sizing_inputs(
+    buy_items: list[str], finder: UsaStockFinder, additional_cash_from_sell: float
+) -> tuple[dict[str, float] | None, dict[str, dict[str, Any]] | None]:
+    """Prepare investment map and share quantities for buy candidates."""
     investment_map = None
     share_quantities = None
 
@@ -1066,11 +1044,9 @@ def main() -> None:
                 len(investment_map),
                 sum(investment_map.values()),
             )
-            # Calculate share quantities for buy signals
             share_quantities = calculate_share_quantities(investment_map, finder)
             if share_quantities:
                 logger.info("Share quantities calculated for %d stocks", len(share_quantities))
-                # 매수 수량이 0인 종목이 필터링되었을 수 있으므로 로그
                 filtered_count = len(investment_map) - len(share_quantities)
                 if filtered_count > 0:
                     logger.info(
@@ -1081,6 +1057,54 @@ def main() -> None:
                     )
         else:
             logger.warning("Failed to calculate investment amounts")
+
+    return investment_map, share_quantities
+
+
+def main() -> None:
+    """
+    Main function that orchestrates the stock analysis and notification process.
+
+    This function:
+    1. Sets up logging and loads environment variables
+    2. Validates required environment variables
+    3. Fetches current stock holdings
+    4. Analyzes candidate stocks
+    5. Generates trading signals
+    6. Sends notifications via Telegram
+    7. Updates the portfolio data
+
+    Note:
+        - Requires environment variables for Telegram API and account information
+        - Expects a portfolio.csv file in the portfolio directory
+        - Saves the final portfolio to data/data.json
+
+    Raises:
+        ConfigError: If required environment variables are missing
+    """
+    if not _load_and_validate_runtime_prerequisites():
+        return
+
+    try:
+        us_stock_holdings = fetch_us_stock_holdings()
+        if not us_stock_holdings:
+            logger.warning("No stock holdings found in account")
+            us_stock_holdings = []
+    except APIError as e:
+        logger.error("Failed to fetch holdings due to API error: %s", str(e))
+        return
+
+    finder_and_candidates = _prepare_finder_and_candidates()
+    if not finder_and_candidates:
+        return
+
+    finder, buy_items, not_sell_items = finder_and_candidates
+
+    buy_items = _filter_buy_candidates_by_cooldown(buy_items)
+    sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
+        finder, buy_items, not_sell_items
+    )
+    _investment_map, share_quantities = _prepare_buy_sizing_inputs(buy_items, finder, additional_cash_from_sell)
 
     telegram_message = generate_telegram_message(
         us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, sell_decisions, finder
