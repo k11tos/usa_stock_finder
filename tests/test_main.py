@@ -11,8 +11,10 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from main import (
+    calculate_profit_loss_rate_safely,
     calculate_correlations,
     calculate_investment_per_stock,
+    is_profit_loss_rate_mismatch,
     calculate_sell_quantities,
     calculate_share_quantities,
     generate_telegram_message,
@@ -723,6 +725,16 @@ class TestMainFunctions(unittest.TestCase):
         result = calculate_sell_quantities(["TSLA"], mock_finder, current_holdings)
 
         self.assertIsNone(result)
+
+    def test_calculate_profit_loss_rate_safely(self):
+        """Profit/loss percentage should be calculated only when avg_price is positive."""
+        self.assertEqual(calculate_profit_loss_rate_safely(200.0, 250.0), 25.0)
+        self.assertIsNone(calculate_profit_loss_rate_safely(0.0, 250.0))
+
+    def test_is_profit_loss_rate_mismatch_threshold_behavior(self):
+        """Mismatch check should preserve existing 0.1% threshold behavior."""
+        self.assertFalse(is_profit_loss_rate_mismatch(25.0, 25.09))  # below 0.1 => no warning
+        self.assertTrue(is_profit_loss_rate_mismatch(25.0, 25.11))  # over 0.1 => warning
 
     @patch("main.fetch_holdings_detail")
     def test_generate_telegram_message_with_share_quantities(self, _mock_fetch_holdings):
