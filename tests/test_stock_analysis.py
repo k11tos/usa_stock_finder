@@ -67,6 +67,29 @@ class TestUsaStockFinder(unittest.TestCase):
         for symbol in self.symbols:
             self.assertIn(symbol, ma)
 
+    def test_get_moving_averages_deterministic_series(self):
+        """moving average should be deterministic for explicit close prices"""
+        with patch("yfinance.download") as mock_download:
+            index = pd.date_range(start="2024-01-01", periods=5, freq="D")
+            close_prices = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "TEST"): close_prices + 1.0,
+                    ("Low", "TEST"): close_prices - 1.0,
+                    ("Close", "TEST"): close_prices,
+                    ("Volume", "TEST"): np.full(5, 1000),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["TEST"])
+            ma_3 = finder.get_moving_averages(3)
+
+            # Last 3 closes are 30, 40, 50 -> MA = 40
+            self.assertEqual(ma_3["TEST"], 40.0)
+
     def test_is_200_ma_increasing_recently(self):
         """check is_200_ma_increasing_recently function"""
         result = self.finder.is_200_ma_increasing_recently(margin=0.01)
@@ -76,6 +99,55 @@ class TestUsaStockFinder(unittest.TestCase):
         """check has_valid_trend_template function"""
         result = self.finder.has_valid_trend_template(margin=0.01)
         self.assertIsInstance(result, dict)
+
+    def test_has_valid_trend_template_true_for_clear_uptrend(self):
+        """trend template should pass for a long, steady uptrend with rising volume"""
+        with patch("yfinance.download") as mock_download:
+            periods = 250
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.linspace(100.0, 200.0, periods)
+            volume = np.linspace(1000.0, 5000.0, periods)
+
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "TREND"): close * 1.01,
+                    ("Low", "TREND"): close * 0.99,
+                    ("Close", "TREND"): close,
+                    ("Volume", "TREND"): volume,
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["TREND"])
+            result = finder.has_valid_trend_template(margin=0.0)
+
+            self.assertEqual(result, {"TREND": True})
+
+    def test_has_valid_trend_template_false_with_insufficient_history(self):
+        """trend template should fail when there is not enough data for MA200"""
+        with patch("yfinance.download") as mock_download:
+            periods = 199
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.linspace(100.0, 120.0, periods)
+
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "SHORT"): close * 1.01,
+                    ("Low", "SHORT"): close * 0.99,
+                    ("Close", "SHORT"): close,
+                    ("Volume", "SHORT"): np.full(periods, 1500.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["SHORT"])
+            result = finder.has_valid_trend_template(margin=0.0)
+
+            self.assertEqual(result, {"SHORT": False})
 
     def test_price_volume_correlation_percent(self):
         """check price_volume_correlation_percent function"""
@@ -104,6 +176,38 @@ class TestUsaStockFinder(unittest.TestCase):
         self.assertIsInstance(result, dict)
         for symbol in self.symbols:
             self.assertIn(symbol, result)
+
+    def test_check_avsl_sell_signal_legacy_mode_true_on_clear_decline(self):
+        """legacy AVSL mode should trigger when recent price and volume clearly collapse"""
+        with patch("yfinance.download") as mock_download:
+            periods = 60
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+
+            close = np.concatenate([np.full(55, 100.0), np.array([99.0, 97.0, 95.0, 93.0, 90.0])])
+            volume = np.concatenate([np.full(55, 1000.0), np.full(5, 100.0)])
+
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "DROP"): close * 1.01,
+                    ("Low", "DROP"): close * 0.99,
+                    ("Close", "DROP"): close,
+                    ("Volume", "DROP"): volume,
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["DROP"])
+            result = finder.check_avsl_sell_signal(
+                use_buff_avsl=False,
+                period_days=50,
+                recent_days=5,
+                volume_decline_threshold=0.5,
+                price_decline_threshold=0.03,
+            )
+
+            self.assertEqual(result, {"DROP": True})
 
     def test_check_avsl_sell_signal_legacy_mode(self):
         """check check_avsl_sell_signal in legacy mode"""
