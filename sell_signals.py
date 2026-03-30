@@ -26,6 +26,11 @@ from trailing_stop import load_trailing_state, save_trailing_state, update_highe
 logger = logging.getLogger(__name__)
 
 
+def select_current_price(finder_price: float, holding_price: float) -> float:
+    """Return sell-calculation price, preferring positive finder price."""
+    return finder_price if finder_price > 0 else holding_price
+
+
 class SellReason(str, Enum):
     """Enumeration of reasons for selling a stock."""
 
@@ -110,7 +115,7 @@ def evaluate_sell_decisions(
         # finder.current_price 우선 사용, 없거나 0이면 holdings의 current_price 사용
         finder_price = finder.current_price.get(symbol, 0.0)
         holding_price = holding.get("current_price", 0.0)
-        current_price = finder_price if finder_price > 0 else holding_price
+        current_price = select_current_price(finder_price, holding_price)
 
         # 기본 정보 로깅
         logger.debug(

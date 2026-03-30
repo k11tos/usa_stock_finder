@@ -11,7 +11,7 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import sell_signals
-from sell_signals import SellReason, evaluate_sell_decisions
+from sell_signals import SellReason, evaluate_sell_decisions, select_current_price
 
 
 class TestSellSignals(unittest.TestCase):
@@ -22,6 +22,15 @@ class TestSellSignals(unittest.TestCase):
         # Mock UsaStockFinder instance
         self.mock_finder = MagicMock()
         self.mock_finder.current_price = {}
+
+    def test_select_current_price_prefers_positive_finder_price(self):
+        """Helper should use finder price when it is positive."""
+        self.assertEqual(select_current_price(150.0, 100.0), 150.0)
+
+    def test_select_current_price_falls_back_when_finder_not_positive(self):
+        """Helper should fall back to holding price for zero/negative finder prices."""
+        self.assertEqual(select_current_price(0.0, 100.0), 100.0)
+        self.assertEqual(select_current_price(-1.0, 100.0), 100.0)
 
     def test_egan_case_stop_loss_priority(self):
         """
