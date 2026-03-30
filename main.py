@@ -890,97 +890,111 @@ def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
     return filtered_buy_items
 
 
-def _prepare_sell_decisions_and_quantities(
-    finder: UsaStockFinder, buy_items: list[str], not_sell_items: list[str]
-) -> tuple[dict[str, SellDecision], dict[str, dict[str, Any]] | None, float]:
-    """Evaluate sell decisions and calculate sell quantities/cash."""
-    sell_decisions = {}
-    current_holdings_detail = fetch_holdings_detail()
-    if current_holdings_detail:
-        logger.info("매도 평가 시작 - 보유 종목 수: %d", len(current_holdings_detail))
+def _log_holdings_details_for_sell_evaluation(
+    current_holdings_detail: list[dict[str, Any]], finder: UsaStockFinder
+) -> None:
+    """Log holdings detail and finder price consistency before sell evaluation."""
+    logger.info("매도 평가 시작 - 보유 종목 수: %d", len(current_holdings_detail))
 
-        for holding in current_holdings_detail:
-            symbol = holding.get("symbol", "")
-            avg_price = holding.get("avg_price", 0.0)
-            current_price_holding = holding.get("current_price", 0.0)
-            quantity = holding.get("quantity", 0.0)
-            profit_loss_rate = holding.get("profit_loss_rate", 0.0)
-            finder_price = finder.current_price.get(symbol, 0.0)
+    for holding in current_holdings_detail:
+        symbol = holding.get("symbol", "")
+        avg_price = holding.get("avg_price", 0.0)
+        current_price_holding = holding.get("current_price", 0.0)
+        quantity = holding.get("quantity", 0.0)
+        profit_loss_rate = holding.get("profit_loss_rate", 0.0)
+        finder_price = finder.current_price.get(symbol, 0.0)
 
-            logger.debug(
-                "%s: 보유 정보 - avg_price=%.4f, holding.current_price=%.4f, finder.current_price=%.4f, "
-                "quantity=%.2f, profit_loss_rate=%.4f%%",
-                symbol,
-                avg_price,
-                current_price_holding,
-                finder_price,
-                quantity,
-                profit_loss_rate,
-            )
-
-            if finder_price > 0 and current_price_holding > 0:
-                price_diff_pct = abs((finder_price - current_price_holding) / current_price_holding) * 100
-                if price_diff_pct > 1.0:
-                    logger.warning(
-                        "%s: 가격 불일치 - holding.current_price=%.4f, finder.current_price=%.4f, 차이=%.2f%%",
-                        symbol,
-                        current_price_holding,
-                        finder_price,
-                        price_diff_pct,
-                    )
-
-        avsl_signals = finder.check_avsl_sell_signal()
-        avsl_count = sum(1 for v in avsl_signals.values() if v)
-        logger.info("AVSL 시그널 확인 완료 - AVSL=True인 종목: %d개", avsl_count)
-
-        sell_decisions = evaluate_sell_decisions(
-            finder=finder,
-            holdings=current_holdings_detail,
-            selected_buy=buy_items,
-            selected_not_sell=not_sell_items,
-            avsl_signals=avsl_signals,
+        logger.debug(
+            "%s: 보유 정보 - avg_price=%.4f, holding.current_price=%.4f, finder.current_price=%.4f, "
+            "quantity=%.2f, profit_loss_rate=%.4f%%",
+            symbol,
+            avg_price,
+            current_price_holding,
+            finder_price,
+            quantity,
+            profit_loss_rate,
         )
 
-        stop_loss_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.STOP_LOSS)
-        trailing_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TRAILING)
-        avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
-        trend_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TREND)
-        hold_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.NONE)
+        if finder_price > 0 and current_price_holding > 0:
+            price_diff_pct = abs((finder_price - current_price_holding) / current_price_holding) * 100
+            if price_diff_pct > 1.0:
+                logger.warning(
+                    "%s: 가격 불일치 - holding.current_price=%.4f, finder.current_price=%.4f, 차이=%.2f%%",
+                    symbol,
+                    current_price_holding,
+                    finder_price,
+                    price_diff_pct,
+                )
 
-        logger.info(
-            "매도 결정 평가 완료 - Stop Loss=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d",
-            stop_loss_count,
-            trailing_count,
-            avsl_count,
-            trend_count,
-            hold_count,
-        )
 
-        for symbol, decision in sell_decisions.items():
-            if decision.reason != SellReason.NONE:
-                holding_info = next((h for h in current_holdings_detail if h.get("symbol") == symbol), None)
-                if holding_info:
-                    avg_price = holding_info.get("avg_price", 0.0)
-                    current_price = finder.current_price.get(symbol, holding_info.get("current_price", 0.0))
-                    profit_loss_rate = holding_info.get("profit_loss_rate", 0.0)
+def _evaluate_and_log_sell_decisions(
+    finder: UsaStockFinder,
+    current_holdings_detail: list[dict[str, Any]],
+    buy_items: list[str],
+    not_sell_items: list[str],
+) -> dict[str, SellDecision]:
+    """Evaluate sell decisions and keep existing diagnostics/logging unchanged."""
+    avsl_signals = finder.check_avsl_sell_signal()
+    avsl_count = sum(1 for v in avsl_signals.values() if v)
+    logger.info("AVSL 시그널 확인 완료 - AVSL=True인 종목: %d개", avsl_count)
 
-                    logger.info(
-                        "매도 결정: %s - 이유=%s, 수량=%.2f, avg_price=%.4f, current_price=%.4f, 손익률=%.2f%%",
-                        symbol,
-                        decision.reason.value,
-                        decision.quantity,
-                        avg_price,
-                        current_price,
-                        profit_loss_rate,
-                    )
-                else:
-                    logger.warning(
-                        "매도 결정: %s - 이유=%s, 수량=%.2f (보유 정보 없음)",
-                        symbol,
-                        decision.reason.value,
-                        decision.quantity,
-                    )
+    sell_decisions = evaluate_sell_decisions(
+        finder=finder,
+        holdings=current_holdings_detail,
+        selected_buy=buy_items,
+        selected_not_sell=not_sell_items,
+        avsl_signals=avsl_signals,
+    )
 
+    stop_loss_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.STOP_LOSS)
+    trailing_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TRAILING)
+    avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
+    trend_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TREND)
+    hold_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.NONE)
+
+    logger.info(
+        "매도 결정 평가 완료 - Stop Loss=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d",
+        stop_loss_count,
+        trailing_count,
+        avsl_count,
+        trend_count,
+        hold_count,
+    )
+
+    for symbol, decision in sell_decisions.items():
+        if decision.reason != SellReason.NONE:
+            holding_info = next((h for h in current_holdings_detail if h.get("symbol") == symbol), None)
+            if holding_info:
+                avg_price = holding_info.get("avg_price", 0.0)
+                current_price = finder.current_price.get(symbol, holding_info.get("current_price", 0.0))
+                profit_loss_rate = holding_info.get("profit_loss_rate", 0.0)
+
+                logger.info(
+                    "매도 결정: %s - 이유=%s, 수량=%.2f, avg_price=%.4f, current_price=%.4f, 손익률=%.2f%%",
+                    symbol,
+                    decision.reason.value,
+                    decision.quantity,
+                    avg_price,
+                    current_price,
+                    profit_loss_rate,
+                )
+            else:
+                logger.warning(
+                    "매도 결정: %s - 이유=%s, 수량=%.2f (보유 정보 없음)",
+                    symbol,
+                    decision.reason.value,
+                    decision.quantity,
+                )
+
+    return sell_decisions
+
+
+def _derive_sell_quantities(
+    sell_decisions: dict[str, SellDecision],
+    finder: UsaStockFinder,
+    current_holdings_detail: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]] | None:
+    """Derive sell symbols and calculate detailed sell quantities."""
     all_sell_items = [
         symbol
         for symbol, decision in sell_decisions.items()
@@ -994,28 +1008,33 @@ def _prepare_sell_decisions_and_quantities(
         len(all_sell_items),
     )
 
-    if all_sell_items:
-        logger.info("매도 수량 계산 시작 - 대상 종목: %s", ", ".join(all_sell_items))
-        sell_quantities = calculate_sell_quantities(all_sell_items, finder, current_holdings_detail)
-        if sell_quantities:
-            logger.info("매도 수량 계산 완료 - %d개 종목", len(sell_quantities))
-            for symbol, sell_info in sell_quantities.items():
-                decision = sell_decisions.get(symbol)
-                if decision:
-                    logger.debug(
-                        "%s: 매도 수량 검증 - decision.quantity=%.2f, sell_info.shares_to_sell=%d, "
-                        "sell_info.current_quantity=%d",
-                        symbol,
-                        decision.quantity,
-                        sell_info.get("shares_to_sell", 0),
-                        sell_info.get("current_quantity", 0),
-                    )
-        else:
-            logger.warning("매도 수량 계산 실패 - sell_quantities가 None 반환됨")
-    else:
+    if not all_sell_items:
         logger.info("매도 대상 종목 없음")
-        sell_quantities = None
+        return None
 
+    logger.info("매도 수량 계산 시작 - 대상 종목: %s", ", ".join(all_sell_items))
+    sell_quantities = calculate_sell_quantities(all_sell_items, finder, current_holdings_detail)
+    if sell_quantities:
+        logger.info("매도 수량 계산 완료 - %d개 종목", len(sell_quantities))
+        for symbol, sell_info in sell_quantities.items():
+            decision = sell_decisions.get(symbol)
+            if decision:
+                logger.debug(
+                    "%s: 매도 수량 검증 - decision.quantity=%.2f, sell_info.shares_to_sell=%d, "
+                    "sell_info.current_quantity=%d",
+                    symbol,
+                    decision.quantity,
+                    sell_info.get("shares_to_sell", 0),
+                    sell_info.get("current_quantity", 0),
+                )
+    else:
+        logger.warning("매도 수량 계산 실패 - sell_quantities가 None 반환됨")
+
+    return sell_quantities
+
+
+def _sum_expected_sell_proceeds(sell_quantities: dict[str, dict[str, Any]] | None) -> float:
+    """Sum expected sell proceeds from calculated sell quantities."""
     additional_cash_from_sell = 0.0
     if sell_quantities:
         additional_cash_from_sell = sum(info.get("sell_amount", 0.0) for info in sell_quantities.values())
@@ -1025,7 +1044,21 @@ def _prepare_sell_decisions_and_quantities(
                 additional_cash_from_sell,
                 len(sell_quantities),
             )
+    return additional_cash_from_sell
 
+
+def _prepare_sell_decisions_and_quantities(
+    finder: UsaStockFinder, buy_items: list[str], not_sell_items: list[str]
+) -> tuple[dict[str, SellDecision], dict[str, dict[str, Any]] | None, float]:
+    """Evaluate sell decisions and calculate sell quantities/cash."""
+    sell_decisions: dict[str, SellDecision] = {}
+    current_holdings_detail = fetch_holdings_detail()
+    if current_holdings_detail:
+        _log_holdings_details_for_sell_evaluation(current_holdings_detail, finder)
+        sell_decisions = _evaluate_and_log_sell_decisions(finder, current_holdings_detail, buy_items, not_sell_items)
+
+    sell_quantities = _derive_sell_quantities(sell_decisions, finder, current_holdings_detail)
+    additional_cash_from_sell = _sum_expected_sell_proceeds(sell_quantities)
     return sell_decisions, sell_quantities, additional_cash_from_sell
 
 
