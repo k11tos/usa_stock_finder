@@ -765,8 +765,8 @@ def calculate_sell_quantities(
             continue
 
         # 손익률 재계산 검증 (holdings의 profit_loss_rate와 비교)
-        if avg_price > 0:
-            calculated_loss_pct = ((current_price - avg_price) / avg_price) * 100
+        calculated_loss_pct = calculate_profit_loss_rate_safely(avg_price, current_price)
+        if calculated_loss_pct is not None:
             logger.debug(
                 "%s: 손익률 검증 - holdings.profit_loss_rate=%.4f%%, 계산된 loss_pct=%.4f%%",
                 symbol,
@@ -775,7 +775,7 @@ def calculate_sell_quantities(
             )
 
             # 큰 차이가 있으면 경고
-            if abs(calculated_loss_pct - profit_loss_rate) > 0.1:  # 0.1% 이상 차이
+            if is_profit_loss_rate_mismatch(profit_loss_rate, calculated_loss_pct):  # 0.1% 이상 차이
                 logger.warning(
                     "%s: 손익률 불일치 - holdings.profit_loss_rate=%.4f%%, 계산된 loss_pct=%.4f%%, 차이=%.4f%%",
                     symbol,
@@ -813,6 +813,28 @@ def calculate_sell_quantities(
         return None
 
     return result
+
+
+def calculate_profit_loss_rate_safely(avg_price: float, current_price: float) -> float | None:
+    """
+    Safely calculate profit/loss percentage.
+
+    Returns None when avg_price is not positive to avoid division-by-zero or invalid rates.
+    """
+    if avg_price <= 0:
+        return None
+    return ((current_price - avg_price) / avg_price) * 100
+
+
+def is_profit_loss_rate_mismatch(
+    provided_rate: float, calculated_rate: float | None, threshold_pct: float = 0.1
+) -> bool:
+    """
+    Check whether provided and calculated profit/loss rates differ more than threshold.
+    """
+    if calculated_rate is None:
+        return False
+    return abs(calculated_rate - provided_rate) > threshold_pct
 
 
 def update_final_items(prev_items: list[str], buy_items: list[str], not_sell_items: list[str]) -> list[str]:
