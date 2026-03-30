@@ -194,6 +194,84 @@ def log_stock_info(symbol: str, correlations: dict[str, dict[str, float]]) -> No
     )
 
 
+def _format_buy_entry(
+    item: str,
+    share_quantities: dict[str, dict[str, Any]] | None = None,
+    finder: UsaStockFinder | None = None,
+) -> str:
+    """Format a single buy entry while preserving existing message wording."""
+    if share_quantities and item in share_quantities:
+        info = share_quantities[item]
+        investment = info.get("investment_amount", 0)
+        price = info.get("current_price", 0)
+        shares = info.get("shares_to_buy", 0)
+        current_qty = info.get("current_quantity", 0)
+        total_qty = info.get("total_after_buy", 0)
+
+        if current_qty > 0:
+            msg = f"  🔄 추가 매수: {item}"
+            msg += f"\n     현재 보유: {current_qty}주"
+            msg += f"\n     추가 매수: {shares}주"
+            msg += f"\n     매수 후 총 보유: {total_qty}주"
+        else:
+            msg = f"  ✅ 신규 매수: {item}"
+            msg += f"\n     매수 수량: {shares}주"
+
+        msg += f"\n     투자 금액: ${investment:,.2f}"
+        msg += f"\n     현재가: ${price:.2f}"
+        return msg
+
+    # share_quantities가 없어도 최소한의 정보 표시
+    msg = f"  ✅ 신규 매수: {item}"
+    if finder and item in finder.current_price:
+        current_price = finder.current_price.get(item, 0.0)
+        if current_price > 0:
+            msg += f"\n     현재가: ${current_price:.2f}"
+    return msg
+
+
+def _format_sell_entry(
+    symbol: str,
+    label: str,
+    sell_quantities: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    """Format a single sell entry while preserving existing message wording."""
+    if sell_quantities and symbol in sell_quantities:
+        info = sell_quantities[symbol]
+        shares = info.get("shares_to_sell", 0)
+        price = info.get("current_price", 0)
+        sell_amount = info.get("sell_amount", 0)
+        profit_loss = info.get("profit_loss", 0.0)
+        profit_rate = info.get("profit_loss_rate", 0.0)
+
+        msg = f"  {label}: {symbol}"
+        msg += f"\n     매도 수량: {shares}주"
+        msg += f"\n     현재가: ${price:.2f}"
+        msg += f"\n     매도 금액: ${sell_amount:,.2f}"
+
+        if profit_loss != 0:
+            profit_sign = "+" if profit_loss >= 0 else ""
+            rate_sign = "+" if profit_rate >= 0 else ""
+            msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
+
+        return msg
+
+    return f"  {label}: {symbol}"
+
+
+def _append_sell_reason_section(
+    message: list[str],
+    sell_items: list[tuple[str, SellDecision]],
+    reason: SellReason,
+    label: str,
+    sell_quantities: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    """Append reason-specific sell messages in the original order."""
+    for symbol, _decision in sell_items:
+        if _decision.reason == reason:
+            message.append(_format_sell_entry(symbol, label, sell_quantities))
+
+
 def generate_telegram_message(
     prev_items: list[str],
     buy_items: list[str],
@@ -242,34 +320,7 @@ def generate_telegram_message(
         has_changes = True
 
         for item in new_buy_items:
-            if share_quantities and item in share_quantities:
-                info = share_quantities[item]
-                investment = info.get("investment_amount", 0)
-                price = info.get("current_price", 0)
-                shares = info.get("shares_to_buy", 0)
-                current_qty = info.get("current_quantity", 0)
-                total_qty = info.get("total_after_buy", 0)
-
-                if current_qty > 0:
-                    msg = f"  🔄 추가 매수: {item}"
-                    msg += f"\n     현재 보유: {current_qty}주"
-                    msg += f"\n     추가 매수: {shares}주"
-                    msg += f"\n     매수 후 총 보유: {total_qty}주"
-                else:
-                    msg = f"  ✅ 신규 매수: {item}"
-                    msg += f"\n     매수 수량: {shares}주"
-
-                msg += f"\n     투자 금액: ${investment:,.2f}"
-                msg += f"\n     현재가: ${price:.2f}"
-                message.append(msg)
-            else:
-                # share_quantities가 없어도 최소한의 정보 표시
-                msg = f"  ✅ 신규 매수: {item}"
-                if finder and item in finder.current_price:
-                    current_price = finder.current_price.get(item, 0.0)
-                    if current_price > 0:
-                        msg += f"\n     현재가: ${current_price:.2f}"
-                message.append(msg)
+            message.append(_format_buy_entry(item, share_quantities, finder))
 
     # Generate sell messages with quantity details and reasons
     sell_items_to_display = []
@@ -283,107 +334,34 @@ def generate_telegram_message(
         message.append("\n📉 매도 신호:")
         has_changes = True
 
-        # Group by reason for better organization
-        stop_loss_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.STOP_LOSS]
-        trailing_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.TRAILING]
-        avsl_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.AVSL]
-        trend_items = [(s, d) for s, d in sell_items_to_display if d.reason == SellReason.TREND]
-
-        # Display stop loss items first (highest priority)
-        for symbol, decision in stop_loss_items:
-            if sell_quantities and symbol in sell_quantities:
-                info = sell_quantities[symbol]
-                shares = info.get("shares_to_sell", 0)
-                price = info.get("current_price", 0)
-                sell_amount = info.get("sell_amount", 0)
-                profit_loss = info.get("profit_loss", 0.0)
-                profit_rate = info.get("profit_loss_rate", 0.0)
-
-                msg = f"  🟥 매도 (절대 손절): {symbol}"
-                msg += f"\n     매도 수량: {shares}주"
-                msg += f"\n     현재가: ${price:.2f}"
-                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
-
-                if profit_loss != 0:
-                    profit_sign = "+" if profit_loss >= 0 else ""
-                    rate_sign = "+" if profit_rate >= 0 else ""
-                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
-
-                message.append(msg)
-            else:
-                message.append(f"  🟥 매도 (절대 손절): {symbol}")
-
-        # Display trailing items
-        for symbol, decision in trailing_items:
-            if sell_quantities and symbol in sell_quantities:
-                info = sell_quantities[symbol]
-                shares = info.get("shares_to_sell", 0)
-                price = info.get("current_price", 0)
-                sell_amount = info.get("sell_amount", 0)
-                profit_loss = info.get("profit_loss", 0.0)
-                profit_rate = info.get("profit_loss_rate", 0.0)
-
-                msg = f"  🟨 매도 (ATR 트레일링 스탑): {symbol}"
-                msg += f"\n     매도 수량: {shares}주"
-                msg += f"\n     현재가: ${price:.2f}"
-                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
-
-                if profit_loss != 0:
-                    profit_sign = "+" if profit_loss >= 0 else ""
-                    rate_sign = "+" if profit_rate >= 0 else ""
-                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
-
-                message.append(msg)
-            else:
-                message.append(f"  🟨 매도 (ATR 트레일링 스탑): {symbol}")
-
-        # Display AVSL items
-        for symbol, decision in avsl_items:
-            if sell_quantities and symbol in sell_quantities:
-                info = sell_quantities[symbol]
-                shares = info.get("shares_to_sell", 0)
-                price = info.get("current_price", 0)
-                sell_amount = info.get("sell_amount", 0)
-                profit_loss = info.get("profit_loss", 0.0)
-                profit_rate = info.get("profit_loss_rate", 0.0)
-
-                msg = f"  🟧 매도 (AVSL 거래량 지지선 붕괴): {symbol}"
-                msg += f"\n     매도 수량: {shares}주"
-                msg += f"\n     현재가: ${price:.2f}"
-                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
-
-                if profit_loss != 0:
-                    profit_sign = "+" if profit_loss >= 0 else ""
-                    rate_sign = "+" if profit_rate >= 0 else ""
-                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
-
-                message.append(msg)
-            else:
-                message.append(f"  🟧 매도 (AVSL 거래량 지지선 붕괴): {symbol}")
-
-        # Display trend items
-        for symbol, decision in trend_items:
-            if sell_quantities and symbol in sell_quantities:
-                info = sell_quantities[symbol]
-                shares = info.get("shares_to_sell", 0)
-                price = info.get("current_price", 0)
-                sell_amount = info.get("sell_amount", 0)
-                profit_loss = info.get("profit_loss", 0.0)
-                profit_rate = info.get("profit_loss_rate", 0.0)
-
-                msg = f"  🟦 매도 (트렌드/전략 조건 이탈): {symbol}"
-                msg += f"\n     매도 수량: {shares}주"
-                msg += f"\n     현재가: ${price:.2f}"
-                msg += f"\n     매도 금액: ${sell_amount:,.2f}"
-
-                if profit_loss != 0:
-                    profit_sign = "+" if profit_loss >= 0 else ""
-                    rate_sign = "+" if profit_rate >= 0 else ""
-                    msg += f"\n     손익: {profit_sign}${profit_loss:,.2f} ({rate_sign}{profit_rate:.2f}%)"
-
-                message.append(msg)
-            else:
-                message.append(f"  🟦 매도 (트렌드/전략 조건 이탈): {symbol}")
+        _append_sell_reason_section(
+            message,
+            sell_items_to_display,
+            SellReason.STOP_LOSS,
+            "🟥 매도 (절대 손절)",
+            sell_quantities,
+        )
+        _append_sell_reason_section(
+            message,
+            sell_items_to_display,
+            SellReason.TRAILING,
+            "🟨 매도 (ATR 트레일링 스탑)",
+            sell_quantities,
+        )
+        _append_sell_reason_section(
+            message,
+            sell_items_to_display,
+            SellReason.AVSL,
+            "🟧 매도 (AVSL 거래량 지지선 붕괴)",
+            sell_quantities,
+        )
+        _append_sell_reason_section(
+            message,
+            sell_items_to_display,
+            SellReason.TREND,
+            "🟦 매도 (트렌드/전략 조건 이탈)",
+            sell_quantities,
+        )
 
     if has_changes:
         return message
