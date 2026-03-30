@@ -39,7 +39,7 @@ from dotenv import load_dotenv
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
 from file_utils import read_csv_first_column, save_json
 from logging_setup import setup_logging
-from sell_signals import SellDecision, SellReason, evaluate_sell_decisions
+from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
 from stock_analysis import UsaStockFinder
 from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from stop_loss_cooldown import is_in_cooldown
@@ -740,7 +740,7 @@ def calculate_sell_quantities(
         profit_loss_rate = holding.get("profit_loss_rate", 0.0)
 
         # finder.current_price 우선 사용, 없으면 holdings의 current_price 사용
-        current_price = finder_current_price if finder_current_price > 0 else holding_current_price
+        current_price = select_current_price(finder_current_price, holding_current_price)
 
         logger.debug(
             "%s: 매도 수량 계산 - avg_price=%.4f, holding_current_price=%.4f, finder_current_price=%.4f, "
