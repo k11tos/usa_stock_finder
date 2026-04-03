@@ -272,6 +272,32 @@ def _append_sell_reason_section(
             message.append(_format_sell_entry(symbol, label, sell_quantities))
 
 
+def _format_stale_holdings_line(stale_symbols: list[str], max_symbols: int = 5) -> str:
+    """Return compact stale-holding summary line for Telegram."""
+    if not stale_symbols:
+        return ""
+    shown = stale_symbols[:max_symbols]
+    suffix = f" 외 {len(stale_symbols) - max_symbols}개" if len(stale_symbols) > max_symbols else ""
+    return f"  🧊 B-Plan 유지(유니버스 제외): {', '.join(shown)}{suffix}"
+
+
+def _collect_stale_holdings(
+    sell_decisions: dict[str, SellDecision] | None,
+    buy_items: list[str],
+    not_sell_items: list[str],
+) -> list[str]:
+    """Collect holdings that are outside entry universe but still held."""
+    if not sell_decisions:
+        return []
+    entry_universe = set(buy_items) | set(not_sell_items)
+    stale_symbols = [
+        symbol
+        for symbol, decision in sell_decisions.items()
+        if decision.reason == SellReason.NONE and decision.quantity == 0 and symbol not in entry_universe
+    ]
+    return sorted(stale_symbols)
+
+
 def generate_telegram_message(
     prev_items: list[str],
     buy_items: list[str],
@@ -362,6 +388,12 @@ def generate_telegram_message(
             "🟦 매도 (트렌드/전략 조건 이탈)",
             sell_quantities,
         )
+
+    stale_holdings = _collect_stale_holdings(sell_decisions, buy_items, _not_sell_items)
+    if stale_holdings:
+        message.append("\n🧾 보유 유지:")
+        message.append(_format_stale_holdings_line(stale_holdings))
+        has_changes = True
 
     if has_changes:
         return message
@@ -1006,15 +1038,24 @@ def _evaluate_and_log_sell_decisions(
     avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
     trend_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TREND)
     hold_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.NONE)
+    entry_universe = set(buy_items) | set(not_sell_items)
+    stale_holdings = [
+        symbol
+        for symbol, decision in sell_decisions.items()
+        if decision.reason == SellReason.NONE and decision.quantity == 0 and symbol not in entry_universe
+    ]
 
     logger.info(
-        "매도 결정 평가 완료 - Stop Loss=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d",
+        "매도 결정 평가 완료 - Stop Loss=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d, StaleHold=%d",
         stop_loss_count,
         trailing_count,
         avsl_count,
         trend_count,
         hold_count,
+        len(stale_holdings),
     )
+    if stale_holdings:
+        logger.info("B-plan stale holding 유지 종목: %s", ", ".join(sorted(stale_holdings)))
 
     for symbol, decision in sell_decisions.items():
         if decision.reason != SellReason.NONE:
@@ -1179,15 +1220,17 @@ def _log_execution_summary(
     sell_counts_text = ",".join(f"{reason}={count}" for reason, count in sell_counts_by_reason.items() if count > 0)
     if not sell_counts_text:
         sell_counts_text = "none=0"
+    stale_holdings = _collect_stale_holdings(sell_decisions, buy_items, not_sell_items)
 
     logger.info(
         "RUN_SUMMARY prev_holdings=%d buy_items=%d not_sell_items=%d sell_decisions=%s "
-        "sell_quantities=%d expected_sell_cash=%.2f final_saved_items=%d",
+        "sell_quantities=%d stale_holdings=%d expected_sell_cash=%.2f final_saved_items=%d",
         len(prev_items),
         len(buy_items),
         len(not_sell_items),
         sell_counts_text,
         len(sell_quantities or {}),
+        len(stale_holdings),
         additional_cash_from_sell,
         len(final_items),
     )
