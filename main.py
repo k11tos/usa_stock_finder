@@ -283,17 +283,15 @@ def _format_stale_holdings_line(stale_symbols: list[str], max_symbols: int = 5) 
 
 def _collect_stale_holdings(
     sell_decisions: dict[str, SellDecision] | None,
-    buy_items: list[str],
-    not_sell_items: list[str],
+    entry_symbol_set: set[str],
 ) -> list[str]:
     """Collect holdings that are outside entry universe but still held."""
     if not sell_decisions:
         return []
-    entry_universe = set(buy_items) | set(not_sell_items)
     stale_symbols = [
         symbol
         for symbol, decision in sell_decisions.items()
-        if decision.reason == SellReason.NONE and decision.quantity == 0 and symbol not in entry_universe
+        if decision.reason == SellReason.NONE and decision.quantity == 0 and symbol not in entry_symbol_set
     ]
     return sorted(stale_symbols)
 
@@ -306,6 +304,7 @@ def generate_telegram_message(
     sell_quantities: dict[str, dict[str, Any]] | None = None,
     sell_decisions: dict[str, SellDecision] | None = None,
     finder: UsaStockFinder | None = None,
+    entry_symbol_set: set[str] | None = None,
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
@@ -389,7 +388,8 @@ def generate_telegram_message(
             sell_quantities,
         )
 
-    stale_holdings = _collect_stale_holdings(sell_decisions, buy_items, _not_sell_items)
+    effective_entry_symbol_set = entry_symbol_set if entry_symbol_set is not None else set(buy_items) | set(_not_sell_items)
+    stale_holdings = _collect_stale_holdings(sell_decisions, effective_entry_symbol_set)
     if stale_holdings:
         message.append("\n🧾 보유 유지:")
         message.append(_format_stale_holdings_line(stale_holdings))
@@ -914,7 +914,7 @@ def _load_and_validate_runtime_prerequisites() -> bool:
 
 def _prepare_finder_and_candidates(
     current_holding_symbols: list[str],
-) -> tuple[UsaStockFinder, list[str], list[str]] | None:
+) -> tuple[UsaStockFinder, list[str], list[str], set[str]] | None:
     """Prepare stock finder and initial buy/hold candidates."""
     entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
 
@@ -943,7 +943,7 @@ def _prepare_finder_and_candidates(
     entry_symbol_set = set(entry_symbols)
     buy_items = [symbol for symbol in buy_items if symbol in entry_symbol_set]
     not_sell_items = [symbol for symbol in not_sell_items if symbol in entry_symbol_set]
-    return finder, buy_items, not_sell_items
+    return finder, buy_items, not_sell_items, entry_symbol_set
 
 
 def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
@@ -1009,6 +1009,7 @@ def _evaluate_and_log_sell_decisions(
     current_holdings_detail: list[dict[str, Any]],
     buy_items: list[str],
     not_sell_items: list[str],
+    entry_symbol_set: set[str],
 ) -> dict[str, SellDecision]:
     """Evaluate sell decisions and keep existing diagnostics/logging unchanged."""
     avsl_signals = finder.check_avsl_sell_signal()
@@ -1038,12 +1039,7 @@ def _evaluate_and_log_sell_decisions(
     avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
     trend_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TREND)
     hold_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.NONE)
-    entry_universe = set(buy_items) | set(not_sell_items)
-    stale_holdings = [
-        symbol
-        for symbol, decision in sell_decisions.items()
-        if decision.reason == SellReason.NONE and decision.quantity == 0 and symbol not in entry_universe
-    ]
+    stale_holdings = _collect_stale_holdings(sell_decisions, entry_symbol_set)
 
     logger.info(
         "매도 결정 평가 완료 - Stop Loss=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d, StaleHold=%d",
@@ -1144,14 +1140,20 @@ def _sum_expected_sell_proceeds(sell_quantities: dict[str, dict[str, Any]] | Non
 
 
 def _prepare_sell_decisions_and_quantities(
-    finder: UsaStockFinder, buy_items: list[str], not_sell_items: list[str]
+    finder: UsaStockFinder, buy_items: list[str], not_sell_items: list[str], entry_symbol_set: set[str]
 ) -> tuple[dict[str, SellDecision], dict[str, dict[str, Any]] | None, float]:
     """Evaluate sell decisions and calculate sell quantities/cash."""
     sell_decisions: dict[str, SellDecision] = {}
     current_holdings_detail = fetch_holdings_detail()
     if current_holdings_detail:
         _log_holdings_details_for_sell_evaluation(current_holdings_detail, finder)
-        sell_decisions = _evaluate_and_log_sell_decisions(finder, current_holdings_detail, buy_items, not_sell_items)
+        sell_decisions = _evaluate_and_log_sell_decisions(
+            finder,
+            current_holdings_detail,
+            buy_items,
+            not_sell_items,
+            entry_symbol_set,
+        )
 
     sell_quantities = _derive_sell_quantities(sell_decisions, finder, current_holdings_detail)
     additional_cash_from_sell = _sum_expected_sell_proceeds(sell_quantities)
@@ -1206,6 +1208,7 @@ def _log_execution_summary(
     sell_quantities: dict[str, dict[str, Any]] | None,
     additional_cash_from_sell: float,
     final_items: list[str],
+    entry_symbol_set: set[str],
 ) -> None:
     """Log a concise, grep-friendly end-of-run summary."""
     sell_counts_by_reason = {
@@ -1220,7 +1223,7 @@ def _log_execution_summary(
     sell_counts_text = ",".join(f"{reason}={count}" for reason, count in sell_counts_by_reason.items() if count > 0)
     if not sell_counts_text:
         sell_counts_text = "none=0"
-    stale_holdings = _collect_stale_holdings(sell_decisions, buy_items, not_sell_items)
+    stale_holdings = _collect_stale_holdings(sell_decisions, entry_symbol_set)
 
     logger.info(
         "RUN_SUMMARY prev_holdings=%d buy_items=%d not_sell_items=%d sell_decisions=%s "
@@ -1273,18 +1276,25 @@ def main() -> None:
     if not finder_and_candidates:
         return
 
-    finder, buy_items, not_sell_items = finder_and_candidates
+    finder, buy_items, not_sell_items, entry_symbol_set = finder_and_candidates
     buy_items = _filter_buy_candidates_by_cooldown(buy_items)
 
     sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
-        finder, buy_items, not_sell_items
+        finder, buy_items, not_sell_items, entry_symbol_set
     )
     buy_items, _investment_map, share_quantities = _prepare_buy_side_orchestration(
         buy_items, finder, additional_cash_from_sell
     )
 
     telegram_message = generate_telegram_message(
-        us_stock_holdings, buy_items, not_sell_items, share_quantities, sell_quantities, sell_decisions, finder
+        us_stock_holdings,
+        buy_items,
+        not_sell_items,
+        share_quantities,
+        sell_quantities,
+        sell_decisions,
+        finder,
+        entry_symbol_set,
     )
 
     if telegram_message:
@@ -1313,6 +1323,7 @@ def main() -> None:
         sell_quantities=sell_quantities,
         additional_cash_from_sell=additional_cash_from_sell,
         final_items=final_items,
+        entry_symbol_set=entry_symbol_set,
     )
 
 
