@@ -815,25 +815,48 @@ def is_profit_loss_rate_mismatch(
     return abs(calculated_rate - provided_rate) > threshold_pct
 
 
-def update_final_items(prev_items: list[str], buy_items: list[str], not_sell_items: list[str]) -> list[str]:
+def update_final_items(
+    prev_items: list[str],
+    buy_items: list[str],
+    not_sell_items: list[str],
+    sell_decisions: dict[str, SellDecision] | None = None,
+) -> list[str]:
     """
-    Update the final list of items based on previous selections and new buy/not sell decisions.
+    Update the final saved holdings list with explicit B-plan semantics.
 
-    This function combines the previous portfolio with new selections, maintaining
-    stocks that meet the criteria for holding while adding new stocks that meet
-    the buying criteria.
+    B-plan persistence rules:
+    1) Existing holdings remain unless there is an explicit sell decision.
+    2) Newly bought symbols are appended.
+    3) Symbols are removed only when a real sell decision is made
+       (reason != HOLD and quantity > 0).
 
     Args:
         prev_items (list[str]): List of items previously selected
         buy_items (list[str]): List of items selected to buy
         not_sell_items (list[str]): List of items selected not to sell
+        sell_decisions (dict[str, SellDecision] | None): Evaluated sell decisions
+            for current holdings.
 
     Returns:
         list[str]: Updated final list of items to keep in the portfolio
     """
-    keep_items = set(buy_items) | set(not_sell_items)
-    new_items = [item for item in buy_items if item not in prev_items]
-    return [item for item in prev_items + new_items if item in keep_items]
+    sold_items: set[str] = set()
+    if sell_decisions:
+        sold_items = {
+            symbol
+            for symbol, decision in sell_decisions.items()
+            if decision.reason != SellReason.NONE and decision.quantity > 0
+        }
+
+    final_items = [symbol for symbol in prev_items if symbol not in sold_items]
+    existing_symbols = set(final_items)
+
+    for symbol in buy_items:
+        if symbol not in existing_symbols:
+            final_items.append(symbol)
+            existing_symbols.add(symbol)
+
+    return final_items
 
 
 def _load_and_validate_runtime_prerequisites() -> bool:
@@ -1235,7 +1258,7 @@ def main() -> None:
         else:
             logger.error("Missing Telegram API credentials")
 
-    final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items)
+    final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items, sell_decisions)
     save_json(final_items, "data/data.json")
     _log_execution_summary(
         prev_items=us_stock_holdings,
