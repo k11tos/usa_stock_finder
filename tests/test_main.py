@@ -219,6 +219,19 @@ class TestMainFunctions(unittest.TestCase):
 
         self.assertEqual(result, ["AAPL", "OLD1", "OLD2", "NVDA"])
 
+    def test_update_final_items_does_not_readd_sold_symbol_from_buy_items(self):
+        """Sold symbols should stay removed even if they appear in buy_items."""
+        prev_items = ["AAPL", "MSFT"]
+        buy_items = ["MSFT", "NVDA"]
+        not_sell_items = ["AAPL"]
+        sell_decisions = {
+            "MSFT": SellDecision(symbol="MSFT", reason=SellReason.TREND, quantity=3.0),
+        }
+
+        result = update_final_items(prev_items, buy_items, not_sell_items, sell_decisions=sell_decisions)
+
+        self.assertEqual(result, ["AAPL", "NVDA"])
+
     @patch("main.logger")
     def test_log_stock_info(self, mock_logger):
         """Test log_stock_info function"""

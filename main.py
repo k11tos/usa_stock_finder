@@ -818,7 +818,7 @@ def is_profit_loss_rate_mismatch(
 def update_final_items(
     prev_items: list[str],
     buy_items: list[str],
-    not_sell_items: list[str],
+    _not_sell_items: list[str],
     sell_decisions: dict[str, SellDecision] | None = None,
 ) -> list[str]:
     """
@@ -833,7 +833,7 @@ def update_final_items(
     Args:
         prev_items (list[str]): List of items previously selected
         buy_items (list[str]): List of items selected to buy
-        not_sell_items (list[str]): List of items selected not to sell
+        _not_sell_items (list[str]): List of items selected not to sell
         sell_decisions (dict[str, SellDecision] | None): Evaluated sell decisions
             for current holdings.
 
@@ -852,6 +852,8 @@ def update_final_items(
     existing_symbols = set(final_items)
 
     for symbol in buy_items:
+        if symbol in sold_items:
+            continue
         if symbol not in existing_symbols:
             final_items.append(symbol)
             existing_symbols.add(symbol)
