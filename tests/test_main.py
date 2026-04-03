@@ -795,6 +795,27 @@ class TestMainFunctions(unittest.TestCase):
 class TestMainOrchestrationSmoke(unittest.TestCase):
     """Conservative orchestration smoke tests for main.main()."""
 
+    def test_holding_trend_exit_signal_does_not_treat_missing_template_as_exit(self):
+        """Missing trend-template keys must not become explicit TREND exits."""
+        finder = MagicMock()
+        finder.check_avsl_sell_signal.return_value = {"AAPL": False, "MISSING": False}
+        finder.has_valid_trend_template.return_value = {"AAPL": True}
+        current_holdings_detail = [{"symbol": "AAPL", "quantity": 1.0}, {"symbol": "MISSING", "quantity": 1.0}]
+
+        with patch("main.evaluate_sell_decisions", return_value={}) as mock_evaluate_sell:
+            main_module._evaluate_and_log_sell_decisions(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings_detail=current_holdings_detail,
+                buy_items=[],
+                not_sell_items=[],
+            )
+
+        self.assertTrue(mock_evaluate_sell.called)
+        self.assertEqual(
+            mock_evaluate_sell.call_args.kwargs["holding_trend_exit_signals"],
+            {"AAPL": False, "MISSING": False},
+        )
+
     def test_main_happy_path_smoke(self):
         """Main orchestration should call critical integration points with mocked dependencies."""
         with ExitStack() as stack:

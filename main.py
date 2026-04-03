@@ -960,7 +960,7 @@ def _evaluate_and_log_sell_decisions(
     holding_trend_template = finder.has_valid_trend_template(StrategyConfig.MARGIN_RELAXED)
     holding_symbols = {holding.get("symbol", "") for holding in current_holdings_detail}
     holding_trend_exit_signals = {
-        symbol: not holding_trend_template.get(symbol, False)
+        symbol: symbol in holding_trend_template and not holding_trend_template[symbol]
         for symbol in holding_symbols
         if symbol
     }
