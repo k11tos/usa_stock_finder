@@ -883,6 +883,7 @@ def _prepare_finder_and_candidates(current_holding_symbols: list[str]) -> tuple[
     buy_items, not_sell_items = select_stocks(finder, correlation)
     entry_symbol_set = set(entry_symbols)
     buy_items = [symbol for symbol in buy_items if symbol in entry_symbol_set]
+    not_sell_items = [symbol for symbol in not_sell_items if symbol in entry_symbol_set]
     return finder, buy_items, not_sell_items
 
 
