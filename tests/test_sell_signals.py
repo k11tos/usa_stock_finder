@@ -810,8 +810,16 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
              patch("sell_signals.update_highest_close", return_value=trailing_config["highest_close"]), \
              patch("sell_signals.record_stop_loss_event") as mock_record_event, \
              patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", trailing_enabled), \
-             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", trailing_config["trailing_min_profit_pct"]), \
-             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", trailing_config["trailing_atr_multiplier"]), \
+             patch.object(
+                 sell_signals.StrategyConfig,
+                 "TRAILING_MIN_PROFIT_PCT",
+                 trailing_config["trailing_min_profit_pct"],
+             ), \
+             patch.object(
+                 sell_signals.StrategyConfig,
+                 "TRAILING_ATR_MULTIPLIER",
+                 trailing_config["trailing_atr_multiplier"],
+             ), \
              patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", trailing_config["trailing_atr_period"]):
             decisions = evaluate_sell_decisions(
                 finder=self.finder,
