@@ -789,24 +789,30 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
         selected_not_sell: list[str],
         avsl_signal: bool,
         trailing_enabled: bool = False,
-        trailing_min_profit_pct: float = 0.05,
-        trailing_atr_multiplier: float = 5.0,
-        trailing_atr_period: int = 14,
-        atr_value: float = 0.0,
-        highest_close: float = 0.0,
+        trailing_overrides: dict[str, float | int] | None = None,
     ):
+        trailing_config: dict[str, float | int] = {
+            "trailing_min_profit_pct": 0.05,
+            "trailing_atr_multiplier": 5.0,
+            "trailing_atr_period": 14,
+            "atr_value": 0.0,
+            "highest_close": 0.0,
+        }
+        if trailing_overrides:
+            trailing_config.update(trailing_overrides)
+
         self.holdings[0]["current_price"] = current_price
         self.finder.current_price = {self.symbol: current_price}
-        self.finder.get_atr.return_value = atr_value
+        self.finder.get_atr.return_value = trailing_config["atr_value"]
 
         with patch("sell_signals.load_trailing_state", return_value={}), \
              patch("sell_signals.save_trailing_state") as mock_save_state, \
-             patch("sell_signals.update_highest_close", return_value=highest_close), \
+             patch("sell_signals.update_highest_close", return_value=trailing_config["highest_close"]), \
              patch("sell_signals.record_stop_loss_event") as mock_record_event, \
              patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", trailing_enabled), \
-             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", trailing_min_profit_pct), \
-             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", trailing_atr_multiplier), \
-             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", trailing_atr_period):
+             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", trailing_config["trailing_min_profit_pct"]), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", trailing_config["trailing_atr_multiplier"]), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", trailing_config["trailing_atr_period"]):
             decisions = evaluate_sell_decisions(
                 finder=self.finder,
                 holdings=self.holdings,
@@ -851,11 +857,13 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
             selected_not_sell=[],
             avsl_signal=False,
             trailing_enabled=True,
-            trailing_min_profit_pct=0.05,
-            trailing_atr_multiplier=5.0,
-            trailing_atr_period=14,
-            atr_value=2.0,
-            highest_close=120.0,
+            trailing_overrides={
+                "trailing_min_profit_pct": 0.05,
+                "trailing_atr_multiplier": 5.0,
+                "trailing_atr_period": 14,
+                "atr_value": 2.0,
+                "highest_close": 120.0,
+            },
         )
 
         self.assertEqual(decision.reason, SellReason.TRAILING)
