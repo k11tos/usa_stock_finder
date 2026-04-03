@@ -141,6 +141,7 @@ class TestSellSignals(unittest.TestCase):
             selected_buy=[],
             selected_not_sell=[],
             avsl_signals={symbol: False},
+            holding_trend_exit_signals={symbol: True},
         )
 
         self.assertEqual(decisions[symbol].reason, SellReason.STOP_LOSS)
@@ -158,7 +159,20 @@ class TestSellSignals(unittest.TestCase):
             avsl_signals={symbol: False},
         )
 
-        # Should trigger trend sell (not in buy/not_sell lists)
+        # Should hold without explicit trend-exit signal
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+
+        # Test case 3: explicit trend-exit should trigger TREND sell
+        decisions = evaluate_sell_decisions(
+            finder=self.mock_finder,
+            holdings=holdings,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signals={symbol: False},
+            holding_trend_exit_signals={symbol: True},
+        )
+
+        # Should trigger trend sell only with explicit signal
         self.assertEqual(decisions[symbol].reason, SellReason.TREND)
 
     def test_avsl_sell_signal(self):
@@ -216,6 +230,7 @@ class TestSellSignals(unittest.TestCase):
             selected_buy=[],
             selected_not_sell=[],
             avsl_signals={symbol: False},
+            holding_trend_exit_signals={symbol: True},
         )
 
         self.assertEqual(decisions[symbol].reason, SellReason.TREND)
@@ -350,6 +365,7 @@ class TestSellSignals(unittest.TestCase):
             selected_buy=[],  # Not in buy list
             selected_not_sell=[],  # Not in hold list
             avsl_signals={symbol: False},  # No AVSL signal
+            holding_trend_exit_signals={symbol: True},
         )
 
         # Should be trend
@@ -434,8 +450,8 @@ class TestSellSignals(unittest.TestCase):
             avsl_signals={symbol: False},
         )
 
-        # Should trigger trend sell (not stop loss due to invalid avg_price)
-        self.assertEqual(decisions[symbol].reason, SellReason.TREND)
+        # Should hold without explicit trend-exit signal
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
 
         # Test case 2: current_price = 0 (should skip stop loss check)
         self.mock_finder.current_price = {symbol: 0.0}
@@ -456,8 +472,8 @@ class TestSellSignals(unittest.TestCase):
             avsl_signals={symbol: False},
         )
 
-        # Should trigger trend sell (not stop loss due to invalid current_price)
-        self.assertEqual(decisions[symbol].reason, SellReason.TREND)
+        # Should hold without explicit trend-exit signal
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
 
         # Test case 3: finder.current_price가 없고 holdings.current_price만 있는 경우
         # 코드는 holding.current_price를 fallback으로 사용하므로 Stop Loss가 정상 동작해야 함
@@ -531,6 +547,7 @@ class TestSellSignals(unittest.TestCase):
                 "TREND_STOCK": False,
                 "HOLD_STOCK": False,
             },
+            holding_trend_exit_signals={"TREND_STOCK": True},
         )
 
         # Verify all decisions
@@ -788,6 +805,7 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
         selected_buy: list[str],
         selected_not_sell: list[str],
         avsl_signal: bool,
+        holding_trend_exit: bool = False,
         trailing_enabled: bool = False,
         trailing_overrides: dict[str, float | int] | None = None,
     ):
@@ -827,17 +845,32 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
                 selected_buy=selected_buy,
                 selected_not_sell=selected_not_sell,
                 avsl_signals={self.symbol: avsl_signal},
+                holding_trend_exit_signals={self.symbol: holding_trend_exit},
             )
 
         return decisions[self.symbol], mock_record_event, mock_save_state
 
-    def test_trend_sell_when_not_in_buy_or_not_sell_lists(self):
-        """Regression: symbol not in selected_buy and selected_not_sell sells as TREND."""
+    def test_stale_holding_does_not_auto_sell_as_trend(self):
+        """Regression: stale holding should hold unless explicit trend-exit exists."""
         decision, mock_record_event, _ = self._run_decision(
             current_price=95.0,
             selected_buy=[],
             selected_not_sell=[],
             avsl_signal=False,
+        )
+
+        self.assertEqual(decision.reason, SellReason.NONE)
+        self.assertEqual(decision.quantity, 0.0)
+        mock_record_event.assert_not_called()
+
+    def test_explicit_holding_trend_exit_sells_as_trend(self):
+        """Regression: explicit holding trend-exit should trigger TREND sell."""
+        decision, mock_record_event, _ = self._run_decision(
+            current_price=95.0,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signal=False,
+            holding_trend_exit=True,
         )
 
         self.assertEqual(decision.reason, SellReason.TREND)
@@ -851,6 +884,7 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
             selected_buy=[],
             selected_not_sell=[],
             avsl_signal=False,
+            holding_trend_exit=True,
         )
 
         self.assertEqual(decision.reason, SellReason.STOP_LOSS)
@@ -864,6 +898,7 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
             selected_buy=[],
             selected_not_sell=[],
             avsl_signal=False,
+            holding_trend_exit=True,
             trailing_enabled=True,
             trailing_overrides={
                 "trailing_min_profit_pct": 0.05,
@@ -886,6 +921,7 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
             selected_buy=[],
             selected_not_sell=[],
             avsl_signal=True,
+            holding_trend_exit=True,
         )
 
         self.assertEqual(decision.reason, SellReason.AVSL)
