@@ -10,6 +10,7 @@ from contextlib import ExitStack
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import main as main_module
 from main import (
     calculate_profit_loss_rate_safely,
     calculate_correlations,
@@ -824,17 +825,17 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
                 "TELEGRAM_CHAT_ID": "fake-chat-id",
             }
             mock_env_get.side_effect = env_values.get
-            mock_fetch_holdings.return_value = ["AAPL"]
+            mock_fetch_holdings.return_value = ["AAPL", "TSLA"]
             mock_read_csv.return_value = ["AAPL", "MSFT"]
 
             mock_finder = MagicMock()
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
-            mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0, "TSLA": 250.0}
             mock_finder_cls.return_value = mock_finder
 
-            mock_calculate_correlations.return_value = {"50": {"AAPL": 55.0, "MSFT": 52.0}}
-            mock_select_stocks.return_value = (["MSFT"], ["AAPL"])
+            mock_calculate_correlations.return_value = {"50": {"AAPL": 55.0, "MSFT": 52.0, "TSLA": 51.0}}
+            mock_select_stocks.return_value = (["MSFT", "TSLA"], ["AAPL", "TSLA"])
             mock_in_cooldown.return_value = False
             mock_fetch_holdings_detail.return_value = [{"symbol": "AAPL", "quantity": 1.0}]
             mock_evaluate_sell.return_value = {}
@@ -852,14 +853,36 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_validate.assert_called_once()
             mock_fetch_holdings.assert_called_once()
             mock_read_csv.assert_called_once()
-            mock_finder_cls.assert_called_once_with(["AAPL", "MSFT"])
+            mock_finder_cls.assert_called_once_with(["AAPL", "MSFT", "TSLA"])
             mock_calculate_correlations.assert_called_once_with(mock_finder)
             mock_select_stocks.assert_called_once()
             mock_evaluate_sell.assert_called_once()
-            mock_calculate_investment.assert_called_once()
+            mock_calculate_investment.assert_called_once_with(["MSFT"], additional_cash=0.0)
             mock_generate_message.assert_called_once()
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
+
+    def test_prepare_finder_candidates_filters_not_sell_to_entry_universe(self):
+        """Holding-only symbols from analysis universe should not leak into returned not_sell_items."""
+        with ExitStack() as stack:
+            mock_read_csv = stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "MSFT"]))
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 60.0, "TSLA": 60.0}}))
+            stack.enter_context(patch("main.select_stocks", return_value=(["AAPL", "TSLA"], ["MSFT", "TSLA"])))
+
+            mock_finder = MagicMock()
+            mock_finder.is_data_valid.return_value = True
+            mock_finder_cls.return_value = mock_finder
+
+            result = main_module._prepare_finder_and_candidates(["TSLA"])  # pylint: disable=protected-access
+
+            self.assertIsNotNone(result)
+            finder, buy_items, not_sell_items = result
+            self.assertIs(finder, mock_finder)
+            self.assertEqual(buy_items, ["AAPL"])
+            self.assertEqual(not_sell_items, ["MSFT"])
+            mock_read_csv.assert_called_once()
+            mock_finder_cls.assert_called_once_with(["AAPL", "MSFT", "TSLA"])
 
     def test_main_filters_cooldown_before_sell_evaluation(self):
         """Cooldown-filtered symbols should not be passed as selected_buy into sell evaluation."""

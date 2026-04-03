@@ -855,10 +855,27 @@ def _load_and_validate_runtime_prerequisites() -> bool:
     return True
 
 
-def _prepare_finder_and_candidates() -> tuple[UsaStockFinder, list[str], list[str]] | None:
+def _prepare_finder_and_candidates(
+    current_holding_symbols: list[str],
+) -> tuple[UsaStockFinder, list[str], list[str]] | None:
     """Prepare stock finder and initial buy/hold candidates."""
-    candidate_stocks = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
-    finder = UsaStockFinder(candidate_stocks)
+    entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
+
+    seen_symbols: set[str] = set()
+    analysis_symbols: list[str] = []
+    for symbol in [*entry_symbols, *current_holding_symbols]:
+        if symbol not in seen_symbols:
+            seen_symbols.add(symbol)
+            analysis_symbols.append(symbol)
+
+    logger.info(
+        "Universe counts - entry=%d holdings=%d analysis=%d",
+        len(entry_symbols),
+        len(current_holding_symbols),
+        len(analysis_symbols),
+    )
+
+    finder = UsaStockFinder(analysis_symbols)
 
     if not finder.is_data_valid():
         logger.error("Invalid data in UsaStockFinder")
@@ -866,6 +883,9 @@ def _prepare_finder_and_candidates() -> tuple[UsaStockFinder, list[str], list[st
 
     correlation = calculate_correlations(finder)
     buy_items, not_sell_items = select_stocks(finder, correlation)
+    entry_symbol_set = set(entry_symbols)
+    buy_items = [symbol for symbol in buy_items if symbol in entry_symbol_set]
+    not_sell_items = [symbol for symbol in not_sell_items if symbol in entry_symbol_set]
     return finder, buy_items, not_sell_items
 
 
@@ -1171,7 +1191,7 @@ def main() -> None:
         logger.error("Failed to fetch holdings due to API error: %s", str(e))
         return
 
-    finder_and_candidates = _prepare_finder_and_candidates()
+    finder_and_candidates = _prepare_finder_and_candidates(us_stock_holdings)
     if not finder_and_candidates:
         return
 
