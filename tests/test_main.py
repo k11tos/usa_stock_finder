@@ -829,6 +829,24 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIn("AVSL", message_text)  # AVSL signal mentioned
         self.assertIn("5,000", message_text)  # Sell amount (formatted)
 
+    def test_generate_telegram_message_reports_stale_b_plan_holdings(self):
+        """Stale holdings should be shown separately from true sell signals."""
+        prev_items = ["AAPL", "OLD1"]
+        buy_items = ["AAPL"]
+        not_sell_items = ["AAPL"]
+        sell_decisions = {
+            "AAPL": SellDecision("AAPL", SellReason.NONE, 0.0),
+            "OLD1": SellDecision("OLD1", SellReason.NONE, 0.0),
+        }
+
+        result = generate_telegram_message(prev_items, buy_items, not_sell_items, None, None, sell_decisions)
+
+        self.assertIsNotNone(result)
+        message_text = "\n".join(result)
+        self.assertIn("보유 유지", message_text)
+        self.assertIn("B-Plan 유지(유니버스 제외): OLD1", message_text)
+        self.assertNotIn("📉 매도 신호", message_text)
+
 
 class TestMainOrchestrationSmoke(unittest.TestCase):
     """Conservative orchestration smoke tests for main.main()."""
