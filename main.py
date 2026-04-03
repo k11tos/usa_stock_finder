@@ -855,7 +855,9 @@ def _load_and_validate_runtime_prerequisites() -> bool:
     return True
 
 
-def _prepare_finder_and_candidates(current_holding_symbols: list[str]) -> tuple[UsaStockFinder, list[str], list[str]] | None:
+def _prepare_finder_and_candidates(
+    current_holding_symbols: list[str],
+) -> tuple[UsaStockFinder, list[str], list[str]] | None:
     """Prepare stock finder and initial buy/hold candidates."""
     entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
 

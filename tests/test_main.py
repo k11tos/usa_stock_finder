@@ -874,7 +874,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_finder.is_data_valid.return_value = True
             mock_finder_cls.return_value = mock_finder
 
-            result = main_module._prepare_finder_and_candidates(["TSLA"])
+            result = main_module._prepare_finder_and_candidates(["TSLA"])  # pylint: disable=protected-access
 
             self.assertIsNotNone(result)
             finder, buy_items, not_sell_items = result
