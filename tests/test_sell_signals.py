@@ -762,5 +762,120 @@ class TestSellSignals(unittest.TestCase):
         self.assertEqual(mock_record_stop_loss_event.call_count, 1)
 
 
+class TestSellDecisionPriorityRegression(unittest.TestCase):
+    """Focused regression tests for sell decision priority and TREND behavior."""
+
+    def setUp(self):
+        self.symbol = "PRIORITY"
+        self.avg_price = 100.0
+        self.quantity = 10.0
+        self.holdings = [
+            {
+                "symbol": self.symbol,
+                "quantity": self.quantity,
+                "avg_price": self.avg_price,
+                "current_price": 95.0,
+            }
+        ]
+        self.finder = MagicMock()
+        self.finder.current_price = {self.symbol: 95.0}
+        self.finder.get_atr.return_value = 0.0
+
+    def _run_decision(
+        self,
+        *,
+        current_price: float,
+        selected_buy: list[str],
+        selected_not_sell: list[str],
+        avsl_signal: bool,
+        trailing_enabled: bool = False,
+        trailing_min_profit_pct: float = 0.05,
+        trailing_atr_multiplier: float = 5.0,
+        trailing_atr_period: int = 14,
+        atr_value: float = 0.0,
+        highest_close: float = 0.0,
+    ):
+        self.holdings[0]["current_price"] = current_price
+        self.finder.current_price = {self.symbol: current_price}
+        self.finder.get_atr.return_value = atr_value
+
+        with patch("sell_signals.load_trailing_state", return_value={}), \
+             patch("sell_signals.save_trailing_state") as mock_save_state, \
+             patch("sell_signals.update_highest_close", return_value=highest_close), \
+             patch("sell_signals.record_stop_loss_event") as mock_record_event, \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", trailing_enabled), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", trailing_min_profit_pct), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", trailing_atr_multiplier), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", trailing_atr_period):
+            decisions = evaluate_sell_decisions(
+                finder=self.finder,
+                holdings=self.holdings,
+                selected_buy=selected_buy,
+                selected_not_sell=selected_not_sell,
+                avsl_signals={self.symbol: avsl_signal},
+            )
+
+        return decisions[self.symbol], mock_record_event, mock_save_state
+
+    def test_trend_sell_when_not_in_buy_or_not_sell_lists(self):
+        """Regression: symbol not in selected_buy and selected_not_sell sells as TREND."""
+        decision, mock_record_event, _ = self._run_decision(
+            current_price=95.0,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signal=False,
+        )
+
+        self.assertEqual(decision.reason, SellReason.TREND)
+        self.assertEqual(decision.quantity, self.quantity)
+        mock_record_event.assert_called_once()
+
+    def test_stop_loss_overrides_trend(self):
+        """Regression: STOP_LOSS remains higher priority than TREND."""
+        decision, mock_record_event, _ = self._run_decision(
+            current_price=80.0,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signal=False,
+        )
+
+        self.assertEqual(decision.reason, SellReason.STOP_LOSS)
+        self.assertEqual(decision.quantity, self.quantity)
+        mock_record_event.assert_called_once()
+
+    def test_trailing_overrides_trend(self):
+        """Regression: TRAILING remains higher priority than TREND."""
+        decision, mock_record_event, mock_save_state = self._run_decision(
+            current_price=108.0,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signal=False,
+            trailing_enabled=True,
+            trailing_min_profit_pct=0.05,
+            trailing_atr_multiplier=5.0,
+            trailing_atr_period=14,
+            atr_value=2.0,
+            highest_close=120.0,
+        )
+
+        self.assertEqual(decision.reason, SellReason.TRAILING)
+        self.assertEqual(decision.quantity, self.quantity)
+        mock_record_event.assert_called_once()
+        mock_save_state.assert_called_once_with({})
+
+    def test_avsl_overrides_trend(self):
+        """Regression: AVSL remains higher priority than TREND."""
+        decision, mock_record_event, _ = self._run_decision(
+            current_price=95.0,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signal=True,
+        )
+
+        self.assertEqual(decision.reason, SellReason.AVSL)
+        self.assertEqual(decision.quantity, self.quantity)
+        mock_record_event.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
