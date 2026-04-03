@@ -167,9 +167,9 @@ class TestMainFunctions(unittest.TestCase):
 
         result = update_final_items(prev_items, buy_items, not_sell_items)
 
-        # Should include all items that meet the criteria
+        # Existing holdings stay and new buys are appended
         expected_items = ["AAPL", "MSFT", "GOOGL", "TSLA"]
-        self.assertEqual(sorted(result), sorted(expected_items))
+        self.assertEqual(result, expected_items)
 
     def test_update_final_items_no_new_items(self):
         """Test update_final_items function with no new items"""
@@ -179,9 +179,9 @@ class TestMainFunctions(unittest.TestCase):
 
         result = update_final_items(prev_items, buy_items, not_sell_items)
 
-        # Should include all items that meet the criteria
+        # No explicit sell and no new buy -> unchanged
         expected_items = ["AAPL", "MSFT", "GOOGL"]
-        self.assertEqual(sorted(result), sorted(expected_items))
+        self.assertEqual(result, expected_items)
 
     def test_update_final_items_empty_inputs(self):
         """Test update_final_items function with empty inputs"""
@@ -193,6 +193,44 @@ class TestMainFunctions(unittest.TestCase):
 
         # Should return empty list
         self.assertEqual(result, [])
+
+    def test_update_final_items_keeps_stale_holding_without_sell_decision(self):
+        """Holdings outside current universe should stay unless explicitly sold."""
+        prev_items = ["AAPL", "OLD1"]
+        buy_items = ["AAPL", "MSFT"]
+        not_sell_items = ["AAPL"]
+
+        result = update_final_items(prev_items, buy_items, not_sell_items, sell_decisions={})
+
+        self.assertEqual(result, ["AAPL", "OLD1", "MSFT"])
+
+    def test_update_final_items_removes_only_symbols_with_real_sell_decisions(self):
+        """Only explicit sell decisions should remove symbols from saved state."""
+        prev_items = ["AAPL", "MSFT", "OLD1", "OLD2"]
+        buy_items = ["AAPL", "NVDA"]
+        not_sell_items = ["AAPL"]
+        sell_decisions = {
+            "MSFT": SellDecision(symbol="MSFT", reason=SellReason.TREND, quantity=5.0),
+            "OLD1": SellDecision(symbol="OLD1", reason=SellReason.NONE, quantity=0.0),
+            "OLD2": SellDecision(symbol="OLD2", reason=SellReason.AVSL, quantity=0.0),
+        }
+
+        result = update_final_items(prev_items, buy_items, not_sell_items, sell_decisions=sell_decisions)
+
+        self.assertEqual(result, ["AAPL", "OLD1", "OLD2", "NVDA"])
+
+    def test_update_final_items_does_not_readd_sold_symbol_from_buy_items(self):
+        """Sold symbols should stay removed even if they appear in buy_items."""
+        prev_items = ["AAPL", "MSFT"]
+        buy_items = ["MSFT", "NVDA"]
+        not_sell_items = ["AAPL"]
+        sell_decisions = {
+            "MSFT": SellDecision(symbol="MSFT", reason=SellReason.TREND, quantity=3.0),
+        }
+
+        result = update_final_items(prev_items, buy_items, not_sell_items, sell_decisions=sell_decisions)
+
+        self.assertEqual(result, ["AAPL", "NVDA"])
 
     @patch("main.logger")
     def test_log_stock_info(self, mock_logger):
