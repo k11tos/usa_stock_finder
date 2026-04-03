@@ -824,17 +824,17 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
                 "TELEGRAM_CHAT_ID": "fake-chat-id",
             }
             mock_env_get.side_effect = env_values.get
-            mock_fetch_holdings.return_value = ["AAPL"]
+            mock_fetch_holdings.return_value = ["AAPL", "TSLA"]
             mock_read_csv.return_value = ["AAPL", "MSFT"]
 
             mock_finder = MagicMock()
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
-            mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0, "TSLA": 250.0}
             mock_finder_cls.return_value = mock_finder
 
-            mock_calculate_correlations.return_value = {"50": {"AAPL": 55.0, "MSFT": 52.0}}
-            mock_select_stocks.return_value = (["MSFT"], ["AAPL"])
+            mock_calculate_correlations.return_value = {"50": {"AAPL": 55.0, "MSFT": 52.0, "TSLA": 51.0}}
+            mock_select_stocks.return_value = (["MSFT", "TSLA"], ["AAPL", "TSLA"])
             mock_in_cooldown.return_value = False
             mock_fetch_holdings_detail.return_value = [{"symbol": "AAPL", "quantity": 1.0}]
             mock_evaluate_sell.return_value = {}
@@ -852,11 +852,11 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_validate.assert_called_once()
             mock_fetch_holdings.assert_called_once()
             mock_read_csv.assert_called_once()
-            mock_finder_cls.assert_called_once_with(["AAPL", "MSFT"])
+            mock_finder_cls.assert_called_once_with(["AAPL", "MSFT", "TSLA"])
             mock_calculate_correlations.assert_called_once_with(mock_finder)
             mock_select_stocks.assert_called_once()
             mock_evaluate_sell.assert_called_once()
-            mock_calculate_investment.assert_called_once()
+            mock_calculate_investment.assert_called_once_with(["MSFT"], additional_cash=0.0)
             mock_generate_message.assert_called_once()
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
