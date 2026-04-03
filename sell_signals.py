@@ -57,20 +57,36 @@ class SellDecision:
     quantity: float  # 0이면 매도 안 함, >0이면 매도 수량
 
 
+def evaluate_holding_trend_exit(
+    symbol: str,
+    selected_buy: List[str],
+    selected_not_sell: List[str],
+    holding_trend_exit_signals: Dict[str, bool] | None = None,
+) -> tuple[bool, bool]:
+    """Return explicit trend-exit 여부 and stale_holding 여부 for an existing holding."""
+    in_buy_list = symbol in selected_buy
+    in_not_sell_list = symbol in selected_not_sell
+    stale_holding = not in_buy_list and not in_not_sell_list
+    should_exit_trend = holding_trend_exit_signals.get(symbol, False) if holding_trend_exit_signals else False
+    return should_exit_trend, stale_holding
+
+
 def evaluate_sell_decisions(
     finder: UsaStockFinder,
     holdings: List[dict[str, Any]],
     selected_buy: List[str],
     selected_not_sell: List[str],
     avsl_signals: Dict[str, bool],
+    holding_trend_exit_signals: Dict[str, bool] | None = None,
 ) -> Dict[str, SellDecision]:
     """
-    Evaluate sell decisions for all holdings using a 3-tier sell signal system.
+    Evaluate sell decisions for all holdings using sell signal priority rules.
 
     The evaluation follows this priority order:
     1. Stop Loss (highest priority): If loss exceeds STOP_LOSS_PCT, sell immediately
-    2. AVSL: If volume support level is broken, sell
-    3. Trend: If stock no longer meets buy/hold criteria, sell
+    2. Trailing stop: If ATR trailing stop is broken, sell
+    3. AVSL: If volume support level is broken, sell
+    4. Trend: If explicit holding trend-exit condition is met, sell
 
     Args:
         finder (UsaStockFinder): Instance containing current stock prices
@@ -81,6 +97,8 @@ def evaluate_sell_decisions(
         selected_buy (List[str]): List of stocks recommended for buying
         selected_not_sell (List[str]): List of stocks recommended to hold (not sell)
         avsl_signals (Dict[str, bool]): Dictionary of AVSL sell signals {symbol: bool}
+        holding_trend_exit_signals (Dict[str, bool] | None): Explicit trend-exit
+            signals for holdings {symbol: bool}
 
     Returns:
         Dict[str, SellDecision]: Dictionary mapping stock symbols to sell decisions
@@ -88,8 +106,9 @@ def evaluate_sell_decisions(
     Note:
         - Stop loss takes absolute priority - if triggered, other conditions are ignored
         - AVSL signals are checked only if stop loss is not triggered
-        - Trend-based sells are checked only if neither stop loss nor AVSL is triggered
-        - Stocks in selected_buy or selected_not_sell are not sold due to trend failure
+        - Trend-based sells are checked only if stop loss/trailing/AVSL are not triggered
+        - Holdings outside selected_buy/selected_not_sell are treated as stale_holding,
+          and are not sold unless explicit holding trend-exit is True
     """
     decisions: Dict[str, SellDecision] = {}
 
@@ -285,25 +304,28 @@ def evaluate_sell_decisions(
             decisions[symbol] = SellDecision(symbol, SellReason.AVSL, quantity)
             continue
 
-        # Tier 3: Trend/Strategy Condition Failure
-        # Only sell if stock is not in buy or hold lists
-        in_buy_list = symbol in selected_buy
-        in_not_sell_list = symbol in selected_not_sell
-
-        logger.debug(
-            "%s: Trend 체크 - in_selected_buy=%s, in_selected_not_sell=%s",
-            symbol,
-            in_buy_list,
-            in_not_sell_list,
+        # Tier 4: Trend/Strategy Condition Failure (explicit holding trend-exit only)
+        should_exit_trend, stale_holding = evaluate_holding_trend_exit(
+            symbol=symbol,
+            selected_buy=selected_buy,
+            selected_not_sell=selected_not_sell,
+            holding_trend_exit_signals=holding_trend_exit_signals,
         )
 
-        if symbol not in selected_buy and symbol not in selected_not_sell:
+        logger.debug(
+            "%s: Trend 체크 - explicit_holding_trend_exit=%s, stale_holding=%s",
+            symbol,
+            should_exit_trend,
+            stale_holding,
+        )
+
+        if should_exit_trend:
             # 쿨다운 이벤트 기록 (손익률 계산)
             trend_loss_pct = (current_price - avg_price) / avg_price if avg_price > 0 and current_price > 0 else None
             record_stop_loss_event(symbol, trend_loss_pct, date.today())
 
             logger.info(
-                "%s: 🟦 TREND 매도 결정 - 트렌드/전략 조건 이탈, quantity=%.2f",
+                "%s: 🟦 TREND 매도 결정 - explicit holding trend-exit signal, quantity=%.2f",
                 symbol,
                 quantity,
             )
