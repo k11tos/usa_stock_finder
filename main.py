@@ -388,7 +388,9 @@ def generate_telegram_message(
             sell_quantities,
         )
 
-    effective_entry_symbol_set = entry_symbol_set if entry_symbol_set is not None else set(buy_items) | set(_not_sell_items)
+    effective_entry_symbol_set = (
+        entry_symbol_set if entry_symbol_set is not None else set(buy_items) | set(_not_sell_items)
+    )
     stale_holdings = _collect_stale_holdings(sell_decisions, effective_entry_symbol_set)
     if stale_holdings:
         message.append("\n🧾 보유 유지:")
