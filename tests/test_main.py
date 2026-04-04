@@ -847,6 +847,49 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIn("B-Plan 유지(유니버스 제외): OLD1", message_text)
         self.assertNotIn("📉 매도 신호", message_text)
 
+    def test_generate_telegram_message_does_not_mark_entry_symbol_as_stale(self):
+        """Holdings in portfolio.csv universe should not be marked stale when filtered out today."""
+        prev_items = ["AAPL", "MSFT"]
+        buy_items = ["AAPL"]
+        not_sell_items: list[str] = []
+        sell_decisions = {
+            "AAPL": SellDecision("AAPL", SellReason.NONE, 0.0),
+            "MSFT": SellDecision("MSFT", SellReason.NONE, 0.0),
+        }
+
+        result = generate_telegram_message(
+            prev_items,
+            buy_items,
+            not_sell_items,
+            None,
+            None,
+            sell_decisions,
+            None,
+            {"AAPL", "MSFT"},
+        )
+
+        self.assertIsNone(result)
+
+    def test_collect_stale_holdings_uses_true_entry_universe(self):
+        """Only holdings outside portfolio.csv should be stale when reason is HOLD."""
+        sell_decisions = {
+            "AAPL": SellDecision("AAPL", SellReason.NONE, 0.0),
+            "OUT": SellDecision("OUT", SellReason.NONE, 0.0),
+        }
+
+        stale = main_module._collect_stale_holdings(sell_decisions, {"AAPL"})  # pylint: disable=protected-access
+        self.assertEqual(stale, ["OUT"])
+
+    def test_collect_stale_holdings_excludes_true_sell_signals(self):
+        """Sell-signaled symbols must stay out of stale-holding classification."""
+        sell_decisions = {
+            "OUT": SellDecision("OUT", SellReason.TREND, 3.0),
+            "OLD": SellDecision("OLD", SellReason.NONE, 0.0),
+        }
+
+        stale = main_module._collect_stale_holdings(sell_decisions, {"AAPL"})  # pylint: disable=protected-access
+        self.assertEqual(stale, ["OLD"])
+
 
 class TestMainOrchestrationSmoke(unittest.TestCase):
     """Conservative orchestration smoke tests for main.main()."""
@@ -864,6 +907,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
                 current_holdings_detail=current_holdings_detail,
                 buy_items=[],
                 not_sell_items=[],
+                entry_symbol_set=set(),
             )
 
         self.assertTrue(mock_evaluate_sell.called)
@@ -954,10 +998,11 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             result = main_module._prepare_finder_and_candidates(["TSLA"])  # pylint: disable=protected-access
 
             self.assertIsNotNone(result)
-            finder, buy_items, not_sell_items = result
+            finder, buy_items, not_sell_items, entry_symbol_set = result
             self.assertIs(finder, mock_finder)
             self.assertEqual(buy_items, ["AAPL"])
             self.assertEqual(not_sell_items, ["MSFT"])
+            self.assertEqual(entry_symbol_set, {"AAPL", "MSFT"})
             mock_read_csv.assert_called_once()
             mock_finder_cls.assert_called_once_with(["AAPL", "MSFT", "TSLA"])
 
