@@ -149,6 +149,35 @@ class TestUsaStockFinder(unittest.TestCase):
 
             self.assertEqual(result, {"SHORT": False})
 
+    def test_get_trend_template_diagnostics_exposes_failed_conditions(self):
+        """diagnostics should expose per-condition booleans and failed condition names."""
+        with patch("yfinance.download") as mock_download:
+            periods = 250
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.linspace(100.0, 200.0, periods)
+            volume = np.linspace(1000.0, 5000.0, periods)
+
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "TREND"): close * 1.01,
+                    ("Low", "TREND"): close * 0.99,
+                    ("Close", "TREND"): close,
+                    ("Volume", "TREND"): volume,
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["TREND"])
+            with patch.object(finder, "compare_volume_price_movement", return_value={"TREND": False}):
+                diagnostics = finder.get_trend_template_diagnostics(margin=0.0)
+
+            self.assertIn("TREND", diagnostics)
+            self.assertFalse(diagnostics["TREND"]["final_result"])
+            self.assertFalse(diagnostics["TREND"]["conditions"]["positive_volume_price_correlation"])
+            self.assertIn("positive_volume_price_correlation", diagnostics["TREND"]["failed_conditions"])
+
     def test_price_volume_correlation_percent(self):
         """check price_volume_correlation_percent function"""
         correlation = self.finder.price_volume_correlation_percent(recent_days=10)

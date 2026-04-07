@@ -898,7 +898,9 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         """Missing trend-template keys must not become explicit TREND exits."""
         finder = MagicMock()
         finder.check_avsl_sell_signal.return_value = {"AAPL": False, "MISSING": False}
-        finder.has_valid_trend_template.return_value = {"AAPL": True}
+        finder.get_trend_template_diagnostics.return_value = {
+            "AAPL": {"final_result": True, "failed_conditions": []}
+        }
         current_holdings_detail = [{"symbol": "AAPL", "quantity": 1.0}, {"symbol": "MISSING", "quantity": 1.0}]
 
         with patch("main.evaluate_sell_decisions", return_value={}) as mock_evaluate_sell:
@@ -914,6 +916,34 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         self.assertEqual(
             mock_evaluate_sell.call_args.kwargs["holding_trend_exit_signals"],
             {"AAPL": False, "MISSING": False},
+        )
+
+    def test_holding_trend_exit_logs_failed_conditions(self):
+        """Trend-exit holdings should log relaxed trend result and failed sub-conditions."""
+        finder = MagicMock()
+        finder.check_avsl_sell_signal.return_value = {"AAPL": False}
+        finder.get_trend_template_diagnostics.return_value = {
+            "AAPL": {
+                "final_result": False,
+                "failed_conditions": ["ma200_increasing", "positive_volume_price_correlation"],
+            }
+        }
+        current_holdings_detail = [{"symbol": "AAPL", "quantity": 1.0}]
+
+        with patch("main.evaluate_sell_decisions", return_value={}), patch("main.logger.info") as mock_logger_info:
+            main_module._evaluate_and_log_sell_decisions(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings_detail=current_holdings_detail,
+                buy_items=[],
+                not_sell_items=[],
+                entry_symbol_set=set(),
+            )
+
+        mock_logger_info.assert_any_call(
+            "%s: TREND exit diagnostics - relaxed_trend=%s, failed_conditions=%s",
+            "AAPL",
+            False,
+            "ma200_increasing,positive_volume_price_correlation",
         )
 
     def test_main_happy_path_smoke(self):
