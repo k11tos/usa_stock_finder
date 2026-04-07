@@ -97,6 +97,7 @@ jobs:
             ${{ secrets.GITHUB_TOKEN }}
             GITHUB_TOKEN_EOF
             docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+            docker compose rm -sf stock || true
             docker compose up -d stock
             docker image prune -f
             echo "== docker compose ps =="
