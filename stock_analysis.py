@@ -433,7 +433,9 @@ class UsaStockFinder:
                 and latest_50_ma[symbol] >= latest_150_ma[symbol] * (1 - margin),
                 "ma50_above_ma200": has_sufficient_ma_data
                 and latest_50_ma[symbol] >= latest_200_ma[symbol] * (1 - margin),
-                "price_above_ma50": has_sufficient_ma_data and current_price[symbol] >= latest_50_ma[symbol] * (1 - margin),
+                "price_above_ma50": (
+                    has_sufficient_ma_data and current_price[symbol] >= latest_50_ma[symbol] * (1 - margin)
+                ),
                 "above_52_week_low_threshold": is_above_low[symbol],
                 "above_52_week_high_threshold": is_above_75_percent_of_high[symbol],
                 "positive_volume_price_correlation": is_increasing_with_volume_and_price[symbol],
