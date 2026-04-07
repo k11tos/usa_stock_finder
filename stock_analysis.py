@@ -15,7 +15,7 @@ Main Classes:
 """
 
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -401,6 +401,11 @@ class UsaStockFinder:
             Dict[str, bool]: True if all trend template conditions are met.
                 False if data is insufficient (will be excluded from analysis).
         """
+        diagnostics = self.get_trend_template_diagnostics(margin)
+        return {symbol: bool(data["final_result"]) for symbol, data in diagnostics.items()}
+
+    def get_trend_template_diagnostics(self, margin: float) -> Dict[str, Dict[str, Any]]:
+        """Evaluate trend-template conditions and return per-symbol diagnostics."""
         is_above_75_percent_of_high = self.is_above_75_percent_of_52_week_high(margin)
         is_above_low = self.is_above_52_week_low(margin)
         latest_50_ma = self.get_moving_averages(StrategyConfig.MA_50_DAYS)
@@ -410,11 +415,33 @@ class UsaStockFinder:
         is_ma_increasing = self.is_200_ma_increasing_recently(margin)
         is_increasing_with_volume_and_price = self.compare_volume_price_movement(StrategyConfig.MA_200_DAYS, margin)
 
-        valid = {}
+        diagnostics: Dict[str, Dict[str, Any]] = {}
         for symbol in self.symbols:
-            # Exclude stocks with insufficient data: MA value of 0 indicates insufficient data
-            if latest_50_ma[symbol] == 0.0 or latest_150_ma[symbol] == 0.0 or latest_200_ma[symbol] == 0.0:
-                valid[symbol] = False
+            has_sufficient_ma_data = not (
+                latest_50_ma[symbol] == 0.0 or latest_150_ma[symbol] == 0.0 or latest_200_ma[symbol] == 0.0
+            )
+
+            conditions = {
+                "price_above_ma150": has_sufficient_ma_data
+                and current_price[symbol] >= latest_150_ma[symbol] * (1 - margin),
+                "price_above_ma200": has_sufficient_ma_data
+                and current_price[symbol] >= latest_200_ma[symbol] * (1 - margin),
+                "ma150_above_ma200": has_sufficient_ma_data
+                and latest_150_ma[symbol] >= latest_200_ma[symbol] * (1 - margin),
+                "ma200_increasing": has_sufficient_ma_data and is_ma_increasing[symbol],
+                "ma50_above_ma150": has_sufficient_ma_data
+                and latest_50_ma[symbol] >= latest_150_ma[symbol] * (1 - margin),
+                "ma50_above_ma200": has_sufficient_ma_data
+                and latest_50_ma[symbol] >= latest_200_ma[symbol] * (1 - margin),
+                "price_above_ma50": has_sufficient_ma_data and current_price[symbol] >= latest_50_ma[symbol] * (1 - margin),
+                "above_52_week_low_threshold": is_above_low[symbol],
+                "above_52_week_high_threshold": is_above_75_percent_of_high[symbol],
+                "positive_volume_price_correlation": is_increasing_with_volume_and_price[symbol],
+            }
+
+            failed_conditions = [name for name, passed in conditions.items() if not passed]
+            if not has_sufficient_ma_data:
+                failed_conditions.insert(0, "has_sufficient_ma_data")
                 logger.debug(
                     "%s: Cannot evaluate trend template due to insufficient data "
                     "(MA50: %.2f, MA150: %.2f, MA200: %.2f)",
@@ -423,67 +450,16 @@ class UsaStockFinder:
                     latest_150_ma[symbol],
                     latest_200_ma[symbol],
                 )
-                continue
 
-            # Evaluate each condition individually
-            cond1 = current_price[symbol] >= latest_150_ma[symbol] * (1 - margin)
-            cond2 = current_price[symbol] >= latest_200_ma[symbol] * (1 - margin)
-            cond3 = latest_150_ma[symbol] >= latest_200_ma[symbol] * (1 - margin)
-            cond4 = is_ma_increasing[symbol]
-            cond5 = latest_50_ma[symbol] >= latest_150_ma[symbol] * (1 - margin)
-            cond6 = latest_50_ma[symbol] >= latest_200_ma[symbol] * (1 - margin)
-            cond7 = current_price[symbol] >= latest_50_ma[symbol] * (1 - margin)
-            cond8 = is_above_low[symbol]
-            cond9 = is_above_75_percent_of_high[symbol]
-            cond10 = is_increasing_with_volume_and_price[symbol]
+            final_result = has_sufficient_ma_data and all(conditions.values())
+            diagnostics[symbol] = {
+                "final_result": final_result,
+                "has_sufficient_ma_data": has_sufficient_ma_data,
+                "conditions": conditions,
+                "failed_conditions": failed_conditions,
+            }
 
-            valid[symbol] = (
-                cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond8 and cond9 and cond10
-            )
-
-            # Detailed log: Evaluation result of each condition
-            logger.debug(
-                "%s: Trend template evaluation (Margin: %.2f%%)\n"
-                "  Current price >= MA150: %s (%.2f >= %.2f)\n"
-                "  Current price >= MA200: %s (%.2f >= %.2f)\n"
-                "  MA150 >= MA200: %s (%.2f >= %.2f)\n"
-                "  MA200 increasing: %s\n"
-                "  MA50 >= MA150: %s (%.2f >= %.2f)\n"
-                "  MA50 >= MA200: %s (%.2f >= %.2f)\n"
-                "  Current price >= MA50: %s (%.2f >= %.2f)\n"
-                "  Increase from 52-week low: %s\n"
-                "  52-week high >= %.0f%%: %s\n"
-                "  Volume-price correlation: %s\n"
-                "  Final result: %s",
-                symbol,
-                margin * 100,
-                cond1,
-                current_price[symbol],
-                latest_150_ma[symbol] * (1 - margin),
-                cond2,
-                current_price[symbol],
-                latest_200_ma[symbol] * (1 - margin),
-                cond3,
-                latest_150_ma[symbol],
-                latest_200_ma[symbol] * (1 - margin),
-                cond4,
-                cond5,
-                latest_50_ma[symbol],
-                latest_150_ma[symbol] * (1 - margin),
-                cond6,
-                latest_50_ma[symbol],
-                latest_200_ma[symbol] * (1 - margin),
-                cond7,
-                current_price[symbol],
-                latest_50_ma[symbol] * (1 - margin),
-                cond8,
-                cond9,
-                StrategyConfig.HIGH_THRESHOLD_RATIO * 100,
-                cond10,
-                valid[symbol],
-            )
-
-        return valid
+        return diagnostics
 
     def _calculate_price_volume_correlation(self, period_data, symbol: str) -> float:
         """

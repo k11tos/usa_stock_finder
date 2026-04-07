@@ -1017,7 +1017,10 @@ def _evaluate_and_log_sell_decisions(
     avsl_signals = finder.check_avsl_sell_signal()
     avsl_count = sum(1 for v in avsl_signals.values() if v)
     logger.info("AVSL 시그널 확인 완료 - AVSL=True인 종목: %d개", avsl_count)
-    holding_trend_template = finder.has_valid_trend_template(StrategyConfig.MARGIN_RELAXED)
+    holding_trend_diagnostics = finder.get_trend_template_diagnostics(StrategyConfig.MARGIN_RELAXED)
+    holding_trend_template = {
+        symbol: bool(diagnostics["final_result"]) for symbol, diagnostics in holding_trend_diagnostics.items()
+    }
     holding_symbols = {holding.get("symbol", "") for holding in current_holdings_detail}
     holding_trend_exit_signals = {
         symbol: symbol in holding_trend_template and not holding_trend_template[symbol]
@@ -1026,6 +1029,15 @@ def _evaluate_and_log_sell_decisions(
     }
     trend_exit_count = sum(1 for should_exit in holding_trend_exit_signals.values() if should_exit)
     logger.info("보유종목 TREND exit 시그널 확인 완료 - trend_exit=True인 종목: %d개", trend_exit_count)
+    for symbol, should_exit in sorted(holding_trend_exit_signals.items()):
+        if should_exit:
+            diagnostics = holding_trend_diagnostics.get(symbol, {})
+            logger.info(
+                "%s: TREND exit diagnostics - relaxed_trend=%s, failed_conditions=%s",
+                symbol,
+                diagnostics.get("final_result", False),
+                ",".join(diagnostics.get("failed_conditions", [])),
+            )
 
     sell_decisions = evaluate_sell_decisions(
         finder=finder,
