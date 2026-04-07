@@ -939,8 +939,12 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
                 entry_symbol_set=set(),
             )
 
-        logged_messages = " ".join(str(call.args[0]) for call in mock_logger_info.call_args_list if call.args)
-        self.assertIn("TREND exit diagnostics", logged_messages)
+        mock_logger_info.assert_any_call(
+            "%s: TREND exit diagnostics - relaxed_trend=%s, failed_conditions=%s",
+            "AAPL",
+            False,
+            "ma200_increasing,positive_volume_price_correlation",
+        )
 
     def test_main_happy_path_smoke(self):
         """Main orchestration should call critical integration points with mocked dependencies."""
