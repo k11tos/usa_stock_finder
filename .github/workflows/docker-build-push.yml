@@ -152,18 +152,6 @@ jobs:
         if: success() && github.event_name != 'pull_request'
         uses: rtCamp/action-slack-notify@v2
         continue-on-error: true  # Slack 알림 실패해도 워크플로우는 계속 진행
-        with:
-          status: custom
-          fields: 'repo,message,commit,author,action,eventName,ref,workflow,job,took'
-          custom_payload: |
-            {
-              "text": ":white_check_mark: *USA Stock Finder CI/CD 성공* :rocket:\n \
-              리포지토리: ${{ github.repository }}\n \
-              워크플로우: ${{ github.workflow }} #${{ github.run_number }}\n \
-              커밋: `${{ github.sha }}`\n \
-              작성자: ${{ github.actor }}\n \
-              이미지: `${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest`"
-            }
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
 
@@ -171,16 +159,5 @@ jobs:
         if: failure()
         uses: rtCamp/action-slack-notify@v2
         continue-on-error: true  # Slack 알림 실패해도 워크플로우는 계속 진행
-        with:
-          status: custom
-          fields: 'repo,message,commit,author,action,eventName,ref,workflow,job,took'
-          custom_payload: |
-            {
-              "text": ":x: *USA Stock Finder CI/CD 실패* :fire:\n \
-              리포지토리: ${{ github.repository }}\n \
-              워크플로우: ${{ github.workflow }} #${{ github.run_number }}\n \
-              커밋: `${{ github.sha }}`\n \
-              작성자: ${{ github.actor }}"
-            }
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
