@@ -100,10 +100,10 @@ jobs:
             docker compose rm -sf stock || true
             docker compose up -d stock
             docker image prune -f
-            echo "== docker compose ps =="
-            docker compose ps
+            echo "== docker compose ps -a =="
+            docker compose ps -a
 
-            container_id=$(docker compose ps -q stock)
+            container_id=$(docker compose ps -aq stock)
             if [ -z "$container_id" ]; then
               echo "ERROR: stock service container was not created."
               exit 1
