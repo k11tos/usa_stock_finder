@@ -91,11 +91,13 @@ jobs:
           set -eu
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
+          # Keep strict host key verification by pinning the current host key.
           ssh-keyscan -p "${{ secrets.PI_PORT }}" "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy to Raspberry Pi
         run: |
+          set -eu
           ssh -p "${{ secrets.PI_PORT }}" "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'bash -se' <<'REMOTE_SCRIPT'
           set -eu
           cd ${{ secrets.PI_PROJECT_PATH }}
