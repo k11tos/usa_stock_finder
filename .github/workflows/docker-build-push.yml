@@ -150,14 +150,20 @@ jobs:
       # 주의: secrets.SLACK_WEBHOOK_URL을 GitHub 저장소 Settings > Secrets에 추가해야 합니다
       - name: Slack Notification (Success)
         if: success() && github.event_name != 'pull_request'
-        uses: rtCamp/action-slack-notify@v2
+        uses: slackapi/slack-github-action@v3
         continue-on-error: true  # Slack 알림 실패해도 워크플로우는 계속 진행
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: "✅ Docker build/push/deploy succeeded for `${{ github.repository }}` on `${{ github.ref_name }}`."
 
       - name: Slack Notification (Failure)
         if: failure()
-        uses: rtCamp/action-slack-notify@v2
+        uses: slackapi/slack-github-action@v3
         continue-on-error: true  # Slack 알림 실패해도 워크플로우는 계속 진행
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: "❌ Docker build/push/deploy failed for `${{ github.repository }}` on `${{ github.ref_name }}`. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
