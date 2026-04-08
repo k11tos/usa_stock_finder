@@ -81,70 +81,79 @@ jobs:
     # 프로덕션 배포는 main 브랜치 수동 실행에서만 허용
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     steps:
-      - name: Deploy to Raspberry Pi
-        uses: appleboy/ssh-action@v1
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          host: ${{ secrets.PI_HOST }}
-          username: ${{ secrets.PI_USER }}
-          key: ${{ secrets.PI_SSH_KEY }}
-          port: ${{ secrets.PI_PORT }}
-          script: |
-            set -eu
-            cd ${{ secrets.PI_PROJECT_PATH }}
-            docker --version
-            docker compose version
-            docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }} <<GITHUB_TOKEN_EOF
-            ${{ secrets.GITHUB_TOKEN }}
-            GITHUB_TOKEN_EOF
-            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
-            docker compose rm -sf stock || true
-            docker compose up -d stock
-            docker image prune -f
-            echo "== docker compose ps -a =="
-            docker compose ps -a
+          ssh-private-key: ${{ secrets.PI_SSH_KEY }}
 
-            container_id=$(docker compose ps -aq stock)
-            if [ -z "$container_id" ]; then
-              echo "ERROR: stock service container was not created."
+      - name: Add Raspberry Pi host key
+        run: |
+          set -eu
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "${{ secrets.PI_PORT }}" "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy to Raspberry Pi
+        run: |
+          ssh -p "${{ secrets.PI_PORT }}" "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'bash -se' <<'REMOTE_SCRIPT'
+          set -eu
+          cd ${{ secrets.PI_PROJECT_PATH }}
+          docker --version
+          docker compose version
+          docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }} <<GITHUB_TOKEN_EOF
+          ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN_EOF
+          docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          docker compose rm -sf stock || true
+          docker compose up -d stock
+          docker image prune -f
+          echo "== docker compose ps -a =="
+          docker compose ps -a
+
+          container_id=$(docker compose ps -aq stock)
+          if [ -z "$container_id" ]; then
+            echo "ERROR: stock service container was not created."
+            exit 1
+          fi
+
+          container_state=$(docker inspect -f '{{.State.Status}}' "$container_id")
+          health_state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
+          exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
+          echo "stock container state: $container_state (exit_code=$exit_code, health=$health_state)"
+          # main.py may exit immediately outside the execution window, so exited(0) is a valid success.
+          case "$container_state" in
+            running)
+              echo "stock service is running."
+              ;;
+            exited)
+              if [ "$exit_code" -eq 0 ]; then
+                echo "stock service finished with exit code 0 (valid batch success)."
+              else
+                echo "ERROR: stock service exited with non-zero code: $exit_code"
+                docker logs --tail 100 "$container_id" || true
+                exit 1
+              fi
+              ;;
+            restarting|dead|created)
+              echo "ERROR: stock service is in invalid post-deploy state: $container_state"
+              docker logs --tail 100 "$container_id" || true
               exit 1
-            fi
+              ;;
+            *)
+              echo "ERROR: stock service is in unexpected state: $container_state"
+              docker logs --tail 100 "$container_id" || true
+              exit 1
+              ;;
+          esac
 
-            container_state=$(docker inspect -f '{{.State.Status}}' "$container_id")
-            health_state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
-            exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
-            echo "stock container state: $container_state (exit_code=$exit_code, health=$health_state)"
-            # main.py may exit immediately outside the execution window, so exited(0) is a valid success.
-            case "$container_state" in
-              running)
-                echo "stock service is running."
-                ;;
-              exited)
-                if [ "$exit_code" -eq 0 ]; then
-                  echo "stock service finished with exit code 0 (valid batch success)."
-                else
-                  echo "ERROR: stock service exited with non-zero code: $exit_code"
-                  docker logs --tail 100 "$container_id" || true
-                  exit 1
-                fi
-                ;;
-              restarting|dead|created)
-                echo "ERROR: stock service is in invalid post-deploy state: $container_state"
-                docker logs --tail 100 "$container_id" || true
-                exit 1
-                ;;
-              *)
-                echo "ERROR: stock service is in unexpected state: $container_state"
-                docker logs --tail 100 "$container_id" || true
-                exit 1
-                ;;
-            esac
+          echo "stock container health: $health_state"
 
-            echo "stock container health: $health_state"
-
-            echo "== recent stock service logs =="
-            docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
-            docker ps
-            docker logout ${{ env.REGISTRY }}
+          echo "== recent stock service logs =="
+          docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
+          docker ps
+          docker logout ${{ env.REGISTRY }}
+          REMOTE_SCRIPT
 
       # 선택사항: Slack 알림 (SLACK_WEBHOOK_URL secret이 설정된 경우에만)
       # 주의: secrets.SLACK_WEBHOOK_URL을 GitHub 저장소 Settings > Secrets에 추가해야 합니다
