@@ -8,6 +8,7 @@ import pandas as pd
 
 from backtests import data_loader
 from backtests.engine import BacktestEngineOptions, run_backtest
+from backtests.report import build_run_tag, save_backtest_outputs
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -36,7 +37,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--start-date", help="Inclusive start date filter (YYYY-MM-DD).")
     parser.add_argument("--end-date", help="Inclusive end date filter (YYYY-MM-DD).")
     parser.add_argument("--top-n", type=int, default=5, help="Number of symbols selected per rebalance.")
+    parser.add_argument("--save-output", action="store_true", help="Persist backtest artifacts to disk.")
+    parser.add_argument(
+        "--output-root",
+        default="outputs/backtests",
+        help="Root directory for saved backtest artifacts (used with --save-output).",
+    )
     return parser.parse_args(argv)
+
 
 def _to_utc_day(value: pd.Timestamp) -> object:
     ts = pd.Timestamp(value)
@@ -112,6 +120,24 @@ def main(argv: list[str] | None = None) -> int:
             ]
         )
     )
+
+    if args.save_output:
+        run_tag = build_run_tag(
+            universe=args.universe,
+            entry=args.entry,
+            exit_rule=args.exit_rule,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        saved_paths = save_backtest_outputs(
+            trades=result["trades"],
+            equity_curve=result["equity_curve"],
+            metrics=metrics,
+            candidates=candidates_df,
+            run_tag=run_tag,
+            output_root=args.output_root,
+        )
+        print(f"saved_outputs={saved_paths['run_dir']}")
     return 0
 
 

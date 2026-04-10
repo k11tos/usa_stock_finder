@@ -35,6 +35,8 @@ def test_parse_args_maps_required_and_optional_values() -> None:
     assert args.start_date == "2025-01-01"
     assert args.end_date == "2025-12-31"
     assert args.top_n == 3
+    assert args.save_output is False
+    assert args.output_root == "outputs/backtests"
 
 
 def test_apply_date_filter_handles_timezone_qualified_timestamps() -> None:
