@@ -38,6 +38,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--top-n", type=int, default=5, help="Number of symbols selected per rebalance.")
     return parser.parse_args(argv)
 
+def _to_utc_day(value: pd.Timestamp) -> object:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.date()
+
 
 def _apply_date_filter(
     frame: pd.DataFrame,
@@ -46,13 +54,15 @@ def _apply_date_filter(
     end_date: pd.Timestamp | None,
 ) -> pd.DataFrame:
     filtered = frame.copy(deep=True)
-    parsed = pd.to_datetime(filtered[column], errors="coerce")
+    parsed_days = pd.to_datetime(filtered[column], errors="coerce", utc=True).dt.date
 
     if start_date is not None:
-        filtered = filtered.loc[parsed >= start_date]
-        parsed = parsed.loc[filtered.index]
+        start_day = _to_utc_day(start_date)
+        filtered = filtered.loc[parsed_days >= start_day]
+        parsed_days = parsed_days.loc[filtered.index]
     if end_date is not None:
-        filtered = filtered.loc[parsed <= end_date]
+        end_day = _to_utc_day(end_date)
+        filtered = filtered.loc[parsed_days <= end_day]
 
     return filtered
 
@@ -60,8 +70,8 @@ def _apply_date_filter(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    start_date = pd.to_datetime(args.start_date) if args.start_date else None
-    end_date = pd.to_datetime(args.end_date) if args.end_date else None
+    start_date = pd.to_datetime(args.start_date, utc=True) if args.start_date else None
+    end_date = pd.to_datetime(args.end_date, utc=True) if args.end_date else None
 
     if start_date is not None and end_date is not None and start_date > end_date:
         raise ValueError("--start-date must be less than or equal to --end-date.")
