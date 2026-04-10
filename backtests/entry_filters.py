@@ -31,8 +31,8 @@ def apply_trend_relaxed(universe_df: pd.DataFrame) -> pd.DataFrame:
 
     mask = (
         (universe_df["close"] > universe_df["sma50"])
-        & (universe_df["close"] > universe_df["sma150"])
-        & (universe_df["sma50"] > universe_df["sma200"])
+        & (universe_df["sma50"] > universe_df["sma150"])
+        & (universe_df["sma150"] > universe_df["sma200"])
         & (universe_df["close"] >= 1.15 * universe_df["low_52w"])
         & (universe_df["close"] >= 0.65 * universe_df["high_52w"])
         & (universe_df["rs_score"] >= 60)

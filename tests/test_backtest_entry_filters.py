@@ -58,6 +58,16 @@ def candidate_snapshot_df() -> pd.DataFrame:
                 "low_52w": 50.0,
                 "rs_score": 85.0,
             },
+            {
+                "symbol": "EEE",
+                "close": 90.0,
+                "sma50": 80.0,
+                "sma150": 82.0,
+                "sma200": 70.0,
+                "high_52w": 120.0,
+                "low_52w": 70.0,
+                "rs_score": 80.0,
+            },
         ]
     )
 
@@ -77,7 +87,8 @@ def test_relaxed_basic_strict_hierarchy(candidate_snapshot_df: pd.DataFrame) -> 
     basic = apply_trend_basic(candidate_snapshot_df)
     strict = apply_trend_strict(candidate_snapshot_df)
 
-    assert len(relaxed) >= len(basic) >= len(strict)
+    assert len(relaxed) >= len(basic)
+    assert len(basic) >= len(strict)
 
     relaxed_symbols = set(relaxed["symbol"])
     basic_symbols = set(basic["symbol"])
@@ -85,6 +96,13 @@ def test_relaxed_basic_strict_hierarchy(candidate_snapshot_df: pd.DataFrame) -> 
 
     assert basic_symbols.issubset(relaxed_symbols)
     assert strict_symbols.issubset(basic_symbols)
+
+
+def test_relaxed_rejects_non_bullish_ma_stack(candidate_snapshot_df: pd.DataFrame) -> None:
+    """Relaxed should still reject rows where sma50 <= sma150."""
+    relaxed = apply_trend_relaxed(candidate_snapshot_df)
+
+    assert "EEE" not in set(relaxed["symbol"])
 
 
 @pytest.mark.parametrize(
