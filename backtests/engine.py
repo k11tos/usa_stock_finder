@@ -41,6 +41,17 @@ class _OpenPosition:
     highest_close: float
 
 
+@dataclass(slots=True)
+class _EngineOptions:
+    top_n: int
+    rank_col: str
+    starting_equity: float
+    hold_days: int
+    stop_loss_pct: float
+    trailing_pct: float
+    exit_rule: str
+
+
 _UNIVERSE_BUILDERS: dict[str, UniverseBuilder] = {
     "quantus": build_quantus_universe,
     "quantus_minervini": build_quantus_minervini_universe,
@@ -70,36 +81,28 @@ def _rebalance_dates(candidates: pd.DataFrame) -> list[date]:
     if snapshot_dates.isna().any():
         raise ValueError("candidates contains invalid values in 'asof_date'.")
 
-    date_df = pd.DataFrame({"snapshot_date": snapshot_dates.dt.date})
-    date_df["month"] = snapshot_dates.dt.to_period("M").astype(str)
-
-    first_by_month = (
-        date_df.drop_duplicates(subset=["month"], keep="first")
-        .sort_values(by="snapshot_date")
-        .reset_index(drop=True)
+    date_df = pd.DataFrame({"snapshot_date": snapshot_dates.dt.date, "month": snapshot_dates.dt.to_period("M")})
+    earliest_by_month = (
+        date_df.groupby("month", sort=True)["snapshot_date"].min().sort_values().reset_index(drop=True)
     )
-    return list(first_by_month["snapshot_date"])
+    return list(earliest_by_month)
 
 
 def _evaluate_exit(
     position: _OpenPosition,
     row: pd.Series,
-    *,
-    exit_name: str,
-    hold_days: int,
-    stop_loss_pct: float,
-    trailing_pct: float,
+    options: _EngineOptions,
 ) -> tuple[bool, str | None]:
-    if exit_name == "hold_fixed":
-        return should_exit_hold_fixed(position, row, hold_days=hold_days)
-    if exit_name == "stop_loss":
-        return should_exit_stop_loss(position, row, stop_loss_pct=stop_loss_pct)
-    if exit_name == "trailing":
-        return should_exit_trailing(position, row, trailing_pct=trailing_pct)
-    if exit_name == "trend_exit":
+    if options.exit_rule == "hold_fixed":
+        return should_exit_hold_fixed(position, row, hold_days=options.hold_days)
+    if options.exit_rule == "stop_loss":
+        return should_exit_stop_loss(position, row, stop_loss_pct=options.stop_loss_pct)
+    if options.exit_rule == "trailing":
+        return should_exit_trailing(position, row, trailing_pct=options.trailing_pct)
+    if options.exit_rule == "trend_exit":
         return should_exit_trend(position, row)
 
-    raise ValueError(f"Unsupported exit strategy: {exit_name!r}.")
+    raise ValueError(f"Unsupported exit strategy: {options.exit_rule!r}.")
 
 
 def _choose_entry_price(candidate_row: pd.Series, daily_rows: pd.DataFrame) -> float:
@@ -116,7 +119,7 @@ def run_backtest(
     price_history: pd.DataFrame,
     universe: str = "quantus",
     entry: str = "none",
-    exit: str = "hold_fixed",
+    exit_rule: str = "hold_fixed",
     top_n: int = 5,
     rank_col: str = "rs_score",
     starting_equity: float = 100_000.0,
@@ -136,10 +139,20 @@ def run_backtest(
         raise ValueError(f"Unsupported universe: {universe!r}.")
     if entry not in _ENTRY_FILTERS:
         raise ValueError(f"Unsupported entry filter: {entry!r}.")
-    if exit not in _SUPPORTED_EXITS:
-        raise ValueError(f"Unsupported exit strategy: {exit!r}.")
+    if exit_rule not in _SUPPORTED_EXITS:
+        raise ValueError(f"Unsupported exit strategy: {exit_rule!r}.")
     if top_n <= 0:
         raise ValueError("top_n must be positive.")
+
+    options = _EngineOptions(
+        top_n=top_n,
+        rank_col=rank_col,
+        starting_equity=starting_equity,
+        hold_days=hold_days,
+        stop_loss_pct=stop_loss_pct,
+        trailing_pct=trailing_pct,
+        exit_rule=exit_rule,
+    )
 
     candidate_df = candidates.copy(deep=True)
     price_df = _normalize_trade_dates(price_history)
@@ -158,12 +171,12 @@ def run_backtest(
         if filtered_df.empty:
             continue
 
-        if rank_col in filtered_df.columns:
-            ranked_df = filtered_df.sort_values(by=rank_col, ascending=False)
+        if options.rank_col in filtered_df.columns:
+            ranked_df = filtered_df.sort_values(by=options.rank_col, ascending=False)
         else:
             ranked_df = filtered_df.sort_values(by="symbol", ascending=True)
 
-        selected_df = ranked_df.head(top_n).copy(deep=True)
+        selected_df = ranked_df.head(options.top_n).copy(deep=True)
 
         for _, candidate_row in selected_df.iterrows():
             symbol = candidate_row["symbol"]
@@ -185,17 +198,9 @@ def run_backtest(
             trade_closed = False
             for _, daily_row in symbol_rows.iterrows():
                 daily_close = float(daily_row["close"])
-                if daily_close > position.highest_close:
-                    position.highest_close = daily_close
+                position.highest_close = max(position.highest_close, daily_close)
 
-                should_exit, _reason = _evaluate_exit(
-                    position,
-                    daily_row,
-                    exit_name=exit,
-                    hold_days=hold_days,
-                    stop_loss_pct=stop_loss_pct,
-                    trailing_pct=trailing_pct,
-                )
+                should_exit, _reason = _evaluate_exit(position, daily_row, options)
                 if not should_exit:
                     continue
 
@@ -227,6 +232,11 @@ def run_backtest(
                 )
             )
 
+    ordered_trade_results = sorted(
+        all_trade_results,
+        key=lambda trade: (trade.exit_date, trade.entry_date, trade.symbol),
+    )
+
     trades_df = pd.DataFrame(
         [
             {
@@ -238,12 +248,18 @@ def run_backtest(
                 "quantity": trade.quantity,
                 "pnl": trade.pnl,
             }
-            for trade in all_trade_results
+            for trade in ordered_trade_results
         ]
     )
 
-    equity_curve = calculate_equity_curve(all_trade_results, starting_equity=starting_equity)
-    metrics = build_summary_metrics(all_trade_results, starting_equity=starting_equity)
+    equity_curve = calculate_equity_curve(
+        ordered_trade_results,
+        starting_equity=options.starting_equity,
+    )
+    metrics = build_summary_metrics(
+        ordered_trade_results,
+        starting_equity=options.starting_equity,
+    )
 
     return {
         "trades": trades_df,
@@ -252,12 +268,12 @@ def run_backtest(
         "config": {
             "universe": universe,
             "entry": entry,
-            "exit": exit,
-            "top_n": top_n,
-            "rank_col": rank_col,
-            "starting_equity": starting_equity,
-            "hold_days": hold_days,
-            "stop_loss_pct": stop_loss_pct,
-            "trailing_pct": trailing_pct,
+            "exit_rule": options.exit_rule,
+            "top_n": options.top_n,
+            "rank_col": options.rank_col,
+            "starting_equity": options.starting_equity,
+            "hold_days": options.hold_days,
+            "stop_loss_pct": options.stop_loss_pct,
+            "trailing_pct": options.trailing_pct,
         },
     }

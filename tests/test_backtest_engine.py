@@ -73,7 +73,7 @@ def test_run_backtest_smoke_returns_core_artifacts() -> None:
         price_history=price_history,
         universe="quantus_minervini",
         entry="trend_basic",
-        exit="hold_fixed",
+        exit_rule="hold_fixed",
         top_n=1,
         hold_days=5,
         starting_equity=10_000.0,
@@ -84,3 +84,78 @@ def test_run_backtest_smoke_returns_core_artifacts() -> None:
     assert isinstance(result["equity_curve"], list)
     assert isinstance(result["metrics"], dict)
     assert not result["trades"].empty
+
+
+def test_rebalance_dates_pick_earliest_snapshot_per_month_when_unsorted() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-20", "symbol": "LATE_JAN", "close": 10.0, "rs_score": 90},
+            {"asof_date": "2025-02-20", "symbol": "LATE_FEB", "close": 20.0, "rs_score": 95},
+            {"asof_date": "2025-01-03", "symbol": "EARLY_JAN", "close": 30.0, "rs_score": 80},
+            {"asof_date": "2025-02-04", "symbol": "EARLY_FEB", "close": 40.0, "rs_score": 85},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-03", "symbol": "EARLY_JAN", "close": 31.0},
+            {"date": "2025-01-10", "symbol": "EARLY_JAN", "close": 32.0},
+            {"date": "2025-02-04", "symbol": "EARLY_FEB", "close": 41.0},
+            {"date": "2025-02-10", "symbol": "EARLY_FEB", "close": 42.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        top_n=1,
+        rank_col="symbol",
+        hold_days=1,
+    )
+
+    assert list(result["trades"]["symbol"]) == ["EARLY_JAN", "EARLY_FEB"]
+
+
+def test_metrics_and_equity_curve_use_chronologically_sorted_trades() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "asof_date": "2025-01-02",
+                "symbol": "AAA",
+                "close": 100.0,
+                "rs_score": 90,
+            },
+            {
+                "asof_date": "2025-02-03",
+                "symbol": "BBB",
+                "close": 100.0,
+                "rs_score": 90,
+            },
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-03-01", "symbol": "AAA", "close": 110.0},
+            {"date": "2025-02-03", "symbol": "BBB", "close": 100.0},
+            {"date": "2025-02-04", "symbol": "BBB", "close": 95.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        top_n=1,
+        hold_days=1,
+        starting_equity=100.0,
+    )
+
+    trades = result["trades"]
+    assert list(trades["symbol"]) == ["BBB", "AAA"]
+    assert result["equity_curve"] == [100.0, 95.0, 105.0]
+    assert result["metrics"]["total_pnl"] == 5.0
