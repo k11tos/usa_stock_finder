@@ -42,7 +42,7 @@ class _OpenPosition:
 
 
 @dataclass(slots=True)
-class _EngineOptions:
+class BacktestEngineOptions:
     top_n: int
     rank_col: str
     starting_equity: float
@@ -91,7 +91,7 @@ def _rebalance_dates(candidates: pd.DataFrame) -> list[date]:
 def _evaluate_exit(
     position: _OpenPosition,
     row: pd.Series,
-    options: _EngineOptions,
+    options: BacktestEngineOptions,
 ) -> tuple[bool, str | None]:
     if options.exit_rule == "hold_fixed":
         return should_exit_hold_fixed(position, row, hold_days=options.hold_days)
@@ -120,12 +120,7 @@ def run_backtest(
     universe: str = "quantus",
     entry: str = "none",
     exit_rule: str = "hold_fixed",
-    top_n: int = 5,
-    rank_col: str = "rs_score",
-    starting_equity: float = 100_000.0,
-    hold_days: int = 20,
-    stop_loss_pct: float = 0.08,
-    trailing_pct: float = 0.10,
+    options: BacktestEngineOptions | None = None,
 ) -> dict[str, object]:
     """Run a conservative layered backtest and return core artifacts.
 
@@ -141,16 +136,24 @@ def run_backtest(
         raise ValueError(f"Unsupported entry filter: {entry!r}.")
     if exit_rule not in _SUPPORTED_EXITS:
         raise ValueError(f"Unsupported exit strategy: {exit_rule!r}.")
-    if top_n <= 0:
+    resolved_options = options or BacktestEngineOptions(
+        top_n=5,
+        rank_col="rs_score",
+        starting_equity=100_000.0,
+        hold_days=20,
+        stop_loss_pct=0.08,
+        trailing_pct=0.10,
+        exit_rule=exit_rule,
+    )
+    if resolved_options.top_n <= 0:
         raise ValueError("top_n must be positive.")
-
-    options = _EngineOptions(
-        top_n=top_n,
-        rank_col=rank_col,
-        starting_equity=starting_equity,
-        hold_days=hold_days,
-        stop_loss_pct=stop_loss_pct,
-        trailing_pct=trailing_pct,
+    resolved_options = BacktestEngineOptions(
+        top_n=resolved_options.top_n,
+        rank_col=resolved_options.rank_col,
+        starting_equity=resolved_options.starting_equity,
+        hold_days=resolved_options.hold_days,
+        stop_loss_pct=resolved_options.stop_loss_pct,
+        trailing_pct=resolved_options.trailing_pct,
         exit_rule=exit_rule,
     )
 
@@ -171,12 +174,12 @@ def run_backtest(
         if filtered_df.empty:
             continue
 
-        if options.rank_col in filtered_df.columns:
-            ranked_df = filtered_df.sort_values(by=options.rank_col, ascending=False)
+        if resolved_options.rank_col in filtered_df.columns:
+            ranked_df = filtered_df.sort_values(by=resolved_options.rank_col, ascending=False)
         else:
             ranked_df = filtered_df.sort_values(by="symbol", ascending=True)
 
-        selected_df = ranked_df.head(options.top_n).copy(deep=True)
+        selected_df = ranked_df.head(resolved_options.top_n).copy(deep=True)
 
         for _, candidate_row in selected_df.iterrows():
             symbol = candidate_row["symbol"]
@@ -200,7 +203,7 @@ def run_backtest(
                 daily_close = float(daily_row["close"])
                 position.highest_close = max(position.highest_close, daily_close)
 
-                should_exit, _reason = _evaluate_exit(position, daily_row, options)
+                should_exit, _reason = _evaluate_exit(position, daily_row, resolved_options)
                 if not should_exit:
                     continue
 
@@ -254,11 +257,11 @@ def run_backtest(
 
     equity_curve = calculate_equity_curve(
         ordered_trade_results,
-        starting_equity=options.starting_equity,
+        starting_equity=resolved_options.starting_equity,
     )
     metrics = build_summary_metrics(
         ordered_trade_results,
-        starting_equity=options.starting_equity,
+        starting_equity=resolved_options.starting_equity,
     )
 
     return {
@@ -268,12 +271,12 @@ def run_backtest(
         "config": {
             "universe": universe,
             "entry": entry,
-            "exit_rule": options.exit_rule,
-            "top_n": options.top_n,
-            "rank_col": options.rank_col,
-            "starting_equity": options.starting_equity,
-            "hold_days": options.hold_days,
-            "stop_loss_pct": options.stop_loss_pct,
-            "trailing_pct": options.trailing_pct,
+            "exit_rule": resolved_options.exit_rule,
+            "top_n": resolved_options.top_n,
+            "rank_col": resolved_options.rank_col,
+            "starting_equity": resolved_options.starting_equity,
+            "hold_days": resolved_options.hold_days,
+            "stop_loss_pct": resolved_options.stop_loss_pct,
+            "trailing_pct": resolved_options.trailing_pct,
         },
     }

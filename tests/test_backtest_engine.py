@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from backtests.engine import run_backtest
+from backtests.engine import BacktestEngineOptions, run_backtest
 
 
 def test_run_backtest_smoke_returns_core_artifacts() -> None:
@@ -74,9 +74,15 @@ def test_run_backtest_smoke_returns_core_artifacts() -> None:
         universe="quantus_minervini",
         entry="trend_basic",
         exit_rule="hold_fixed",
-        top_n=1,
-        hold_days=5,
-        starting_equity=10_000.0,
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=10_000.0,
+            hold_days=5,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
     )
 
     assert {"trades", "equity_curve", "metrics", "config"}.issubset(result.keys())
@@ -110,9 +116,15 @@ def test_rebalance_dates_pick_earliest_snapshot_per_month_when_unsorted() -> Non
         universe="quantus",
         entry="none",
         exit_rule="hold_fixed",
-        top_n=1,
-        rank_col="symbol",
-        hold_days=1,
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="symbol",
+            starting_equity=100_000.0,
+            hold_days=1,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
     )
 
     assert list(result["trades"]["symbol"]) == ["EARLY_JAN", "EARLY_FEB"]
@@ -150,9 +162,15 @@ def test_metrics_and_equity_curve_use_chronologically_sorted_trades() -> None:
         universe="quantus",
         entry="none",
         exit_rule="hold_fixed",
-        top_n=1,
-        hold_days=1,
-        starting_equity=100.0,
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=100.0,
+            hold_days=1,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
     )
 
     trades = result["trades"]
