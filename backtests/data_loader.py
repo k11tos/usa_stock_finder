@@ -2,20 +2,34 @@
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 
 _PRICE_HISTORY_REQUIRED_COLUMNS = ("date", "symbol", "close")
 _CANDIDATE_SNAPSHOT_REQUIRED_COLUMNS = ("asof_date", "symbol", "universe_type")
+_DIGIT_DATE_PATTERN = re.compile(r"^\d{8}$")
 
 
 def _missing_columns(df: pd.DataFrame, required_columns: tuple[str, ...]) -> list[str]:
     return [column for column in required_columns if column not in df.columns]
 
 
+def _parse_date_value(value: object) -> pd.Timestamp | pd.NaTType:
+    if pd.isna(value):
+        return pd.NaT
+
+    text = str(value).strip()
+    if _DIGIT_DATE_PATTERN.fullmatch(text):
+        return pd.to_datetime(text, format="%Y%m%d", errors="coerce")
+
+    return pd.to_datetime(value, errors="coerce")
+
+
 def _normalize_datetime_column(df: pd.DataFrame, column_name: str) -> None:
     original_values = df[column_name]
-    parsed_values = pd.to_datetime(original_values, errors="coerce")
+    parsed_values = original_values.apply(_parse_date_value)
 
     invalid_mask = original_values.notna() & parsed_values.isna()
     if invalid_mask.any():

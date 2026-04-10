@@ -31,6 +31,43 @@ def test_load_candidate_snapshots_valid_input(tmp_path) -> None:
     assert pd.api.types.is_datetime64_any_dtype(df["asof_date"])
 
 
+def test_validate_price_history_parses_integer_yyyymmdd() -> None:
+    df = pd.DataFrame({"date": [20250102], "symbol": ["AAPL"], "close": [190.2]})
+
+    validate_price_history(df)
+
+    assert df.loc[0, "date"] == pd.Timestamp("2025-01-02")
+
+
+def test_validate_candidate_snapshots_parses_integer_yyyymmdd() -> None:
+    df = pd.DataFrame(
+        {"asof_date": [20250102], "symbol": ["MSFT"], "universe_type": ["momentum"]}
+    )
+
+    validate_candidate_snapshots(df)
+
+    assert df.loc[0, "asof_date"] == pd.Timestamp("2025-01-02")
+
+
+def test_validate_price_history_parses_digit_string_yyyymmdd() -> None:
+    df = pd.DataFrame({"date": ["20250102"], "symbol": ["AAPL"], "close": [190.2]})
+
+    validate_price_history(df)
+
+    assert df.loc[0, "date"] == pd.Timestamp("2025-01-02")
+
+
+def test_validate_candidate_snapshots_invalid_numeric_date_fails_clearly() -> None:
+    df = pd.DataFrame(
+        {"asof_date": [20251340], "symbol": ["MSFT"], "universe_type": ["momentum"]}
+    )
+
+    with pytest.raises(ValueError, match="invalid date values") as exc_info:
+        validate_candidate_snapshots(df)
+
+    assert "20251340" in str(exc_info.value)
+
+
 def test_validate_price_history_missing_required_columns() -> None:
     df = pd.DataFrame({"date": ["2025-01-02"], "symbol": ["AAPL"]})
 
