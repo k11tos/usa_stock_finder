@@ -13,6 +13,7 @@ No live/runtime modules are imported here; this module is backtest-only.
 from __future__ import annotations
 
 from datetime import date
+from numbers import Real
 from typing import Any
 
 
@@ -41,6 +42,22 @@ def _days_held(position: Any, row: Any) -> int | None:
         return None
 
     return (trade_date - entry_date).days
+
+
+def _as_positive_real(value: Any) -> float | None:
+    """Return value as float when it is a positive real scalar.
+
+    Accepts Python numeric types and NumPy real scalars. Rejects bool and
+    non-numeric values to keep exit checks conservative and predictable.
+    """
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+
+    numeric_value = float(value)
+    if numeric_value <= 0:
+        return None
+
+    return numeric_value
 
 
 def should_exit_hold_fixed(position: Any, row: Any, hold_days: int) -> tuple[bool, str | None]:
@@ -74,14 +91,13 @@ def should_exit_stop_loss(position: Any, row: Any, stop_loss_pct: float) -> tupl
     entry_price = _get_value(position, "entry_price")
     close = _get_value(row, "close")
 
-    if not isinstance(entry_price, (int, float)) or not isinstance(close, (int, float)):
+    entry_price_numeric = _as_positive_real(entry_price)
+    close_numeric = _as_positive_real(close)
+    if entry_price_numeric is None or close_numeric is None:
         return False, None
 
-    if entry_price <= 0 or close <= 0:
-        return False, None
-
-    stop_price = entry_price * (1 - stop_loss_pct)
-    if close <= stop_price:
+    stop_price = entry_price_numeric * (1 - stop_loss_pct)
+    if close_numeric <= stop_price:
         return True, "stop_loss"
 
     return False, None
@@ -102,14 +118,13 @@ def should_exit_trailing(position: Any, row: Any, trailing_pct: float) -> tuple[
     highest_close = _get_value(position, "highest_close")
     close = _get_value(row, "close")
 
-    if not isinstance(highest_close, (int, float)) or not isinstance(close, (int, float)):
+    highest_close_numeric = _as_positive_real(highest_close)
+    close_numeric = _as_positive_real(close)
+    if highest_close_numeric is None or close_numeric is None:
         return False, None
 
-    if highest_close <= 0 or close <= 0:
-        return False, None
-
-    trailing_stop_price = highest_close * (1 - trailing_pct)
-    if close <= trailing_stop_price:
+    trailing_stop_price = highest_close_numeric * (1 - trailing_pct)
+    if close_numeric <= trailing_stop_price:
         return True, "trailing_stop"
 
     return False, None
@@ -130,13 +145,12 @@ def should_exit_trend(position: Any, row: Any) -> tuple[bool, str | None]:
     close = _get_value(row, "close")
     sma50 = _get_value(row, "sma50")
 
-    if not isinstance(close, (int, float)) or not isinstance(sma50, (int, float)):
+    close_numeric = _as_positive_real(close)
+    sma50_numeric = _as_positive_real(sma50)
+    if close_numeric is None or sma50_numeric is None:
         return False, None
 
-    if close <= 0 or sma50 <= 0:
-        return False, None
-
-    if close < sma50:
+    if close_numeric < sma50_numeric:
         return True, "trend_break"
 
     return False, None
