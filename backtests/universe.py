@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 import pandas as pd
 
@@ -26,6 +27,14 @@ def _normalize_asof_dates(df: pd.DataFrame) -> pd.Series:
     return df[_ASOF_DATE_COLUMN].apply(_parse_date_value)
 
 
+def _to_calendar_day(value: object) -> date | pd.NaTType:
+    parsed = _parse_date_value(value)
+    if pd.isna(parsed):
+        return pd.NaT
+
+    return parsed.date()
+
+
 def _filter_candidates_for_date(candidates: pd.DataFrame, asof_date: str) -> pd.DataFrame:
     required_columns = [_ASOF_DATE_COLUMN, _SYMBOL_COLUMN]
     missing_required = [column for column in required_columns if column not in candidates.columns]
@@ -40,17 +49,23 @@ def _filter_candidates_for_date(candidates: pd.DataFrame, asof_date: str) -> pd.
 
     if filtered[_ASOF_DATE_COLUMN].isna().any():
         bad_examples = sorted(
-            {str(value) for value in candidates.loc[filtered[_ASOF_DATE_COLUMN].isna(), _ASOF_DATE_COLUMN].head(5)}
+            {
+                str(value)
+                for value in candidates.loc[
+                    filtered[_ASOF_DATE_COLUMN].isna(), _ASOF_DATE_COLUMN
+                ].head(5)
+            }
         )
         raise ValueError(
             f"Column '{_ASOF_DATE_COLUMN}' contains invalid date values: {bad_examples}."
         )
 
-    target_date = _parse_date_value(asof_date)
-    if pd.isna(target_date):
+    target_day = _to_calendar_day(asof_date)
+    if pd.isna(target_day):
         raise ValueError(f"Invalid asof_date value: {asof_date!r}.")
 
-    selected = filtered.loc[filtered[_ASOF_DATE_COLUMN] == target_date].copy(deep=True)
+    candidate_days = filtered[_ASOF_DATE_COLUMN].apply(lambda timestamp: timestamp.date())
+    selected = filtered.loc[candidate_days == target_day].copy(deep=True)
     return selected.reset_index(drop=True)
 
 
