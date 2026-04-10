@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -75,10 +76,26 @@ def save_equity_curve_csv(equity_curve: list[float], path: str | Path) -> Path:
 
 
 def save_summary_metrics_json(metrics: dict[str, Any], path: str | Path) -> Path:
+    def _normalize_non_finite(value: Any) -> Any:
+        if isinstance(value, float):
+            if math.isinf(value):
+                return "inf" if value > 0 else "-inf"
+            if math.isnan(value):
+                return "nan"
+            return value
+        if isinstance(value, dict):
+            return {key: _normalize_non_finite(inner_value) for key, inner_value in value.items()}
+        if isinstance(value, list):
+            return [_normalize_non_finite(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(_normalize_non_finite(item) for item in value)
+        return value
+
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_metrics = _normalize_non_finite(metrics)
     with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(metrics, handle, indent=2, sort_keys=True)
+        json.dump(normalized_metrics, handle, indent=2, sort_keys=True, allow_nan=False)
         handle.write("\n")
     return output_path
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
+import math
 from pathlib import Path
 
 import pandas as pd
 
-from backtests.report import build_output_paths, build_run_tag
+from backtests.report import build_output_paths, build_run_tag, save_summary_metrics_json
 
 
 def test_build_run_tag_is_readable_and_deterministic() -> None:
@@ -30,3 +32,18 @@ def test_build_output_paths_uses_stable_file_names() -> None:
     assert paths["equity_curve_csv"] == paths["run_dir"] / "equity_curve.csv"
     assert paths["summary_metrics_json"] == paths["run_dir"] / "summary_metrics.json"
     assert paths["candidate_snapshot_csv"] == paths["run_dir"] / "candidate_snapshot.csv"
+
+
+def test_save_summary_metrics_json_normalizes_non_finite_values(tmp_path: Path) -> None:
+    output_path = tmp_path / "summary_metrics.json"
+    save_summary_metrics_json({"profit_factor": math.inf, "max_drawdown": 0.12}, output_path)
+
+    raw_content = output_path.read_text(encoding="utf-8")
+    assert "Infinity" not in raw_content
+
+    strict_parsed = json.loads(
+        raw_content,
+        parse_constant=lambda token: (_ for _ in ()).throw(ValueError(f"Unexpected constant: {token}")),
+    )
+    assert strict_parsed["profit_factor"] == "inf"
+    assert strict_parsed["max_drawdown"] == 0.12
