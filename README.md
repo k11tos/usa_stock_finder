@@ -103,6 +103,42 @@ python main.py
 0 20 * * * cd /path/to/usa_stock_finder && /path/to/env/bin/python main.py
 ```
 
+## Backtesting
+
+`run_backtest.py`로 CSV 기반 백테스트를 실행할 수 있습니다.
+
+**필수 입력 파일**
+- `--prices`: 가격 이력 CSV
+- `--candidates`: 후보 스냅샷 CSV
+
+**필수 입력 컬럼**
+- `--prices`: `date`, `symbol`, `close`
+- `--candidates`: `asof_date`, `symbol`, `universe_type`
+
+**지원 모드**
+- `--universe`: `quantus`, `quantus_minervini`
+- `--entry`: `none`, `trend_relaxed`, `trend_basic`, `trend_strict`
+- `--exit`: `hold_fixed`, `stop_loss`, `trailing`, `trend_exit`
+
+**예시 명령어**
+```bash
+python run_backtest.py \
+  --prices data/backtest/prices.csv \
+  --candidates data/backtest/candidates.csv \
+  --universe quantus_minervini \
+  --entry trend_basic \
+  --exit trailing \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31 \
+  --top-n 5 \
+  --save-output
+```
+
+**출력 위치**
+- `--save-output` 사용 시: 기본 `outputs/backtests/<run_tag>/`
+- 생성 파일: `trades.csv`, `equity_curve.csv`, `summary_metrics.json`, `candidate_snapshot.csv`
+- `--output-root`로 출력 루트 경로를 변경할 수 있습니다.
+
 ## 📊 전략 파라미터
 
 주요 전략 파라미터는 `config.py`에서 환경 변수로 설정할 수 있습니다:
