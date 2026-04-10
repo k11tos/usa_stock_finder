@@ -38,6 +38,7 @@ def calculate_cagr(
 
     Returns ``0.0`` when there is insufficient information (empty curve,
     non-positive starting equity, missing dates, or non-positive time window).
+    Returns ``-1.0`` for wiped-out runs where ending equity is exactly zero.
     """
     if not equity_curve:
         return 0.0
@@ -57,7 +58,9 @@ def calculate_cagr(
         return 0.0
 
     growth_ratio = end_equity / start_equity
-    if growth_ratio <= 0:
+    if growth_ratio == 0:
+        return -1.0
+    if growth_ratio < 0:
         return 0.0
 
     return growth_ratio ** (1.0 / years) - 1.0

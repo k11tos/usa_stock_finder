@@ -6,6 +6,7 @@ import pytest
 
 from backtests.metrics import (
     build_summary_metrics,
+    calculate_cagr,
     calculate_equity_curve,
     calculate_max_drawdown,
 )
@@ -47,6 +48,25 @@ def test_max_drawdown_calculation() -> None:
     # Peak 120 -> trough 90 = 25% drawdown.
     equity_curve = [100.0, 120.0, 90.0, 130.0, 125.0]
     assert calculate_max_drawdown(equity_curve) == 0.25
+
+
+def test_calculate_cagr_total_loss_returns_negative_one() -> None:
+    """A wiped-out equity curve should report -100% CAGR."""
+    cagr = calculate_cagr([1_000.0, 0.0], date(2025, 1, 1), date(2026, 1, 1))
+    assert cagr == -1.0
+
+
+def test_summary_metrics_wiped_out_reports_negative_one_cagr() -> None:
+    """Summary metrics should report -100% CAGR when ending equity is zero."""
+    trades = [
+        _trade("AAPL", 100.0, 0.0, 10, 1, 10),
+    ]
+
+    metrics = build_summary_metrics(trades, starting_equity=1_000.0)
+
+    assert metrics["ending_equity"] == 0.0
+    assert metrics["total_return"] == -1.0
+    assert metrics["cagr"] == -1.0
 
 
 def test_summary_metrics_empty_input() -> None:
