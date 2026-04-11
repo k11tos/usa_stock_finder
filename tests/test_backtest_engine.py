@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from backtests.engine import BacktestEngineOptions, run_backtest
 
@@ -150,6 +151,7 @@ def test_metrics_and_equity_curve_use_chronologically_sorted_trades() -> None:
     price_history = pd.DataFrame(
         [
             {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-01-03", "symbol": "AAA", "close": 102.0},
             {"date": "2025-03-01", "symbol": "AAA", "close": 110.0},
             {"date": "2025-02-03", "symbol": "BBB", "close": 100.0},
             {"date": "2025-02-04", "symbol": "BBB", "close": 95.0},
@@ -174,6 +176,86 @@ def test_metrics_and_equity_curve_use_chronologically_sorted_trades() -> None:
     )
 
     trades = result["trades"]
-    assert list(trades["symbol"]) == ["BBB", "AAA"]
-    assert result["equity_curve"] == [100.0, 95.0, 105.0]
-    assert result["metrics"]["total_pnl"] == 5.0
+    assert list(trades["symbol"]) == ["AAA", "BBB"]
+    assert result["equity_curve"] == [100.0, 100.0, 102.0, 102.0, 96.9, 96.9]
+    assert result["metrics"]["total_pnl"] == pytest.approx(-3.1)
+
+
+def test_prevents_duplicate_reentry_while_position_is_open() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-02", "symbol": "AAA", "close": 100.0, "rs_score": 90},
+            {"asof_date": "2025-02-03", "symbol": "AAA", "close": 105.0, "rs_score": 95},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-02-03", "symbol": "AAA", "close": 105.0},
+            {"date": "2025-03-03", "symbol": "AAA", "close": 110.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=10_000.0,
+            hold_days=120,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    trades = result["trades"]
+    assert len(trades) == 1
+    assert list(trades["symbol"]) == ["AAA"]
+    assert trades.iloc[0]["entry_date"].isoformat() == "2025-01-02"
+
+
+def test_supports_multiple_open_positions_and_marks_equity_to_market() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-02", "symbol": "AAA", "close": 100.0, "rs_score": 99},
+            {"asof_date": "2025-01-02", "symbol": "BBB", "close": 50.0, "rs_score": 98},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-01-03", "symbol": "AAA", "close": 102.0},
+            {"date": "2025-01-04", "symbol": "AAA", "close": 103.0},
+            {"date": "2025-01-02", "symbol": "BBB", "close": 50.0},
+            {"date": "2025-01-03", "symbol": "BBB", "close": 48.0},
+            {"date": "2025-01-04", "symbol": "BBB", "close": 55.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=2,
+            rank_col="rs_score",
+            starting_equity=100.0,
+            hold_days=30,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    trades = result["trades"]
+    assert len(trades) == 2
+    assert set(trades["symbol"]) == {"AAA", "BBB"}
+    assert result["equity_curve"] == [100.0, 100.0, 99.0, 106.5]
+    assert result["metrics"]["ending_equity"] == 106.5
