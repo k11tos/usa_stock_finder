@@ -24,7 +24,7 @@ from backtests.exit_rules import (
     should_exit_trailing,
     should_exit_trend,
 )
-from backtests.metrics import build_summary_metrics, calculate_equity_curve
+from backtests.metrics import build_summary_metrics
 from backtests.models import BacktestTradeResult
 from backtests.universe import build_quantus_minervini_universe, build_quantus_universe
 
@@ -40,6 +40,8 @@ class _OpenPosition:
     entry_price: float
     quantity: float
     highest_close: float
+    last_close: float
+    last_trade_date: date
 
 
 @dataclass(slots=True)
@@ -108,12 +110,20 @@ def _evaluate_exit(
     raise ValueError(f"Unsupported exit strategy: {options.exit_rule!r}.")
 
 
-def _choose_entry_price(candidate_row: pd.Series, daily_rows: pd.DataFrame) -> float:
-    if "close" in candidate_row and pd.notna(candidate_row["close"]):
-        return float(candidate_row["close"])
+def _resolve_rebalance_execution_dates(
+    snapshot_dates: list[date],
+    trade_dates: list[date],
+) -> dict[date, list[date]]:
+    execution_map: dict[date, list[date]] = {}
+    snapshot_idx = 0
 
-    first_close = daily_rows.iloc[0]["close"]
-    return float(first_close)
+    for trade_date in trade_dates:
+        while snapshot_idx < len(snapshot_dates) and snapshot_dates[snapshot_idx] <= trade_date:
+            snapshot_date = snapshot_dates[snapshot_idx]
+            execution_map.setdefault(trade_date, []).append(snapshot_date)
+            snapshot_idx += 1
+
+    return execution_map
 
 
 def run_backtest(
@@ -166,74 +176,115 @@ def run_backtest(
     builder = _UNIVERSE_BUILDERS[universe]
     entry_filter = _ENTRY_FILTERS[entry]
 
-    rebalance_dates = _rebalance_dates(candidate_df)
+    rebalance_snapshots = sorted(_rebalance_dates(candidate_df))
     all_trade_results: list[BacktestTradeResult] = []
+    open_positions: dict[str, _OpenPosition] = {}
+    cash = float(resolved_options.starting_equity)
+    equity_curve: list[float] = [cash]
 
-    for rebalance_date in rebalance_dates:
-        rebalance_iso = rebalance_date.isoformat()
-        universe_df = builder(candidate_df, rebalance_iso)
-        filtered_df = entry_filter(universe_df)
+    sorted_price_df = price_df.sort_values(by=["trade_date", "symbol"]).reset_index(drop=True)
+    trade_dates = list(sorted_price_df["trade_date"].drop_duplicates().sort_values())
+    rebalance_execution_map = _resolve_rebalance_execution_dates(rebalance_snapshots, trade_dates)
 
-        if filtered_df.empty:
-            continue
+    for trade_date in trade_dates:
+        daily_rows = sorted_price_df.loc[sorted_price_df["trade_date"] == trade_date]
+        daily_rows_by_symbol = {
+            str(row["symbol"]): row for _, row in daily_rows.iterrows() if pd.notna(row["close"])
+        }
 
-        if resolved_options.rank_col in filtered_df.columns:
-            ranked_df = filtered_df.sort_values(by=resolved_options.rank_col, ascending=False)
-        else:
-            ranked_df = filtered_df.sort_values(by="symbol", ascending=True)
-
-        selected_df = ranked_df.head(resolved_options.top_n).copy(deep=True)
-
-        for _, candidate_row in selected_df.iterrows():
-            symbol = candidate_row["symbol"]
-            symbol_rows = price_df.loc[
-                (price_df["symbol"] == symbol) & (price_df["trade_date"] >= rebalance_date)
-            ].sort_values(by="trade_date")
-            if symbol_rows.empty:
+        symbols_to_close: list[str] = []
+        for symbol, position in open_positions.items():
+            daily_row = daily_rows_by_symbol.get(symbol)
+            if daily_row is None:
                 continue
 
-            entry_price = _choose_entry_price(candidate_row, symbol_rows)
-            position = _OpenPosition(
-                symbol=symbol,
-                entry_date=rebalance_date,
-                entry_price=entry_price,
-                quantity=1.0,
-                highest_close=entry_price,
-            )
-
-            trade_closed = False
-            for _, daily_row in symbol_rows.iterrows():
-                daily_close = float(daily_row["close"])
-                position.highest_close = max(position.highest_close, daily_close)
-
-                should_exit, _reason = _evaluate_exit(position, daily_row, resolved_options)
-                if not should_exit:
-                    continue
-
-                all_trade_results.append(
-                    BacktestTradeResult(
-                        symbol=position.symbol,
-                        entry_date=position.entry_date,
-                        exit_date=daily_row["trade_date"],
-                        entry_price=position.entry_price,
-                        exit_price=daily_close,
-                        quantity=position.quantity,
-                    )
-                )
-                trade_closed = True
-                break
-
-            if trade_closed:
+            daily_close = float(daily_row["close"])
+            position.last_close = daily_close
+            position.last_trade_date = trade_date
+            position.highest_close = max(position.highest_close, daily_close)
+            should_exit, _reason = _evaluate_exit(position, daily_row, resolved_options)
+            if not should_exit:
                 continue
 
-            final_row = symbol_rows.iloc[-1]
             all_trade_results.append(
                 BacktestTradeResult(
                     symbol=position.symbol,
                     entry_date=position.entry_date,
-                    exit_date=final_row["trade_date"],
+                    exit_date=trade_date,
                     entry_price=position.entry_price,
-                    exit_price=float(final_row["close"]),
+                    exit_price=daily_close,
+                    quantity=position.quantity,
+                )
+            )
+            cash += position.quantity * daily_close
+            symbols_to_close.append(symbol)
+
+        for symbol in symbols_to_close:
+            del open_positions[symbol]
+
+        for snapshot_date in rebalance_execution_map.get(trade_date, []):
+            rebalance_iso = snapshot_date.isoformat()
+            universe_df = builder(candidate_df, rebalance_iso)
+            filtered_df = entry_filter(universe_df)
+
+            if filtered_df.empty:
+                continue
+
+            if resolved_options.rank_col in filtered_df.columns:
+                ranked_df = filtered_df.sort_values(by=resolved_options.rank_col, ascending=False)
+            else:
+                ranked_df = filtered_df.sort_values(by="symbol", ascending=True)
+
+            selected_df = ranked_df.head(resolved_options.top_n).copy(deep=True)
+            selected_df = selected_df.drop_duplicates(subset=["symbol"], keep="first")
+            new_entries = selected_df.loc[~selected_df["symbol"].isin(open_positions.keys())]
+
+            entry_candidates: list[tuple[str, float]] = []
+            for _, candidate_row in new_entries.iterrows():
+                symbol = str(candidate_row["symbol"])
+                daily_row = daily_rows_by_symbol.get(symbol)
+                if daily_row is None:
+                    continue
+
+                entry_price = float(daily_row["close"])
+                if entry_price <= 0:
+                    continue
+                entry_candidates.append((symbol, entry_price))
+
+            if entry_candidates and cash > 0:
+                per_position_cash = cash / len(entry_candidates)
+                for symbol, entry_price in entry_candidates:
+                    if cash <= 0:
+                        break
+
+                    alloc_cash = min(per_position_cash, cash)
+                    quantity = alloc_cash / entry_price
+                    if quantity <= 0:
+                        continue
+
+                    open_positions[symbol] = _OpenPosition(
+                        symbol=symbol,
+                        entry_date=trade_date,
+                        entry_price=entry_price,
+                        quantity=quantity,
+                        highest_close=entry_price,
+                        last_close=entry_price,
+                        last_trade_date=trade_date,
+                    )
+                    cash -= quantity * entry_price
+
+        open_market_value = sum(position.quantity * position.last_close for position in open_positions.values())
+        equity_curve.append(cash + open_market_value)
+
+    if trade_dates:
+        for position in open_positions.values():
+            all_trade_results.append(
+                BacktestTradeResult(
+                    symbol=position.symbol,
+                    entry_date=position.entry_date,
+                    exit_date=position.last_trade_date,
+                    entry_price=position.entry_price,
+                    exit_price=position.last_close,
                     quantity=position.quantity,
                 )
             )
@@ -258,10 +309,6 @@ def run_backtest(
         ]
     )
 
-    equity_curve = calculate_equity_curve(
-        ordered_trade_results,
-        starting_equity=resolved_options.starting_equity,
-    )
     metrics = build_summary_metrics(
         ordered_trade_results,
         starting_equity=resolved_options.starting_equity,
