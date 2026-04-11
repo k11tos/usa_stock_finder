@@ -181,12 +181,6 @@ def test_avsl_exit_non_trigger_when_close_equals_or_above_avsl(base_position: di
             {"close": "98", "sma50": 100.0},
             {},
         ),
-        (
-            should_exit_avsl,
-            {},
-            {"close": "98", "avsl": 100.0},
-            {},
-        ),
     ],
 )
 def test_non_numeric_values_are_safely_rejected(
@@ -199,6 +193,28 @@ def test_non_numeric_values_are_safely_rejected(
 
     assert should_exit is False
     assert reason is None
+
+
+def test_avsl_exit_raises_when_avsl_field_missing() -> None:
+    row = {"trade_date": date(2026, 1, 10), "close": 97.9}
+
+    with pytest.raises(ValueError, match=r"requires 'avsl' field"):
+        should_exit_avsl({}, row)
+
+
+@pytest.mark.parametrize("invalid_avsl", [None, "98", 0.0, -1.0])
+def test_avsl_exit_raises_when_avsl_value_invalid(invalid_avsl: object) -> None:
+    row = {"trade_date": date(2026, 1, 10), "close": 97.9, "avsl": invalid_avsl}
+
+    with pytest.raises(ValueError, match=r"requires positive numeric 'avsl'"):
+        should_exit_avsl({}, row)
+
+
+def test_avsl_exit_raises_when_price_field_missing() -> None:
+    row = {"trade_date": date(2026, 1, 10), "avsl": 98.0}
+
+    with pytest.raises(ValueError, match=r"requires 'close' field"):
+        should_exit_avsl({}, row)
 
 
 @pytest.mark.parametrize(

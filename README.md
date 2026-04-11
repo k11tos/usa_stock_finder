@@ -118,7 +118,7 @@ python main.py
 - 모드별 추가(required when used)
   - `--universe quantus_minervini`: `market_cap`, `avg_dollar_volume`, `rs_score`, `pct_below_52w_high`
   - `--entry trend_relaxed|trend_basic|trend_strict`: `close`, `sma50`, `sma150`, `sma200`, `high_52w`, `low_52w`, `rs_score`
-  - `--exit avsl`: `close`, `avsl` (`avsl`는 사전 계산된 일별 AVSL 스탑 값)
+  - `--exit avsl`: `close`, `avsl` (`avsl`는 사전 계산된 일별 AVSL 스탑 값, 유효한 양수 숫자 필수)
 
 **지원 모드**
 - `--universe`: `quantus`, `quantus_minervini`
@@ -128,7 +128,8 @@ python main.py
 > 백테스트 `avsl`는 **근사(approximation)** 입니다.  
 > 라이브 코드처럼 VPCI/동적 길이 기반 AVSL를 백테스트 엔진 안에서 직접 계산하지 않고,
 > 입력된 가격 이력의 `avsl` 컬럼(사전 계산값)을 사용해 `close < avsl` 조건만 평가합니다.
-> 이는 비교 실험의 결정론/재현성을 위한 의도적 분리입니다.
+> 이는 비교 실험의 결정론/재현성을 위한 의도적 분리입니다. `avsl` 입력이 누락/무효이면
+> AVSL 백테스트는 실패(fail fast)하도록 설계되어, 조용히 잘못된 결과가 생성되지 않게 합니다.
 
 **예시 명령어**
 ```bash
