@@ -418,3 +418,39 @@ def test_exit_reason_populated_for_triggered_stop_loss_exit() -> None:
 
     trade = result["trades"].iloc[0]
     assert trade["exit_reason"] == "stop_loss"
+
+
+def test_trade_mfe_mae_pct_are_tracked_from_daily_close_excursions() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-02", "symbol": "AAA", "close": 100.0, "rs_score": 90},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-01-03", "symbol": "AAA", "close": 110.0},
+            {"date": "2025-01-04", "symbol": "AAA", "close": 95.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=1_000.0,
+            hold_days=2,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    trade = result["trades"].iloc[0]
+    assert trade["mfe_pct"] == pytest.approx(10.0)
+    assert trade["mae_pct"] == pytest.approx(-5.0)

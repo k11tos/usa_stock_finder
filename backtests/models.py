@@ -66,6 +66,8 @@ class BacktestTradeResult:
     entry_price: float
     exit_price: float
     quantity: float
+    mfe_pct: float | None = None
+    mae_pct: float | None = None
     universe: str | None = None
     entry_filter: str | None = None
     exit_rule: str | None = None

@@ -190,6 +190,8 @@ def test_save_backtest_outputs_persists_enriched_trade_columns(tmp_path: Path) -
                     "entry_price": 100.0,
                     "exit_price": 110.0,
                     "quantity": 2.0,
+                    "mfe_pct": 12.0,
+                    "mae_pct": -3.0,
                     "universe": "quantus",
                     "entry_filter": "trend_basic",
                     "exit_rule": "stop_loss",
@@ -217,4 +219,6 @@ def test_save_backtest_outputs_persists_enriched_trade_columns(tmp_path: Path) -
         "entry_signal_date",
         "holding_days",
         "rank_value",
+        "mfe_pct",
+        "mae_pct",
     }.issubset(saved.columns)
