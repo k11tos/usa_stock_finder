@@ -2,6 +2,36 @@
 
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
+
+
+class LMReviewDecision(StrEnum):
+    """LM review decision for a candidate."""
+
+    PASSED = "passed"
+    REJECTED = "rejected"
+    SKIPPED = "skipped"
+
+
+class LMReviewFinalAction(StrEnum):
+    """Portfolio action after LM review."""
+
+    KEEP = "keep"
+    DROP = "drop"
+    DEFER = "defer"
+
+
+class LMReviewReasonCode(StrEnum):
+    """Short enumerable reason codes for LM-assisted qualitative review."""
+
+    NEWS_RISK = "news_risk"
+    EVENT_RISK = "event_risk"
+    EARNINGS_SOON = "earnings_soon"
+    LIQUIDITY_FLAG = "liquidity_flag"
+    THESIS_WEAK = "thesis_weak"
+    TECHNICAL_WEAK = "technical_weak"
+    NO_CLEAR_EDGE = "no_clear_edge"
+    MANUAL_OVERRIDE = "manual_override"
 
 
 @dataclass(slots=True)
@@ -39,3 +69,15 @@ class BacktestTradeResult:
     def pnl(self) -> float:
         """Absolute profit/loss for the trade."""
         return (self.exit_price - self.entry_price) * self.quantity
+
+
+@dataclass(slots=True)
+class LMCandidateReviewLog:
+    """Structured qualitative review outcome for a candidate symbol."""
+
+    date: date
+    symbol: str
+    decision: LMReviewDecision
+    confidence: float
+    reason_codes: tuple[LMReviewReasonCode, ...]
+    final_action: LMReviewFinalAction
