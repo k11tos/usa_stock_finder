@@ -2,11 +2,24 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-from backtests.report import build_output_paths, build_run_tag, save_summary_metrics_json
+from backtests.models import (
+    LMCandidateReviewLog,
+    LMReviewDecision,
+    LMReviewFinalAction,
+    LMReviewReasonCode,
+)
+from backtests.report import (
+    build_output_paths,
+    build_run_tag,
+    save_lm_review_log_jsonl,
+    save_summary_metrics_json,
+)
 
 
 def test_build_run_tag_is_readable_and_deterministic() -> None:
@@ -32,6 +45,7 @@ def test_build_output_paths_uses_stable_file_names() -> None:
     assert paths["equity_curve_csv"] == paths["run_dir"] / "equity_curve.csv"
     assert paths["summary_metrics_json"] == paths["run_dir"] / "summary_metrics.json"
     assert paths["candidate_snapshot_csv"] == paths["run_dir"] / "candidate_snapshot.csv"
+    assert paths["lm_review_log_jsonl"] == paths["run_dir"] / "lm_review_log.jsonl"
 
 
 def test_save_summary_metrics_json_normalizes_non_finite_values(tmp_path: Path) -> None:
@@ -47,3 +61,70 @@ def test_save_summary_metrics_json_normalizes_non_finite_values(tmp_path: Path) 
     )
     assert strict_parsed["profit_factor"] == "inf"
     assert strict_parsed["max_drawdown"] == 0.12
+
+
+def test_save_lm_review_log_jsonl_uses_stable_schema(tmp_path: Path) -> None:
+    output_path = tmp_path / "lm_review_log.jsonl"
+    rows = [
+        LMCandidateReviewLog(
+            date=date(2026, 1, 5),
+            symbol="NVDA",
+            decision=LMReviewDecision.PASSED,
+            confidence=0.91234567,
+            reason_codes=(LMReviewReasonCode.MANUAL_OVERRIDE,),
+            final_action=LMReviewFinalAction.KEEP,
+        ),
+        LMCandidateReviewLog(
+            date=date(2026, 1, 5),
+            symbol="XYZ",
+            decision=LMReviewDecision.REJECTED,
+            confidence=0.32,
+            reason_codes=(
+                LMReviewReasonCode.NEWS_RISK,
+                LMReviewReasonCode.NO_CLEAR_EDGE,
+            ),
+            final_action=LMReviewFinalAction.DROP,
+        ),
+    ]
+
+    save_lm_review_log_jsonl(rows, output_path)
+    parsed_rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert parsed_rows == [
+        {
+            "confidence": 0.912346,
+            "date": "2026-01-05",
+            "decision": "passed",
+            "final_action": "keep",
+            "reason_codes": ["manual_override"],
+            "symbol": "NVDA",
+        },
+        {
+            "confidence": 0.32,
+            "date": "2026-01-05",
+            "decision": "rejected",
+            "final_action": "drop",
+            "reason_codes": ["news_risk", "no_clear_edge"],
+            "symbol": "XYZ",
+        },
+    ]
+
+
+def test_save_lm_review_log_jsonl_rejects_out_of_range_confidence(tmp_path: Path) -> None:
+    output_path = tmp_path / "lm_review_log.jsonl"
+    rows = [
+        LMCandidateReviewLog(
+            date=date(2026, 1, 5),
+            symbol="ABC",
+            decision=LMReviewDecision.SKIPPED,
+            confidence=1.2,
+            reason_codes=(LMReviewReasonCode.EVENT_RISK,),
+            final_action=LMReviewFinalAction.DEFER,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+        save_lm_review_log_jsonl(rows, output_path)

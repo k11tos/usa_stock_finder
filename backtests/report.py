@@ -10,6 +10,8 @@ from typing import Any
 
 import pandas as pd
 
+from backtests.models import LMCandidateReviewLog
+
 DEFAULT_OUTPUT_ROOT = Path("outputs/backtests")
 
 
@@ -52,6 +54,7 @@ def build_output_paths(run_tag: str, output_root: str | Path = DEFAULT_OUTPUT_RO
         "equity_curve_csv": run_dir / "equity_curve.csv",
         "summary_metrics_json": run_dir / "summary_metrics.json",
         "candidate_snapshot_csv": run_dir / "candidate_snapshot.csv",
+        "lm_review_log_jsonl": run_dir / "lm_review_log.jsonl",
     }
 
 
@@ -104,6 +107,33 @@ def save_candidate_snapshot_csv(candidates: pd.DataFrame, path: str | Path) -> P
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     candidates.to_csv(output_path, index=False)
+    return output_path
+
+
+def _serialize_lm_review_row(row: LMCandidateReviewLog) -> dict[str, Any]:
+    confidence = float(row.confidence)
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("LM review confidence must be between 0.0 and 1.0.")
+
+    return {
+        "date": row.date.isoformat(),
+        "symbol": row.symbol,
+        "decision": row.decision.value,
+        "confidence": round(confidence, 6),
+        "reason_codes": [reason.value for reason in row.reason_codes],
+        "final_action": row.final_action.value,
+    }
+
+
+def save_lm_review_log_jsonl(rows: list[LMCandidateReviewLog], path: str | Path) -> Path:
+    """Persist structured LM review rows as JSONL for later cohort analysis."""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            payload = _serialize_lm_review_row(row)
+            handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+            handle.write("\n")
     return output_path
 
 

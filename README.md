@@ -147,8 +147,26 @@ python run_backtest.py \
 
 **출력 위치**
 - `--save-output` 사용 시: 기본 `outputs/backtests/<run_tag>/`
-- 생성 파일: `trades.csv`, `equity_curve.csv`, `summary_metrics.json`, `candidate_snapshot.csv`
+- 생성 파일: `trades.csv`, `equity_curve.csv`, `summary_metrics.json`, `candidate_snapshot.csv`, `lm_review_log.jsonl`
 - `--output-root`로 출력 루트 경로를 변경할 수 있습니다.
+
+### LM 후보 정성 필터 로그 스키마 (준비 단계)
+
+정성 필터(LLM 또는 수동 심사) 결과 비교를 위해 JSONL 로그 포맷을 추가했습니다. 현재 단계에서는 **실제 LLM 호출 없이** 스키마와 저장 유틸만 제공합니다.
+
+- 파일: `outputs/backtests/<run_tag>/lm_review_log.jsonl`
+- 레코드 필드:
+  - `date` (`YYYY-MM-DD`)
+  - `symbol` (티커)
+  - `decision` (`passed` | `rejected` | `skipped`)
+  - `confidence` (0.0~1.0)
+  - `reason_codes` (짧은 enum code 배열)
+  - `final_action` (`keep` | `drop` | `defer`)
+
+이 로그는 향후 아래 3개 코호트 성과를 비교 분석하기 위한 기반으로 사용됩니다.
+- raw candidate
+- LM 통과 candidate
+- LM 거절 candidate
 
 ## 📊 전략 파라미터
 
