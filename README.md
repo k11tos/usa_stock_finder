@@ -112,8 +112,12 @@ python main.py
 - `--candidates`: 후보 스냅샷 CSV
 
 **필수 입력 컬럼**
-- `--prices`: `date`, `symbol`, `close`
-- `--candidates`: `asof_date`, `symbol`, `universe_type`
+- 기본(required)
+  - `--prices`: `date`, `symbol`, `close`
+  - `--candidates`: `asof_date`, `symbol`, `universe_type`
+- 모드별 추가(required when used)
+  - `--universe quantus_minervini`: `market_cap`, `avg_dollar_volume`, `rs_score`, `pct_below_52w_high`
+  - `--entry trend_relaxed|trend_basic|trend_strict`: `close`, `sma50`, `sma150`, `sma200`, `high_52w`, `low_52w`, `rs_score`
 
 **지원 모드**
 - `--universe`: `quantus`, `quantus_minervini`
