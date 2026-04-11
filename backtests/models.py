@@ -55,6 +55,8 @@ class BacktestPosition:
 
 
 @dataclass(slots=True)
+# Intentional flat schema for persisted trade diagnostics.
+# pylint: disable=too-many-instance-attributes
 class BacktestTradeResult:
     """Represents a completed trade outcome."""
 

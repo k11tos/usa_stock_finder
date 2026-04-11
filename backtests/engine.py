@@ -34,6 +34,8 @@ EntryFilter = Callable[[pd.DataFrame], pd.DataFrame]
 
 
 @dataclass(slots=True)
+# Intentional state container for backtest position lifecycle.
+# pylint: disable=too-many-instance-attributes
 class _OpenPosition:
     symbol: str
     entry_date: date
