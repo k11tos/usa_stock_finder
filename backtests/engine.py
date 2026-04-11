@@ -41,6 +41,8 @@ class _OpenPosition:
     entry_date: date
     entry_price: float
     quantity: float
+    max_favorable_pct: float
+    max_adverse_pct: float
     highest_close: float
     last_close: float
     last_trade_date: date
@@ -206,6 +208,9 @@ def run_backtest(
             position.last_close = daily_close
             position.last_trade_date = trade_date
             position.highest_close = max(position.highest_close, daily_close)
+            excursion_pct = ((daily_close - position.entry_price) / position.entry_price) * 100.0
+            position.max_favorable_pct = max(position.max_favorable_pct, excursion_pct)
+            position.max_adverse_pct = min(position.max_adverse_pct, excursion_pct)
             should_exit, _reason = _evaluate_exit(position, daily_row, resolved_options)
             if not should_exit:
                 continue
@@ -219,6 +224,8 @@ def run_backtest(
                     entry_price=position.entry_price,
                     exit_price=daily_close,
                     quantity=position.quantity,
+                    mfe_pct=position.max_favorable_pct,
+                    mae_pct=position.max_adverse_pct,
                     universe=universe,
                     entry_filter=entry,
                     exit_rule=resolved_options.exit_rule,
@@ -284,6 +291,8 @@ def run_backtest(
                         entry_date=trade_date,
                         entry_price=entry_price,
                         quantity=quantity,
+                        max_favorable_pct=0.0,
+                        max_adverse_pct=0.0,
                         highest_close=entry_price,
                         last_close=entry_price,
                         last_trade_date=trade_date,
@@ -306,6 +315,8 @@ def run_backtest(
                     entry_price=position.entry_price,
                     exit_price=position.last_close,
                     quantity=position.quantity,
+                    mfe_pct=position.max_favorable_pct,
+                    mae_pct=position.max_adverse_pct,
                     universe=universe,
                     entry_filter=entry,
                     exit_rule=resolved_options.exit_rule,
@@ -330,6 +341,8 @@ def run_backtest(
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
                 "quantity": trade.quantity,
+                "mfe_pct": trade.mfe_pct,
+                "mae_pct": trade.mae_pct,
                 "universe": trade.universe,
                 "entry_filter": trade.entry_filter,
                 "exit_rule": trade.exit_rule,
