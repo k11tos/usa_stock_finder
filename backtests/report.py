@@ -143,6 +143,7 @@ def save_backtest_outputs(
     equity_curve: list[float],
     metrics: dict[str, Any],
     candidates: pd.DataFrame,
+    lm_review_rows: list[LMCandidateReviewLog] | None = None,
     run_tag: str,
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
 ) -> dict[str, Path]:
@@ -152,4 +153,5 @@ def save_backtest_outputs(
     save_equity_curve_csv(equity_curve, paths["equity_curve_csv"])
     save_summary_metrics_json(metrics, paths["summary_metrics_json"])
     save_candidate_snapshot_csv(candidates, paths["candidate_snapshot_csv"])
+    save_lm_review_log_jsonl(lm_review_rows or [], paths["lm_review_log_jsonl"])
     return paths
