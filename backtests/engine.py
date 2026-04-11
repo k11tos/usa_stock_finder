@@ -34,6 +34,8 @@ EntryFilter = Callable[[pd.DataFrame], pd.DataFrame]
 
 
 @dataclass(slots=True)
+# Intentional state container for backtest position lifecycle.
+# pylint: disable=too-many-instance-attributes
 class _OpenPosition:
     symbol: str
     entry_date: date
@@ -42,6 +44,8 @@ class _OpenPosition:
     highest_close: float
     last_close: float
     last_trade_date: date
+    entry_signal_date: date | None
+    rank_value: float | None
 
 
 @dataclass(slots=True)
@@ -206,6 +210,7 @@ def run_backtest(
             if not should_exit:
                 continue
 
+            holding_days = (trade_date - position.entry_date).days
             all_trade_results.append(
                 BacktestTradeResult(
                     symbol=position.symbol,
@@ -214,6 +219,13 @@ def run_backtest(
                     entry_price=position.entry_price,
                     exit_price=daily_close,
                     quantity=position.quantity,
+                    universe=universe,
+                    entry_filter=entry,
+                    exit_rule=resolved_options.exit_rule,
+                    exit_reason=_reason,
+                    entry_signal_date=position.entry_signal_date,
+                    holding_days=holding_days,
+                    rank_value=position.rank_value,
                 )
             )
             cash += position.quantity * daily_close
@@ -239,7 +251,7 @@ def run_backtest(
             selected_df = selected_df.drop_duplicates(subset=["symbol"], keep="first")
             new_entries = selected_df.loc[~selected_df["symbol"].isin(open_positions.keys())]
 
-            entry_candidates: list[tuple[str, float]] = []
+            entry_candidates: list[tuple[str, float, float | None, date]] = []
             for _, candidate_row in new_entries.iterrows():
                 symbol = str(candidate_row["symbol"])
                 daily_row = daily_rows_by_symbol.get(symbol)
@@ -249,11 +261,16 @@ def run_backtest(
                 entry_price = float(daily_row["close"])
                 if entry_price <= 0:
                     continue
-                entry_candidates.append((symbol, entry_price))
+                rank_value: float | None = None
+                if resolved_options.rank_col in candidate_row and pd.notna(candidate_row[resolved_options.rank_col]):
+                    numeric_rank = pd.to_numeric(candidate_row[resolved_options.rank_col], errors="coerce")
+                    if pd.notna(numeric_rank):
+                        rank_value = float(numeric_rank)
+                entry_candidates.append((symbol, entry_price, rank_value, snapshot_date))
 
             if entry_candidates and cash > 0:
                 per_position_cash = cash / len(entry_candidates)
-                for symbol, entry_price in entry_candidates:
+                for symbol, entry_price, rank_value, entry_signal_date in entry_candidates:
                     if cash <= 0:
                         break
 
@@ -270,6 +287,8 @@ def run_backtest(
                         highest_close=entry_price,
                         last_close=entry_price,
                         last_trade_date=trade_date,
+                        entry_signal_date=entry_signal_date,
+                        rank_value=rank_value,
                     )
                     cash -= quantity * entry_price
 
@@ -278,6 +297,7 @@ def run_backtest(
 
     if trade_dates:
         for position in open_positions.values():
+            holding_days = (position.last_trade_date - position.entry_date).days
             all_trade_results.append(
                 BacktestTradeResult(
                     symbol=position.symbol,
@@ -286,6 +306,13 @@ def run_backtest(
                     entry_price=position.entry_price,
                     exit_price=position.last_close,
                     quantity=position.quantity,
+                    universe=universe,
+                    entry_filter=entry,
+                    exit_rule=resolved_options.exit_rule,
+                    exit_reason="end_of_data",
+                    entry_signal_date=position.entry_signal_date,
+                    holding_days=holding_days,
+                    rank_value=position.rank_value,
                 )
             )
 
@@ -303,6 +330,13 @@ def run_backtest(
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
                 "quantity": trade.quantity,
+                "universe": trade.universe,
+                "entry_filter": trade.entry_filter,
+                "exit_rule": trade.exit_rule,
+                "exit_reason": trade.exit_reason,
+                "entry_signal_date": trade.entry_signal_date,
+                "holding_days": trade.holding_days,
+                "rank_value": trade.rank_value,
                 "pnl": trade.pnl,
             }
             for trade in ordered_trade_results

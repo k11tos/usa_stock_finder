@@ -55,6 +55,8 @@ class BacktestPosition:
 
 
 @dataclass(slots=True)
+# Intentional flat schema for persisted trade diagnostics.
+# pylint: disable=too-many-instance-attributes
 class BacktestTradeResult:
     """Represents a completed trade outcome."""
 
@@ -64,6 +66,13 @@ class BacktestTradeResult:
     entry_price: float
     exit_price: float
     quantity: float
+    universe: str | None = None
+    entry_filter: str | None = None
+    exit_rule: str | None = None
+    exit_reason: str | None = None
+    entry_signal_date: date | None = None
+    holding_days: int | None = None
+    rank_value: float | None = None
 
     @property
     def pnl(self) -> float:
