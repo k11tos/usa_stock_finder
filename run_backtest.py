@@ -31,7 +31,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--exit",
         dest="exit_rule",
         default="hold_fixed",
-        choices=["hold_fixed", "stop_loss", "trailing", "trend_exit"],
+        choices=["hold_fixed", "stop_loss", "trailing", "trend_exit", "avsl"],
         help="Exit rule to apply.",
     )
     parser.add_argument("--start-date", help="Inclusive start date filter (YYYY-MM-DD).")

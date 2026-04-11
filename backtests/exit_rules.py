@@ -154,3 +154,38 @@ def should_exit_trend(position: Any, row: Any) -> tuple[bool, str | None]:
         return True, "trend_break"
 
     return False, None
+
+
+def should_exit_avsl(
+    position: Any,
+    row: Any,
+    *,
+    price_field: str = "close",
+    avsl_field: str = "avsl",
+) -> tuple[bool, str | None]:
+    """Exit when the selected price falls below a row-level AVSL stop.
+
+    Backtest-scope note:
+    - This helper does **not** recompute Buff Dormeier AVSL internals.
+    - It expects the daily row to already include an ``avsl`` value (or another
+      field name via ``avsl_field``).
+    - Trigger condition intentionally mirrors live Buff AVSL sell checks:
+      ``current_price < latest_avsl`` (strict inequality).
+
+    This keeps the backtest layer deterministic and side-effect free while
+    enabling transparent exit-rule comparisons against AVSL-style behavior.
+    """
+    del position  # Reserved for future AVSL variants that may use position state.
+
+    current_price = _get_value(row, price_field)
+    avsl_value = _get_value(row, avsl_field)
+
+    current_price_numeric = _as_positive_real(current_price)
+    avsl_value_numeric = _as_positive_real(avsl_value)
+    if current_price_numeric is None or avsl_value_numeric is None:
+        return False, None
+
+    if current_price_numeric < avsl_value_numeric:
+        return True, "avsl_break"
+
+    return False, None

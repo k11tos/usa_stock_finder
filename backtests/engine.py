@@ -18,6 +18,7 @@ from backtests.entry_filters import (
     apply_trend_strict,
 )
 from backtests.exit_rules import (
+    should_exit_avsl,
     should_exit_hold_fixed,
     should_exit_stop_loss,
     should_exit_trailing,
@@ -64,7 +65,7 @@ _ENTRY_FILTERS: dict[str, EntryFilter] = {
     "trend_strict": apply_trend_strict,
 }
 
-_SUPPORTED_EXITS = {"hold_fixed", "stop_loss", "trailing", "trend_exit"}
+_SUPPORTED_EXITS = {"hold_fixed", "stop_loss", "trailing", "trend_exit", "avsl"}
 
 
 def _normalize_trade_dates(price_history: pd.DataFrame) -> pd.DataFrame:
@@ -101,6 +102,8 @@ def _evaluate_exit(
         return should_exit_trailing(position, row, trailing_pct=options.trailing_pct)
     if options.exit_rule == "trend_exit":
         return should_exit_trend(position, row)
+    if options.exit_rule == "avsl":
+        return should_exit_avsl(position, row)
 
     raise ValueError(f"Unsupported exit strategy: {options.exit_rule!r}.")
 
