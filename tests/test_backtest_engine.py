@@ -259,3 +259,77 @@ def test_supports_multiple_open_positions_and_marks_equity_to_market() -> None:
     assert set(trades["symbol"]) == {"AAA", "BBB"}
     assert result["equity_curve"] == [100.0, 100.0, 99.0, 106.5]
     assert result["metrics"]["ending_equity"] == 106.5
+
+
+def test_rebalance_snapshot_on_non_trading_day_executes_next_trading_day() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-05", "symbol": "AAA", "close": 999.0, "rs_score": 90},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-06", "symbol": "AAA", "close": 101.0},
+            {"date": "2025-01-07", "symbol": "AAA", "close": 103.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=10_000.0,
+            hold_days=10,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    trades = result["trades"]
+    assert len(trades) == 1
+    assert trades.iloc[0]["entry_date"].isoformat() == "2025-01-06"
+    assert trades.iloc[0]["entry_price"] == 101.0
+
+
+def test_final_forced_exit_uses_symbol_specific_last_trade_date() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-02", "symbol": "AAA", "close": 10.0, "rs_score": 90},
+            {"asof_date": "2025-01-02", "symbol": "BBB", "close": 10.0, "rs_score": 80},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 10.0},
+            {"date": "2025-01-03", "symbol": "AAA", "close": 11.0},
+            {"date": "2025-01-02", "symbol": "BBB", "close": 10.0},
+            {"date": "2025-01-05", "symbol": "BBB", "close": 12.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=2,
+            rank_col="rs_score",
+            starting_equity=100.0,
+            hold_days=100,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    trades = result["trades"].set_index("symbol")
+    assert trades.loc["AAA", "exit_date"].isoformat() == "2025-01-03"
+    assert trades.loc["BBB", "exit_date"].isoformat() == "2025-01-05"
