@@ -13,6 +13,7 @@ No live/runtime modules are imported here; this module is backtest-only.
 from __future__ import annotations
 
 from datetime import date
+from collections.abc import Mapping
 from numbers import Real
 from typing import Any
 
@@ -31,6 +32,24 @@ def _get_value(source: Any, key: str) -> Any:
             pass
 
     return getattr(source, key, None)
+
+
+def _has_field(source: Any, key: str) -> bool:
+    """Return whether ``source`` explicitly provides ``key``.
+
+    This is stricter than ``_get_value`` because ``None`` can be a present value.
+    """
+    if isinstance(source, Mapping):
+        return key in source
+
+    contains = getattr(source, "__contains__", None)
+    if callable(contains):
+        try:
+            return key in source
+        except TypeError:
+            pass
+
+    return hasattr(source, key)
 
 
 def _days_held(position: Any, row: Any) -> int | None:
@@ -152,5 +171,57 @@ def should_exit_trend(position: Any, row: Any) -> tuple[bool, str | None]:
 
     if close_numeric < sma50_numeric:
         return True, "trend_break"
+
+    return False, None
+
+
+def should_exit_avsl(
+    position: Any,
+    row: Any,
+    *,
+    price_field: str = "close",
+    avsl_field: str = "avsl",
+) -> tuple[bool, str | None]:
+    """Exit when the selected price falls below a row-level AVSL stop.
+
+    Backtest-scope note:
+    - This helper does **not** recompute Buff Dormeier AVSL internals.
+    - It expects the daily row to already include an ``avsl`` value (or another
+      field name via ``avsl_field``).
+    - Trigger condition intentionally mirrors live Buff AVSL sell checks:
+      ``current_price < latest_avsl`` (strict inequality).
+
+    This keeps the backtest layer deterministic and side-effect free while
+    enabling transparent exit-rule comparisons against AVSL-style behavior.
+
+    Fail-fast contract for ``exit_rule="avsl"``:
+    - ``price_field`` and ``avsl_field`` must both exist on each row.
+    - Their values must be positive real numbers.
+    - Invalid or missing required inputs raise ``ValueError`` so AVSL runs do
+      not silently degrade into non-AVSL behavior.
+    """
+    del position  # Reserved for future AVSL variants that may use position state.
+
+    if not _has_field(row, price_field):
+        raise ValueError(f"AVSL exit rule requires '{price_field}' field in row data.")
+    if not _has_field(row, avsl_field):
+        raise ValueError(f"AVSL exit rule requires '{avsl_field}' field in row data.")
+
+    current_price = _get_value(row, price_field)
+    avsl_value = _get_value(row, avsl_field)
+
+    current_price_numeric = _as_positive_real(current_price)
+    avsl_value_numeric = _as_positive_real(avsl_value)
+    if current_price_numeric is None:
+        raise ValueError(
+            f"AVSL exit rule requires positive numeric '{price_field}'; got {current_price!r}."
+        )
+    if avsl_value_numeric is None:
+        raise ValueError(
+            f"AVSL exit rule requires positive numeric '{avsl_field}'; got {avsl_value!r}."
+        )
+
+    if current_price_numeric < avsl_value_numeric:
+        return True, "avsl_break"
 
     return False, None
