@@ -177,3 +177,44 @@ def test_save_backtest_outputs_materializes_lm_review_log_with_rows(tmp_path: Pa
         "reason_codes": ["manual_override"],
         "symbol": "MSFT",
     }
+
+
+def test_save_backtest_outputs_persists_enriched_trade_columns(tmp_path: Path) -> None:
+    paths = save_backtest_outputs(
+        trades=pd.DataFrame(
+            [
+                {
+                    "symbol": "AAPL",
+                    "entry_date": "2026-01-02",
+                    "exit_date": "2026-01-05",
+                    "entry_price": 100.0,
+                    "exit_price": 110.0,
+                    "quantity": 2.0,
+                    "universe": "quantus",
+                    "entry_filter": "trend_basic",
+                    "exit_rule": "stop_loss",
+                    "exit_reason": "stop_loss",
+                    "entry_signal_date": "2026-01-02",
+                    "holding_days": 3,
+                    "rank_value": 91.2,
+                    "pnl": 20.0,
+                }
+            ]
+        ),
+        equity_curve=[100000.0, 100100.0],
+        metrics={"total_return_pct": 0.1},
+        candidates=pd.DataFrame([{"symbol": "AAPL", "asof_date": "2026-01-05"}]),
+        run_tag="u-quantus__e-trend-basic__x-stop-loss__2026-01-01_to_2026-01-31",
+        output_root=tmp_path,
+    )
+
+    saved = pd.read_csv(paths["trades_csv"])
+    assert {
+        "universe",
+        "entry_filter",
+        "exit_rule",
+        "exit_reason",
+        "entry_signal_date",
+        "holding_days",
+        "rank_value",
+    }.issubset(saved.columns)

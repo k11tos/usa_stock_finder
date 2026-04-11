@@ -333,3 +333,88 @@ def test_final_forced_exit_uses_symbol_specific_last_trade_date() -> None:
     trades = result["trades"].set_index("symbol")
     assert trades.loc["AAA", "exit_date"].isoformat() == "2025-01-03"
     assert trades.loc["BBB", "exit_date"].isoformat() == "2025-01-05"
+
+
+def test_trade_outputs_include_diagnostic_fields_and_holding_days() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-02", "symbol": "AAA", "close": 100.0, "rs_score": 88.5},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-01-03", "symbol": "AAA", "close": 99.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=1_000.0,
+            hold_days=1,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    trade = result["trades"].iloc[0]
+    assert {
+        "universe",
+        "entry_filter",
+        "exit_rule",
+        "exit_reason",
+        "entry_signal_date",
+        "exit_date",
+        "holding_days",
+        "rank_value",
+    }.issubset(result["trades"].columns)
+    assert trade["universe"] == "quantus"
+    assert trade["entry_filter"] == "none"
+    assert trade["exit_rule"] == "hold_fixed"
+    assert trade["exit_reason"] == "hold_fixed"
+    assert trade["entry_signal_date"].isoformat() == "2025-01-02"
+    assert trade["exit_date"].isoformat() == "2025-01-03"
+    assert trade["holding_days"] == 1
+    assert trade["rank_value"] == pytest.approx(88.5)
+
+
+def test_exit_reason_populated_for_triggered_stop_loss_exit() -> None:
+    candidates = pd.DataFrame(
+        [
+            {"asof_date": "2025-01-02", "symbol": "AAA", "close": 100.0, "rs_score": 77.0},
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-01-03", "symbol": "AAA", "close": 91.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="none",
+        exit_rule="stop_loss",
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=1_000.0,
+            hold_days=30,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="stop_loss",
+        ),
+    )
+
+    trade = result["trades"].iloc[0]
+    assert trade["exit_reason"] == "stop_loss"
