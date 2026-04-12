@@ -23,6 +23,19 @@ _STAGE_METADATA_COLUMNS = [
     "rank_col",
     "top_n",
 ]
+COMPARISON_SUMMARY_COLUMNS = [
+    "universe",
+    "entry",
+    "exit_rule",
+    "total_trades",
+    "total_return",
+    "cagr",
+    "max_drawdown",
+    "win_rate",
+    "profit_factor",
+    "avg_mfe",
+    "avg_mae",
+]
 
 
 def _slugify(value: str) -> str:
@@ -192,3 +205,51 @@ def save_backtest_outputs(
     )
     save_lm_review_log_jsonl(lm_review_rows or [], paths["lm_review_log_jsonl"])
     return paths
+
+
+def build_comparison_summary_row(
+    *,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a compact one-row, CSV-friendly summary from a completed backtest result."""
+    metrics = result.get("metrics", {})
+    trades = result.get("trades")
+    config = result.get("config", {})
+
+    def _safe_trade_mean(frame: pd.DataFrame, column: str) -> float:
+        if column not in frame.columns:
+            return 0.0
+        mean_value = pd.to_numeric(frame[column], errors="coerce").mean()
+        if pd.isna(mean_value):
+            return 0.0
+        return float(mean_value)
+
+    if isinstance(trades, pd.DataFrame) and not trades.empty:
+        avg_mfe = _safe_trade_mean(trades, "mfe_pct")
+        avg_mae = _safe_trade_mean(trades, "mae_pct")
+    else:
+        avg_mfe = 0.0
+        avg_mae = 0.0
+
+    return {
+        "universe": str(config.get("universe", "")),
+        "entry": str(config.get("entry", "")),
+        "exit_rule": str(config.get("exit_rule", "")),
+        "total_trades": int(metrics.get("total_trades", 0)),
+        "total_return": float(metrics.get("total_return", 0.0)),
+        "cagr": float(metrics.get("cagr", 0.0)),
+        "max_drawdown": float(metrics.get("max_drawdown", 0.0)),
+        "win_rate": float(metrics.get("win_rate", 0.0)),
+        "profit_factor": float(metrics.get("profit_factor", 0.0)),
+        "avg_mfe": avg_mfe,
+        "avg_mae": avg_mae,
+    }
+
+
+def save_comparison_summary_csv(rows: list[dict[str, Any]], path: str | Path) -> Path:
+    """Save flat comparison rows with deterministic column order."""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_df = pd.DataFrame(rows).reindex(columns=COMPARISON_SUMMARY_COLUMNS)
+    summary_df.to_csv(output_path, index=False)
+    return output_path
