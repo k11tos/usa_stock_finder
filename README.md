@@ -147,8 +147,43 @@ python run_backtest.py \
 
 **출력 위치**
 - `--save-output` 사용 시: 기본 `outputs/backtests/<run_tag>/`
-- 생성 파일: `trades.csv`, `equity_curve.csv`, `summary_metrics.json`, `candidate_snapshot.csv`, `lm_review_log.jsonl`
+- 주요 파일: `trades.csv`, `equity_curve.csv`, `summary_metrics.json`,
+  `candidate_snapshot.csv`, `candidate_snapshot_universe.csv`,
+  `candidate_snapshot_entry.csv`, `candidate_snapshot_selected.csv`, `lm_review_log.jsonl`
 - `--output-root`로 출력 루트 경로를 변경할 수 있습니다.
+
+### 백테스트 출력 해석 가이드 (진단 중심)
+
+- **포트폴리오 상태(고수준)**
+  - 엔진은 `cash + open_positions(시가평가)`로 일별 equity를 계산합니다.
+  - 리밸런스 시점마다 신규 진입은 "해당 시점 가용 현금"을 진입 후보 수로 균등 분할합니다.
+  - 이미 보유 중인 심볼은 같은 리밸런스에서 중복 진입하지 않습니다.
+  - 데이터 종료 시 미청산 포지션은 마지막 관측 종가로 강제 종료(`exit_reason=end_of_data`)됩니다.
+
+- **단계별 후보 스냅샷(`candidate_snapshot_*.csv`)**
+  - `candidate_snapshot_universe.csv`: 유니버스 필터 통과 집합
+  - `candidate_snapshot_entry.csv`: 엔트리 필터 통과 집합
+  - `candidate_snapshot_selected.csv`: 최종 `top_n` 선정 집합
+  - 각 파일에는 `rebalance_date`, `execution_date`, `stage`, `universe`, `entry_filter`, `exit_rule`, `rank_col`, `top_n` 메타데이터가 포함되어, "어떤 리밸런스가 어떤 거래일에 실행되었는지"를 추적할 수 있습니다.
+
+- **`trades.csv` 진단 필드(핵심)**
+  - 기본 체결 정보: `symbol`, `entry_date`, `exit_date`, `entry_price`, `exit_price`, `quantity`, `pnl`
+  - 실험 컨텍스트: `universe`, `entry_filter`, `exit_rule`, `exit_reason`
+  - 진입 추적: `entry_signal_date`(선정 스냅샷 날짜), `rank_value`(선정 시 사용한 랭크 값), `holding_days`
+  - 포지션 품질: `mfe_pct`, `mae_pct`
+
+- **MFE / MAE 정의**
+  - `mfe_pct`(Maximum Favorable Excursion): 진입 후 보유 중 관측된 **최대 유리 수익률(%)**
+  - `mae_pct`(Maximum Adverse Excursion): 진입 후 보유 중 관측된 **최대 불리 수익률(%)**
+  - 둘 다 일별 `close` 기준으로 계산되며, 장중 고가/저가 기반 excursion은 반영하지 않습니다.
+
+- **비교 모드(`--compare-basic`)**
+  - 4개 고정 조합(`quantus/none`, `quantus/trend_basic`, `quantus_minervini/none`, `quantus_minervini/trend_basic`; 공통 `hold_fixed`)을 일괄 실행해 콘솔 요약을 출력합니다.
+  - 빠른 상대 비교용 기능이며, 파라미터 스윕/통계적 유의성 검정까지 자동 제공하지는 않습니다.
+
+- **제한사항 / AVSL 근사**
+  - `--exit avsl`는 여전히 **근사 모델**입니다. 백테스트 엔진 내부에서 VPCI/동적 길이 AVSL를 재계산하지 않고, 입력 CSV의 `avsl` 컬럼을 그대로 사용해 `close < avsl`만 판정합니다.
+  - 따라서 AVSL 백테스트 품질은 입력 `avsl` 시계열 품질에 직접 의존합니다. `avsl`가 누락/비정상(양수 수치 아님)이면 fail-fast로 중단됩니다.
 
 ### LM 후보 정성 필터 로그 스키마 (준비 단계)
 
