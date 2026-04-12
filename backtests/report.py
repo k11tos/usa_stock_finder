@@ -216,9 +216,17 @@ def build_comparison_summary_row(
     trades = result.get("trades")
     config = result.get("config", {})
 
+    def _safe_trade_mean(frame: pd.DataFrame, column: str) -> float:
+        if column not in frame.columns:
+            return 0.0
+        mean_value = pd.to_numeric(frame[column], errors="coerce").mean()
+        if pd.isna(mean_value):
+            return 0.0
+        return float(mean_value)
+
     if isinstance(trades, pd.DataFrame) and not trades.empty:
-        avg_mfe = float(pd.to_numeric(trades.get("mfe_pct"), errors="coerce").mean())
-        avg_mae = float(pd.to_numeric(trades.get("mae_pct"), errors="coerce").mean())
+        avg_mfe = _safe_trade_mean(trades, "mfe_pct")
+        avg_mae = _safe_trade_mean(trades, "mae_pct")
     else:
         avg_mfe = 0.0
         avg_mae = 0.0

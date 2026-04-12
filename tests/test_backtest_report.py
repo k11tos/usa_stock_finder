@@ -403,3 +403,21 @@ def test_save_comparison_summary_csv_enforces_deterministic_columns(tmp_path: Pa
     saved = pd.read_csv(output_path)
 
     assert list(saved.columns) == COMPARISON_SUMMARY_COLUMNS
+
+
+def test_build_comparison_summary_row_defaults_missing_excursion_columns_to_zero() -> None:
+    result = {
+        "config": {"universe": "quantus", "entry": "none", "exit_rule": "hold_fixed"},
+        "metrics": {"total_trades": 2},
+        "trades": pd.DataFrame(
+            [
+                {"symbol": "AAA", "pnl": 120.0},
+                {"symbol": "BBB", "pnl": -50.0},
+            ]
+        ),
+    }
+
+    row = build_comparison_summary_row(result=result)
+
+    assert row["avg_mfe"] == 0.0
+    assert row["avg_mae"] == 0.0
