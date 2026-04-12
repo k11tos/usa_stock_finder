@@ -74,6 +74,16 @@ _ENTRY_FILTERS: dict[str, EntryFilter] = {
 }
 
 _SUPPORTED_EXITS = {"hold_fixed", "stop_loss", "trailing", "trend_exit", "avsl"}
+_STAGE_METADATA_COLUMNS = [
+    "rebalance_date",
+    "execution_date",
+    "stage",
+    "universe",
+    "entry_filter",
+    "exit_rule",
+    "rank_col",
+    "top_n",
+]
 
 
 def _normalize_trade_dates(price_history: pd.DataFrame) -> pd.DataFrame:
@@ -132,6 +142,18 @@ def _resolve_rebalance_execution_dates(
     return execution_map
 
 
+def _build_typed_empty_stage_snapshot(base_columns: list[str]) -> pd.DataFrame:
+    ordered_columns: list[str] = []
+    for column in [*base_columns, *_STAGE_METADATA_COLUMNS]:
+        if column not in ordered_columns:
+            ordered_columns.append(column)
+
+    dtype_map = {column: "object" for column in ordered_columns}
+    if "top_n" in dtype_map:
+        dtype_map["top_n"] = "int64"
+    return pd.DataFrame({column: pd.Series(dtype=dtype) for column, dtype in dtype_map.items()})
+
+
 def run_backtest(
     *,
     candidates: pd.DataFrame,
@@ -183,6 +205,9 @@ def run_backtest(
     entry_filter = _ENTRY_FILTERS[entry]
 
     rebalance_snapshots = sorted(_rebalance_dates(candidate_df))
+    universe_snapshots: list[pd.DataFrame] = []
+    entry_snapshots: list[pd.DataFrame] = []
+    selected_snapshots: list[pd.DataFrame] = []
     all_trade_results: list[BacktestTradeResult] = []
     open_positions: dict[str, _OpenPosition] = {}
     cash = float(resolved_options.starting_equity)
@@ -245,6 +270,24 @@ def run_backtest(
             rebalance_iso = snapshot_date.isoformat()
             universe_df = builder(candidate_df, rebalance_iso)
             filtered_df = entry_filter(universe_df)
+            stage_metadata = {
+                "rebalance_date": rebalance_iso,
+                "execution_date": trade_date.isoformat(),
+                "universe": universe,
+                "entry_filter": entry,
+                "exit_rule": resolved_options.exit_rule,
+                "rank_col": resolved_options.rank_col,
+                "top_n": resolved_options.top_n,
+            }
+
+            if not universe_df.empty:
+                universe_snapshots.append(
+                    universe_df.assign(stage="universe", **stage_metadata).copy(deep=True)
+                )
+            if not filtered_df.empty:
+                entry_snapshots.append(
+                    filtered_df.assign(stage="entry", **stage_metadata).copy(deep=True)
+                )
 
             if filtered_df.empty:
                 continue
@@ -256,6 +299,10 @@ def run_backtest(
 
             selected_df = ranked_df.head(resolved_options.top_n).copy(deep=True)
             selected_df = selected_df.drop_duplicates(subset=["symbol"], keep="first")
+            if not selected_df.empty:
+                selected_snapshots.append(
+                    selected_df.assign(stage="selected", **stage_metadata).copy(deep=True)
+                )
             new_entries = selected_df.loc[~selected_df["symbol"].isin(open_positions.keys())]
 
             entry_candidates: list[tuple[str, float, float | None, date]] = []
@@ -362,6 +409,25 @@ def run_backtest(
     )
 
     return {
+        "candidate_stage_snapshots": {
+            "universe": pd.concat(universe_snapshots, ignore_index=True)
+            if universe_snapshots
+            else _build_typed_empty_stage_snapshot(list(candidate_df.columns)),
+            "entry": pd.concat(entry_snapshots, ignore_index=True)
+            if entry_snapshots
+            else _build_typed_empty_stage_snapshot(
+                list(universe_snapshots[0].columns) if universe_snapshots else list(candidate_df.columns)
+            ),
+            "selected": pd.concat(selected_snapshots, ignore_index=True)
+            if selected_snapshots
+            else _build_typed_empty_stage_snapshot(
+                list(entry_snapshots[0].columns)
+                if entry_snapshots
+                else list(universe_snapshots[0].columns)
+                if universe_snapshots
+                else list(candidate_df.columns)
+            ),
+        },
         "trades": trades_df,
         "equity_curve": equity_curve,
         "metrics": metrics,

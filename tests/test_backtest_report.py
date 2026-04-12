@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from backtests.engine import BacktestEngineOptions, run_backtest
 from backtests.models import (
     LMCandidateReviewLog,
     LMReviewDecision,
@@ -46,6 +47,9 @@ def test_build_output_paths_uses_stable_file_names() -> None:
     assert paths["equity_curve_csv"] == paths["run_dir"] / "equity_curve.csv"
     assert paths["summary_metrics_json"] == paths["run_dir"] / "summary_metrics.json"
     assert paths["candidate_snapshot_csv"] == paths["run_dir"] / "candidate_snapshot.csv"
+    assert paths["candidate_snapshot_universe_csv"] == paths["run_dir"] / "candidate_snapshot_universe.csv"
+    assert paths["candidate_snapshot_entry_csv"] == paths["run_dir"] / "candidate_snapshot_entry.csv"
+    assert paths["candidate_snapshot_selected_csv"] == paths["run_dir"] / "candidate_snapshot_selected.csv"
     assert paths["lm_review_log_jsonl"] == paths["run_dir"] / "lm_review_log.jsonl"
 
 
@@ -222,3 +226,124 @@ def test_save_backtest_outputs_persists_enriched_trade_columns(tmp_path: Path) -
         "mfe_pct",
         "mae_pct",
     }.issubset(saved.columns)
+
+
+def test_save_backtest_outputs_persists_stage_candidate_snapshots_with_subset_relationships(
+    tmp_path: Path,
+) -> None:
+    stage_snapshots = {
+        "universe": pd.DataFrame(
+            [
+                {"rebalance_date": "2026-01-05", "execution_date": "2026-01-05", "symbol": "AAPL"},
+                {"rebalance_date": "2026-01-05", "execution_date": "2026-01-05", "symbol": "MSFT"},
+                {"rebalance_date": "2026-01-05", "execution_date": "2026-01-05", "symbol": "NVDA"},
+            ]
+        ),
+        "entry": pd.DataFrame(
+            [
+                {"rebalance_date": "2026-01-05", "execution_date": "2026-01-05", "symbol": "AAPL"},
+                {"rebalance_date": "2026-01-05", "execution_date": "2026-01-05", "symbol": "NVDA"},
+            ]
+        ),
+        "selected": pd.DataFrame(
+            [
+                {"rebalance_date": "2026-01-05", "execution_date": "2026-01-05", "symbol": "NVDA"},
+            ]
+        ),
+    }
+
+    paths = save_backtest_outputs(
+        trades=pd.DataFrame([{"symbol": "NVDA", "entry_price": 100.0, "exit_price": 105.0}]),
+        equity_curve=[100000.0, 100500.0],
+        metrics={"total_return_pct": 0.5},
+        candidates=pd.DataFrame([{"symbol": "NVDA", "asof_date": "2026-01-05"}]),
+        candidate_stage_snapshots=stage_snapshots,
+        run_tag="u-quantus__e-none__x-hold-fixed__2026-01-01_to_2026-01-31",
+        output_root=tmp_path,
+    )
+
+    for stage_path in (
+        paths["candidate_snapshot_universe_csv"],
+        paths["candidate_snapshot_entry_csv"],
+        paths["candidate_snapshot_selected_csv"],
+    ):
+        assert stage_path.exists()
+
+    universe_saved = pd.read_csv(paths["candidate_snapshot_universe_csv"])
+    entry_saved = pd.read_csv(paths["candidate_snapshot_entry_csv"])
+    selected_saved = pd.read_csv(paths["candidate_snapshot_selected_csv"])
+
+    universe_keys = set(zip(universe_saved["rebalance_date"], universe_saved["symbol"]))
+    entry_keys = set(zip(entry_saved["rebalance_date"], entry_saved["symbol"]))
+    selected_keys = set(zip(selected_saved["rebalance_date"], selected_saved["symbol"]))
+
+    assert selected_keys.issubset(entry_keys)
+    assert entry_keys.issubset(universe_keys)
+
+
+def test_save_backtest_outputs_keeps_empty_stage_snapshot_files_readable(tmp_path: Path) -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "asof_date": "2026-01-05",
+                "symbol": "AAA",
+                "close": 100.0,
+                "rs_score": 75.0,
+                "sma50": 100.0,
+                "sma150": 100.0,
+                "sma200": 100.0,
+                "high_52w": 130.0,
+                "low_52w": 80.0,
+            }
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2026-01-05", "symbol": "AAA", "close": 100.0},
+            {"date": "2026-01-06", "symbol": "AAA", "close": 101.0},
+        ]
+    )
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="trend_strict",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=100_000.0,
+            hold_days=5,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    paths = save_backtest_outputs(
+        trades=result["trades"],
+        equity_curve=result["equity_curve"],
+        metrics=result["metrics"],
+        candidates=candidates,
+        candidate_stage_snapshots=result["candidate_stage_snapshots"],
+        run_tag="u-quantus__e-trend-strict__x-hold-fixed__2026-01-01_to_2026-01-31",
+        output_root=tmp_path,
+    )
+
+    entry_saved = pd.read_csv(paths["candidate_snapshot_entry_csv"])
+    selected_saved = pd.read_csv(paths["candidate_snapshot_selected_csv"])
+
+    assert entry_saved.empty
+    assert selected_saved.empty
+    expected_columns = {
+        "rebalance_date",
+        "execution_date",
+        "stage",
+        "universe",
+        "entry_filter",
+        "exit_rule",
+        "rank_col",
+        "top_n",
+    }
+    assert expected_columns.issubset(entry_saved.columns)
+    assert expected_columns.issubset(selected_saved.columns)

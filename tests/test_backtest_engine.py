@@ -86,7 +86,7 @@ def test_run_backtest_smoke_returns_core_artifacts() -> None:
         ),
     )
 
-    assert {"trades", "equity_curve", "metrics", "config"}.issubset(result.keys())
+    assert {"trades", "equity_curve", "metrics", "candidate_stage_snapshots", "config"}.issubset(result.keys())
     assert isinstance(result["trades"], pd.DataFrame)
     assert isinstance(result["equity_curve"], list)
     assert isinstance(result["metrics"], dict)
@@ -454,3 +454,72 @@ def test_trade_mfe_mae_pct_are_tracked_from_daily_close_excursions() -> None:
     trade = result["trades"].iloc[0]
     assert trade["mfe_pct"] == pytest.approx(10.0)
     assert trade["mae_pct"] == pytest.approx(-5.0)
+
+
+def test_stage_snapshots_return_typed_empty_frames_when_no_entry_signals() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "asof_date": "2025-01-02",
+                "symbol": "AAA",
+                "close": 100.0,
+                "market_cap": 800_000_000,
+                "avg_dollar_volume": 10_000_000,
+                "rs_score": 75.0,
+                "pct_below_52w_high": 12.0,
+                "sma50": 100.0,
+                "sma150": 100.0,
+                "sma200": 100.0,
+                "high_52w": 130.0,
+                "low_52w": 80.0,
+            }
+        ]
+    )
+    price_history = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "symbol": "AAA", "close": 100.0},
+            {"date": "2025-01-03", "symbol": "AAA", "close": 101.0},
+        ]
+    )
+
+    result = run_backtest(
+        candidates=candidates,
+        price_history=price_history,
+        universe="quantus",
+        entry="trend_strict",
+        exit_rule="hold_fixed",
+        options=BacktestEngineOptions(
+            top_n=1,
+            rank_col="rs_score",
+            starting_equity=10_000.0,
+            hold_days=5,
+            stop_loss_pct=0.08,
+            trailing_pct=0.10,
+            exit_rule="hold_fixed",
+        ),
+    )
+
+    stage_snapshots = result["candidate_stage_snapshots"]
+    assert not stage_snapshots["universe"].empty
+    assert stage_snapshots["entry"].empty
+    assert stage_snapshots["selected"].empty
+    assert {
+        "rebalance_date",
+        "execution_date",
+        "stage",
+        "universe",
+        "entry_filter",
+        "exit_rule",
+        "rank_col",
+        "top_n",
+    }.issubset(stage_snapshots["entry"].columns)
+    assert {
+        "rebalance_date",
+        "execution_date",
+        "stage",
+        "universe",
+        "entry_filter",
+        "exit_rule",
+        "rank_col",
+        "top_n",
+    }.issubset(stage_snapshots["selected"].columns)

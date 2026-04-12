@@ -13,6 +13,16 @@ import pandas as pd
 from backtests.models import LMCandidateReviewLog
 
 DEFAULT_OUTPUT_ROOT = Path("outputs/backtests")
+_STAGE_METADATA_COLUMNS = [
+    "rebalance_date",
+    "execution_date",
+    "stage",
+    "universe",
+    "entry_filter",
+    "exit_rule",
+    "rank_col",
+    "top_n",
+]
 
 
 def _slugify(value: str) -> str:
@@ -54,6 +64,9 @@ def build_output_paths(run_tag: str, output_root: str | Path = DEFAULT_OUTPUT_RO
         "equity_curve_csv": run_dir / "equity_curve.csv",
         "summary_metrics_json": run_dir / "summary_metrics.json",
         "candidate_snapshot_csv": run_dir / "candidate_snapshot.csv",
+        "candidate_snapshot_universe_csv": run_dir / "candidate_snapshot_universe.csv",
+        "candidate_snapshot_entry_csv": run_dir / "candidate_snapshot_entry.csv",
+        "candidate_snapshot_selected_csv": run_dir / "candidate_snapshot_selected.csv",
         "lm_review_log_jsonl": run_dir / "lm_review_log.jsonl",
     }
 
@@ -110,6 +123,16 @@ def save_candidate_snapshot_csv(candidates: pd.DataFrame, path: str | Path) -> P
     return output_path
 
 
+def _coerce_snapshot_frame_for_csv(frame: pd.DataFrame | None) -> pd.DataFrame:
+    if frame is None:
+        frame = pd.DataFrame()
+    if not frame.empty:
+        return frame
+    if list(frame.columns):
+        return frame
+    return pd.DataFrame({column: pd.Series(dtype="object") for column in _STAGE_METADATA_COLUMNS})
+
+
 def _serialize_lm_review_row(row: LMCandidateReviewLog) -> dict[str, Any]:
     confidence = float(row.confidence)
     if not 0.0 <= confidence <= 1.0:
@@ -143,6 +166,7 @@ def save_backtest_outputs(
     equity_curve: list[float],
     metrics: dict[str, Any],
     candidates: pd.DataFrame,
+    candidate_stage_snapshots: dict[str, pd.DataFrame] | None = None,
     lm_review_rows: list[LMCandidateReviewLog] | None = None,
     run_tag: str,
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
@@ -153,5 +177,18 @@ def save_backtest_outputs(
     save_equity_curve_csv(equity_curve, paths["equity_curve_csv"])
     save_summary_metrics_json(metrics, paths["summary_metrics_json"])
     save_candidate_snapshot_csv(candidates, paths["candidate_snapshot_csv"])
+    stage_snapshots = candidate_stage_snapshots or {}
+    save_candidate_snapshot_csv(
+        _coerce_snapshot_frame_for_csv(stage_snapshots.get("universe")),
+        paths["candidate_snapshot_universe_csv"],
+    )
+    save_candidate_snapshot_csv(
+        _coerce_snapshot_frame_for_csv(stage_snapshots.get("entry")),
+        paths["candidate_snapshot_entry_csv"],
+    )
+    save_candidate_snapshot_csv(
+        _coerce_snapshot_frame_for_csv(stage_snapshots.get("selected")),
+        paths["candidate_snapshot_selected_csv"],
+    )
     save_lm_review_log_jsonl(lm_review_rows or [], paths["lm_review_log_jsonl"])
     return paths

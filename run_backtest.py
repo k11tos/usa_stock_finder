@@ -134,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             equity_curve=result["equity_curve"],
             metrics=metrics,
             candidates=candidates_df,
+            candidate_stage_snapshots=result["candidate_stage_snapshots"],
             run_tag=run_tag,
             output_root=args.output_root,
         )
