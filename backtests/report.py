@@ -13,6 +13,16 @@ import pandas as pd
 from backtests.models import LMCandidateReviewLog
 
 DEFAULT_OUTPUT_ROOT = Path("outputs/backtests")
+_STAGE_METADATA_COLUMNS = [
+    "rebalance_date",
+    "execution_date",
+    "stage",
+    "universe",
+    "entry_filter",
+    "exit_rule",
+    "rank_col",
+    "top_n",
+]
 
 
 def _slugify(value: str) -> str:
@@ -113,6 +123,16 @@ def save_candidate_snapshot_csv(candidates: pd.DataFrame, path: str | Path) -> P
     return output_path
 
 
+def _coerce_snapshot_frame_for_csv(frame: pd.DataFrame | None) -> pd.DataFrame:
+    if frame is None:
+        frame = pd.DataFrame()
+    if not frame.empty:
+        return frame
+    if list(frame.columns):
+        return frame
+    return pd.DataFrame({column: pd.Series(dtype="object") for column in _STAGE_METADATA_COLUMNS})
+
+
 def _serialize_lm_review_row(row: LMCandidateReviewLog) -> dict[str, Any]:
     confidence = float(row.confidence)
     if not 0.0 <= confidence <= 1.0:
@@ -159,15 +179,15 @@ def save_backtest_outputs(
     save_candidate_snapshot_csv(candidates, paths["candidate_snapshot_csv"])
     stage_snapshots = candidate_stage_snapshots or {}
     save_candidate_snapshot_csv(
-        stage_snapshots.get("universe", pd.DataFrame()),
+        _coerce_snapshot_frame_for_csv(stage_snapshots.get("universe")),
         paths["candidate_snapshot_universe_csv"],
     )
     save_candidate_snapshot_csv(
-        stage_snapshots.get("entry", pd.DataFrame()),
+        _coerce_snapshot_frame_for_csv(stage_snapshots.get("entry")),
         paths["candidate_snapshot_entry_csv"],
     )
     save_candidate_snapshot_csv(
-        stage_snapshots.get("selected", pd.DataFrame()),
+        _coerce_snapshot_frame_for_csv(stage_snapshots.get("selected")),
         paths["candidate_snapshot_selected_csv"],
     )
     save_lm_review_log_jsonl(lm_review_rows or [], paths["lm_review_log_jsonl"])
