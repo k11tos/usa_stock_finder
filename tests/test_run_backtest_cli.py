@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pandas as pd
+from unittest.mock import MagicMock
 
-from run_backtest import _apply_date_filter, parse_args
+from run_backtest import BASIC_COMPARISON_EXPERIMENTS, _apply_date_filter, main, parse_args
 
 
 def test_parse_args_maps_required_and_optional_values() -> None:
@@ -80,3 +81,58 @@ def test_apply_date_filter_includes_non_midnight_rows_on_end_date() -> None:
     )
 
     assert list(filtered["symbol"]) == ["AAA"]
+
+
+def test_parse_args_maps_compare_basic_flag() -> None:
+    args = parse_args(
+        [
+            "--prices",
+            "prices.csv",
+            "--candidates",
+            "candidates.csv",
+            "--compare-basic",
+        ]
+    )
+
+    assert args.compare_basic is True
+
+
+def test_compare_basic_dispatches_expected_runs_and_prints_summary(
+    monkeypatch, capsys
+) -> None:
+    prices_df = pd.DataFrame({"date": ["2025-01-01"], "symbol": ["AAA"], "close": [10.0]})
+    candidates_df = pd.DataFrame({"asof_date": ["2025-01-01"], "symbol": ["AAA"], "rs_score": [99.0]})
+
+    monkeypatch.setattr("run_backtest.data_loader.load_price_history", lambda _path: prices_df)
+    monkeypatch.setattr("run_backtest.data_loader.load_candidate_snapshots", lambda _path: candidates_df)
+
+    dispatched: list[tuple[str, str, str]] = []
+
+    def _fake_run_backtest(*, universe, entry, exit_rule, **_kwargs):
+        dispatched.append((universe, entry, exit_rule))
+        return {
+            "metrics": {
+                "total_trades": 1,
+                "total_return": 0.12,
+                "max_drawdown": -0.03,
+                "total_pnl": 1200.0,
+                "ending_equity": 101200.0,
+                "win_rate": 1.0,
+            },
+            "trades": pd.DataFrame(),
+            "equity_curve": pd.DataFrame(),
+            "candidate_stage_snapshots": {},
+        }
+
+    monkeypatch.setattr("run_backtest.run_backtest", _fake_run_backtest)
+    monkeypatch.setattr("run_backtest.save_backtest_outputs", MagicMock())
+
+    exit_code = main(["--prices", "prices.csv", "--candidates", "candidates.csv", "--compare-basic"])
+
+    assert exit_code == 0
+    assert dispatched == list(BASIC_COMPARISON_EXPERIMENTS)
+
+    stdout = capsys.readouterr().out
+    assert "comparison_summary:" in stdout
+    assert "universe" in stdout
+    assert "quantus_minervini" in stdout
