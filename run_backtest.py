@@ -169,6 +169,24 @@ def main(argv: list[str] | None = None) -> int:
                     "max_drawdown": metrics["max_drawdown"],
                 }
             )
+            if args.save_output:
+                run_tag = build_run_tag(
+                    universe=universe,
+                    entry=entry,
+                    exit_rule=exit_rule,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                saved_paths = save_backtest_outputs(
+                    trades=result["trades"],
+                    equity_curve=result["equity_curve"],
+                    metrics=metrics,
+                    candidates=candidates_df,
+                    candidate_stage_snapshots=result["candidate_stage_snapshots"],
+                    run_tag=run_tag,
+                    output_root=args.output_root,
+                )
+                print(f"saved_outputs={saved_paths['run_dir']}")
         _print_comparison_summary(comparison_rows)
         return 0
 
