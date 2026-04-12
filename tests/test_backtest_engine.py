@@ -86,7 +86,7 @@ def test_run_backtest_smoke_returns_core_artifacts() -> None:
         ),
     )
 
-    assert {"trades", "equity_curve", "metrics", "config"}.issubset(result.keys())
+    assert {"trades", "equity_curve", "metrics", "candidate_stage_snapshots", "config"}.issubset(result.keys())
     assert isinstance(result["trades"], pd.DataFrame)
     assert isinstance(result["equity_curve"], list)
     assert isinstance(result["metrics"], dict)

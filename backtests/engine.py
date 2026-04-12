@@ -183,6 +183,9 @@ def run_backtest(
     entry_filter = _ENTRY_FILTERS[entry]
 
     rebalance_snapshots = sorted(_rebalance_dates(candidate_df))
+    universe_snapshots: list[pd.DataFrame] = []
+    entry_snapshots: list[pd.DataFrame] = []
+    selected_snapshots: list[pd.DataFrame] = []
     all_trade_results: list[BacktestTradeResult] = []
     open_positions: dict[str, _OpenPosition] = {}
     cash = float(resolved_options.starting_equity)
@@ -245,6 +248,24 @@ def run_backtest(
             rebalance_iso = snapshot_date.isoformat()
             universe_df = builder(candidate_df, rebalance_iso)
             filtered_df = entry_filter(universe_df)
+            stage_metadata = {
+                "rebalance_date": rebalance_iso,
+                "execution_date": trade_date.isoformat(),
+                "universe": universe,
+                "entry_filter": entry,
+                "exit_rule": resolved_options.exit_rule,
+                "rank_col": resolved_options.rank_col,
+                "top_n": resolved_options.top_n,
+            }
+
+            if not universe_df.empty:
+                universe_snapshots.append(
+                    universe_df.assign(stage="universe", **stage_metadata).copy(deep=True)
+                )
+            if not filtered_df.empty:
+                entry_snapshots.append(
+                    filtered_df.assign(stage="entry", **stage_metadata).copy(deep=True)
+                )
 
             if filtered_df.empty:
                 continue
@@ -256,6 +277,10 @@ def run_backtest(
 
             selected_df = ranked_df.head(resolved_options.top_n).copy(deep=True)
             selected_df = selected_df.drop_duplicates(subset=["symbol"], keep="first")
+            if not selected_df.empty:
+                selected_snapshots.append(
+                    selected_df.assign(stage="selected", **stage_metadata).copy(deep=True)
+                )
             new_entries = selected_df.loc[~selected_df["symbol"].isin(open_positions.keys())]
 
             entry_candidates: list[tuple[str, float, float | None, date]] = []
@@ -365,6 +390,15 @@ def run_backtest(
         "trades": trades_df,
         "equity_curve": equity_curve,
         "metrics": metrics,
+        "candidate_stage_snapshots": {
+            "universe": pd.concat(universe_snapshots, ignore_index=True)
+            if universe_snapshots
+            else pd.DataFrame(),
+            "entry": pd.concat(entry_snapshots, ignore_index=True) if entry_snapshots else pd.DataFrame(),
+            "selected": pd.concat(selected_snapshots, ignore_index=True)
+            if selected_snapshots
+            else pd.DataFrame(),
+        },
         "config": {
             "universe": universe,
             "entry": entry,
