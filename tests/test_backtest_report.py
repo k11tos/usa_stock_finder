@@ -16,8 +16,11 @@ from backtests.models import (
     LMReviewReasonCode,
 )
 from backtests.report import (
+    COMPARISON_SUMMARY_COLUMNS,
+    build_comparison_summary_row,
     build_output_paths,
     build_run_tag,
+    save_comparison_summary_csv,
     save_backtest_outputs,
     save_lm_review_log_jsonl,
     save_summary_metrics_json,
@@ -347,3 +350,56 @@ def test_save_backtest_outputs_keeps_empty_stage_snapshot_files_readable(tmp_pat
     }
     assert expected_columns.issubset(entry_saved.columns)
     assert expected_columns.issubset(selected_saved.columns)
+
+
+def test_build_comparison_summary_row_has_expected_flat_fields() -> None:
+    result = {
+        "config": {"universe": "quantus", "entry": "trend_basic", "exit_rule": "trailing"},
+        "metrics": {
+            "total_trades": 2,
+            "total_return": 0.15,
+            "cagr": 0.12,
+            "max_drawdown": 0.08,
+            "win_rate": 0.5,
+            "profit_factor": 1.8,
+        },
+        "trades": pd.DataFrame(
+            [
+                {"symbol": "AAA", "mfe_pct": 10.0, "mae_pct": -4.0},
+                {"symbol": "BBB", "mfe_pct": 6.0, "mae_pct": -2.0},
+            ]
+        ),
+    }
+
+    row = build_comparison_summary_row(result=result)
+
+    assert set(row.keys()) == set(COMPARISON_SUMMARY_COLUMNS)
+    assert row["universe"] == "quantus"
+    assert row["entry"] == "trend_basic"
+    assert row["exit_rule"] == "trailing"
+    assert row["total_trades"] == 2
+    assert row["avg_mfe"] == pytest.approx(8.0)
+    assert row["avg_mae"] == pytest.approx(-3.0)
+
+
+def test_save_comparison_summary_csv_enforces_deterministic_columns(tmp_path: Path) -> None:
+    output_path = tmp_path / "comparison_summary.csv"
+    row = {
+        "exit_rule": "hold_fixed",
+        "entry": "none",
+        "universe": "quantus",
+        "total_trades": 10,
+        "total_return": 0.2,
+        "cagr": 0.1,
+        "max_drawdown": 0.05,
+        "win_rate": 0.6,
+        "profit_factor": 1.5,
+        "avg_mfe": 4.0,
+        "avg_mae": -2.0,
+        "unexpected_col": "ignored",
+    }
+
+    save_comparison_summary_csv([row], output_path)
+    saved = pd.read_csv(output_path)
+
+    assert list(saved.columns) == COMPARISON_SUMMARY_COLUMNS
