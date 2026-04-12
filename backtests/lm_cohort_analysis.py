@@ -56,18 +56,21 @@ def join_frame_with_lm_reviews(
     """
 
     normalized_frame = _normalize_join_key(frame, date_col=date_col, symbol_col=symbol_col)
-    normalized_reviews = _normalize_join_key(lm_review_log, date_col="date", symbol_col="symbol")
 
-    if "decision" not in normalized_reviews.columns:
-        raise ValueError("Missing required columns for LM cohort join: decision")
+    if lm_review_log.empty:
+        normalized_reviews = pd.DataFrame(columns=["_cohort_date", "_cohort_symbol", "lm_decision"])
+    else:
+        normalized_reviews = _normalize_join_key(lm_review_log, date_col="date", symbol_col="symbol")
+        if "decision" not in normalized_reviews.columns:
+            raise ValueError("Missing required columns for LM cohort join: decision")
 
-    normalized_reviews = normalized_reviews[["_cohort_date", "_cohort_symbol", "decision"]].copy(deep=True)
-    normalized_reviews["lm_decision"] = normalized_reviews["decision"].astype(str).str.lower()
-    normalized_reviews = normalized_reviews.drop(columns=["decision"])
-    normalized_reviews = normalized_reviews.drop_duplicates(
-        subset=["_cohort_date", "_cohort_symbol"],
-        keep="last",
-    )
+        normalized_reviews = normalized_reviews[["_cohort_date", "_cohort_symbol", "decision"]].copy(deep=True)
+        normalized_reviews["lm_decision"] = normalized_reviews["decision"].astype(str).str.lower()
+        normalized_reviews = normalized_reviews.drop(columns=["decision"])
+        normalized_reviews = normalized_reviews.drop_duplicates(
+            subset=["_cohort_date", "_cohort_symbol"],
+            keep="last",
+        )
 
     joined = normalized_frame.merge(
         normalized_reviews,
@@ -127,17 +130,26 @@ def summarize_trade_cohorts(
 ) -> pd.DataFrame:
     """Return compact cohort-level trade counts and total PnL."""
 
-    resolved_date_col = next((column for column in date_col_priority if column in trades.columns), None)
-    if resolved_date_col is None:
+    available_date_cols = [column for column in date_col_priority if column in trades.columns]
+    if not available_date_cols:
         options = ", ".join(date_col_priority)
         raise ValueError(f"Missing required columns for LM cohort join: one of [{options}]")
 
+    resolved_dates = pd.Series(pd.NaT, index=trades.index, dtype="datetime64[ns]")
+    for column in available_date_cols:
+        column_dates = pd.to_datetime(trades[column], errors="coerce").dt.normalize()
+        resolved_dates = resolved_dates.fillna(column_dates)
+
+    trade_frame = trades.copy(deep=True)
+    trade_frame["_lm_join_date"] = resolved_dates
+
     joined = join_frame_with_lm_reviews(
-        trades,
+        trade_frame,
         lm_review_log,
-        date_col=resolved_date_col,
+        date_col="_lm_join_date",
         symbol_col=symbol_col,
     )
+    joined = joined.drop(columns=["_lm_join_date"])
 
     if "pnl" in joined.columns:
         pnl_series = pd.to_numeric(joined["pnl"], errors="coerce").fillna(0.0)
