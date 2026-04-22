@@ -76,9 +76,14 @@ class TestMainFunctions(unittest.TestCase):
     def test_normalize_exchange_name_common_aliases(self):
         """Common provider aliases should normalize to core exchange values."""
         self.assertEqual(normalize_exchange_name("NEW YORK STOCK EXCHANGE"), "NYSE")
+        self.assertEqual(normalize_exchange_name("NYQ"), "NYSE")
         self.assertEqual(normalize_exchange_name("NYSE AMERICAN"), "AMEX")
         self.assertEqual(normalize_exchange_name("NYSE MKT"), "AMEX")
+        self.assertEqual(normalize_exchange_name("ASE"), "AMEX")
         self.assertEqual(normalize_exchange_name("NASDAQGS"), "NASDAQ")
+        self.assertEqual(normalize_exchange_name("NMS"), "NASDAQ")
+        self.assertEqual(normalize_exchange_name("NGM"), "NASDAQ")
+        self.assertEqual(normalize_exchange_name("NCM"), "NASDAQ")
         self.assertEqual(normalize_exchange_name("NASDAQ NMS"), "NASDAQ")
 
     def test_is_allowed_exchange_whitelist(self):
@@ -1067,6 +1072,18 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
     def test_filter_entry_symbols_by_exchange_skips_missing_metadata(self):
         """Missing exchange metadata should be skipped conservatively."""
         with patch("main._fetch_symbol_exchange", return_value=None):
+            filtered = main_module._filter_entry_symbols_by_exchange(["AAPL"])  # pylint: disable=protected-access
+        self.assertEqual(filtered, [])
+
+    def test_fetch_symbol_exchange_returns_none_on_lookup_exception(self):
+        """Lookup runtime exceptions should not abort flow and should return None."""
+        with patch("main.yf.Ticker", side_effect=RuntimeError("network down")):
+            result = main_module._fetch_symbol_exchange("AAPL")  # pylint: disable=protected-access
+        self.assertIsNone(result)
+
+    def test_filter_entry_symbols_by_exchange_skips_lookup_exception_case(self):
+        """Lookup exception should result in explicit symbol skip."""
+        with patch("main.yf.Ticker", side_effect=RuntimeError("lookup failed")):
             filtered = main_module._filter_entry_symbols_by_exchange(["AAPL"])  # pylint: disable=protected-access
         self.assertEqual(filtered, [])
 

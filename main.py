@@ -60,11 +60,15 @@ def normalize_exchange_name(raw_exchange: str | None) -> str | None:
     normalized = re.sub(r"[^A-Z0-9]+", " ", str(raw_exchange).upper()).strip()
     collapsed = normalized.replace(" ", "")
 
-    if normalized in {"NYSE", "NEW YORK STOCK EXCHANGE"}:
+    if normalized in {"NYSE", "NEW YORK STOCK EXCHANGE", "NYQ"}:
         return "NYSE"
-    if normalized in {"NYSE AMERICAN", "NYSE MKT", "AMEX", "NYSE AMERICAN LLC"}:
+    if normalized in {"NYSE AMERICAN", "NYSE MKT", "AMEX", "NYSE AMERICAN LLC", "ASE"}:
         return "AMEX"
-    if normalized in {"NASDAQ", "NASDAQ NMS"} or collapsed in {"NASDAQGS", "NASDAQGM", "NASDAQCM"}:
+    if normalized in {"NASDAQ", "NASDAQ NMS", "NMS", "NGM", "NCM"} or collapsed in {
+        "NASDAQGS",
+        "NASDAQGM",
+        "NASDAQCM",
+    }:
         return "NASDAQ"
     return normalized
 
@@ -77,18 +81,21 @@ def is_allowed_exchange(raw_exchange: str | None) -> bool:
 
 def _fetch_symbol_exchange(symbol: str) -> str | None:
     """Fetch exchange metadata for a symbol from yfinance with a cheap-first fallback."""
-    ticker = yf.Ticker(symbol)
-    fast_info = getattr(ticker, "fast_info", None)
-    if fast_info:
-        exchange = fast_info.get("exchange")
-        if exchange:
-            return str(exchange)
+    try:
+        ticker = yf.Ticker(symbol)
+        fast_info = getattr(ticker, "fast_info", None)
+        if fast_info:
+            exchange = fast_info.get("exchange")
+            if exchange:
+                return str(exchange)
 
-    info = getattr(ticker, "info", None)
-    if isinstance(info, dict):
-        exchange = info.get("exchange")
-        if exchange:
-            return str(exchange)
+        info = getattr(ticker, "info", None)
+        if isinstance(info, dict):
+            exchange = info.get("exchange")
+            if exchange:
+                return str(exchange)
+    except Exception as exc:  # pragma: no cover - defensive for unstable runtime/network errors
+        logger.warning("Failed to fetch exchange metadata for %s: %s", symbol, str(exc))
     return None
 
 
