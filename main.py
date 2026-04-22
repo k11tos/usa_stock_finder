@@ -30,11 +30,13 @@ Date: 2024.05.19
 import asyncio
 import logging
 import os.path
+import re
 from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
+import yfinance as yf
 
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
 from file_utils import read_csv_first_column, save_json
@@ -46,6 +48,80 @@ from stop_loss_cooldown import is_in_cooldown
 from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX"}
+
+
+def normalize_exchange_name(raw_exchange: str | None) -> str | None:
+    """Normalize raw exchange metadata into a conservative canonical value."""
+    if not raw_exchange:
+        return None
+
+    normalized = re.sub(r"[^A-Z0-9]+", " ", str(raw_exchange).upper()).strip()
+    collapsed = normalized.replace(" ", "")
+
+    if normalized in {"NYSE", "NEW YORK STOCK EXCHANGE", "NYQ"}:
+        return "NYSE"
+    if normalized in {"NYSE AMERICAN", "NYSE MKT", "AMEX", "NYSE AMERICAN LLC", "ASE"}:
+        return "AMEX"
+    if normalized in {"NASDAQ", "NASDAQ NMS", "NMS", "NGM", "NCM"} or collapsed in {
+        "NASDAQGS",
+        "NASDAQGM",
+        "NASDAQCM",
+    }:
+        return "NASDAQ"
+    return normalized
+
+
+def is_allowed_exchange(raw_exchange: str | None) -> bool:
+    """Return True only for symbols listed on whitelisted core U.S. exchanges."""
+    normalized = normalize_exchange_name(raw_exchange)
+    return normalized in _ALLOWED_US_EXCHANGES
+
+
+def _fetch_symbol_exchange(symbol: str) -> str | None:
+    """Fetch exchange metadata for a symbol from yfinance with a cheap-first fallback."""
+    try:
+        ticker = yf.Ticker(symbol)
+        fast_info = getattr(ticker, "fast_info", None)
+        if fast_info:
+            exchange = fast_info.get("exchange")
+            if exchange:
+                return str(exchange)
+
+        info = getattr(ticker, "info", None)
+        if isinstance(info, dict):
+            exchange = info.get("exchange")
+            if exchange:
+                return str(exchange)
+    except Exception as exc:  # pragma: no cover - defensive for unstable runtime/network errors
+        logger.warning("Failed to fetch exchange metadata for %s: %s", symbol, str(exc))
+    return None
+
+
+def _filter_entry_symbols_by_exchange(entry_symbols: list[str]) -> list[str]:
+    """Filter entry symbols to conservative allowed exchanges before deeper analysis."""
+    allowed_symbols: list[str] = []
+    for symbol in entry_symbols:
+        raw_exchange = _fetch_symbol_exchange(symbol)
+        normalized_exchange = normalize_exchange_name(raw_exchange)
+
+        if normalized_exchange is None:
+            logger.info("Skipping %s: missing exchange metadata.", symbol)
+            continue
+
+        if normalized_exchange not in _ALLOWED_US_EXCHANGES:
+            logger.info(
+                "Skipping %s: exchange %s is not in allowed set %s.",
+                symbol,
+                normalized_exchange,
+                sorted(_ALLOWED_US_EXCHANGES),
+            )
+            continue
+
+        allowed_symbols.append(symbol)
+
+    return allowed_symbols
 
 
 def is_within_execution_window() -> bool:
@@ -919,6 +995,7 @@ def _prepare_finder_and_candidates(
 ) -> tuple[UsaStockFinder, list[str], list[str], set[str]] | None:
     """Prepare stock finder and initial buy/hold candidates."""
     entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
+    entry_symbols = _filter_entry_symbols_by_exchange(entry_symbols)
 
     seen_symbols: set[str] = set()
     analysis_symbols: list[str] = []

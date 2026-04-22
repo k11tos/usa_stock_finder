@@ -15,13 +15,15 @@ from main import (
     calculate_profit_loss_rate_safely,
     calculate_correlations,
     calculate_investment_per_stock,
-    is_profit_loss_rate_mismatch,
     calculate_sell_quantities,
     calculate_share_quantities,
     generate_telegram_message,
+    is_allowed_exchange,
+    is_profit_loss_rate_mismatch,
     is_within_execution_window,
     log_stock_info,
     main,
+    normalize_exchange_name,
     select_stocks,
     update_final_items,
 )
@@ -70,6 +72,28 @@ class TestMainFunctions(unittest.TestCase):
             ((50,),),
         ]
         self.mock_finder.price_volume_correlation_percent.assert_has_calls(expected_calls)
+
+    def test_normalize_exchange_name_common_aliases(self):
+        """Common provider aliases should normalize to core exchange values."""
+        self.assertEqual(normalize_exchange_name("NEW YORK STOCK EXCHANGE"), "NYSE")
+        self.assertEqual(normalize_exchange_name("NYQ"), "NYSE")
+        self.assertEqual(normalize_exchange_name("NYSE AMERICAN"), "AMEX")
+        self.assertEqual(normalize_exchange_name("NYSE MKT"), "AMEX")
+        self.assertEqual(normalize_exchange_name("ASE"), "AMEX")
+        self.assertEqual(normalize_exchange_name("NASDAQGS"), "NASDAQ")
+        self.assertEqual(normalize_exchange_name("NMS"), "NASDAQ")
+        self.assertEqual(normalize_exchange_name("NGM"), "NASDAQ")
+        self.assertEqual(normalize_exchange_name("NCM"), "NASDAQ")
+        self.assertEqual(normalize_exchange_name("NASDAQ NMS"), "NASDAQ")
+
+    def test_is_allowed_exchange_whitelist(self):
+        """Only NYSE/NASDAQ/AMEX should be accepted."""
+        self.assertTrue(is_allowed_exchange("NASDAQGM"))
+        self.assertTrue(is_allowed_exchange("NYSE"))
+        self.assertTrue(is_allowed_exchange("AMEX"))
+        self.assertFalse(is_allowed_exchange("OTC"))
+        self.assertFalse(is_allowed_exchange("LSE"))
+        self.assertFalse(is_allowed_exchange(None))
 
     def test_select_stocks_buy_candidates(self):
         """Test select_stocks function for buy candidates"""
@@ -956,6 +980,9 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_env_get = stack.enter_context(patch("main.EnvironmentConfig.get"))
             mock_fetch_holdings = stack.enter_context(patch("main.fetch_us_stock_holdings"))
             mock_read_csv = stack.enter_context(patch("main.read_csv_first_column"))
+            stack.enter_context(
+                patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols)
+            )
             mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
             mock_calculate_correlations = stack.enter_context(patch("main.calculate_correlations"))
             mock_select_stocks = stack.enter_context(patch("main.select_stocks"))
@@ -1017,6 +1044,12 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         """Holding-only symbols from analysis universe should not leak into returned not_sell_items."""
         with ExitStack() as stack:
             mock_read_csv = stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "MSFT"]))
+            stack.enter_context(
+                patch(
+                    "main._filter_entry_symbols_by_exchange",
+                    return_value=["AAPL", "MSFT"],
+                )
+            )
             mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
             stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 60.0, "TSLA": 60.0}}))
             stack.enter_context(patch("main.select_stocks", return_value=(["AAPL", "TSLA"], ["MSFT", "TSLA"])))
@@ -1036,6 +1069,24 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_read_csv.assert_called_once()
             mock_finder_cls.assert_called_once_with(["AAPL", "MSFT", "TSLA"])
 
+    def test_filter_entry_symbols_by_exchange_skips_missing_metadata(self):
+        """Missing exchange metadata should be skipped conservatively."""
+        with patch("main._fetch_symbol_exchange", return_value=None):
+            filtered = main_module._filter_entry_symbols_by_exchange(["AAPL"])  # pylint: disable=protected-access
+        self.assertEqual(filtered, [])
+
+    def test_fetch_symbol_exchange_returns_none_on_lookup_exception(self):
+        """Lookup runtime exceptions should not abort flow and should return None."""
+        with patch("main.yf.Ticker", side_effect=RuntimeError("network down")):
+            result = main_module._fetch_symbol_exchange("AAPL")  # pylint: disable=protected-access
+        self.assertIsNone(result)
+
+    def test_filter_entry_symbols_by_exchange_skips_lookup_exception_case(self):
+        """Lookup exception should result in explicit symbol skip."""
+        with patch("main.yf.Ticker", side_effect=RuntimeError("lookup failed")):
+            filtered = main_module._filter_entry_symbols_by_exchange(["AAPL"])  # pylint: disable=protected-access
+        self.assertEqual(filtered, [])
+
     def test_main_filters_cooldown_before_sell_evaluation(self):
         """Cooldown-filtered symbols should not be passed as selected_buy into sell evaluation."""
         with ExitStack() as stack:
@@ -1046,6 +1097,9 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
             stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=["AAPL"]))
             stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "MSFT"]))
+            stack.enter_context(
+                patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols)
+            )
             mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
             stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 55.0, "MSFT": 55.0}}))
             stack.enter_context(patch("main.select_stocks", return_value=(["AAPL", "MSFT"], [])))
@@ -1084,6 +1138,9 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
             stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=["AAPL", "TSLA"]))
             stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "MSFT"]))
+            stack.enter_context(
+                patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols)
+            )
             mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
             stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 60.0, "MSFT": 60.0}}))
             stack.enter_context(patch("main.select_stocks", return_value=(["MSFT"], ["AAPL"])))
