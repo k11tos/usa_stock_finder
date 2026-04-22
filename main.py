@@ -50,6 +50,17 @@ from telegram_utils import send_telegram_message
 logger = logging.getLogger(__name__)
 
 _ALLOWED_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX"}
+_SYMBOL_BLOCKLIST_TERMS = {
+    "otc": "otc_market",
+    "otcqx": "otc_market",
+    "otcqb": "otc_market",
+    "pink": "otc_market",
+    "pink sheets": "otc_market",
+    "delisted": "delisted",
+    "suspended": "suspended",
+    "inactive": "inactive",
+    "not tradable": "not_tradable",
+}
 
 
 def normalize_exchange_name(raw_exchange: str | None) -> str | None:
@@ -79,23 +90,79 @@ def is_allowed_exchange(raw_exchange: str | None) -> bool:
     return normalized in _ALLOWED_US_EXCHANGES
 
 
-def _fetch_symbol_exchange(symbol: str) -> str | None:
-    """Fetch exchange metadata for a symbol from yfinance with a cheap-first fallback."""
+def evaluate_symbol_eligibility(metadata: dict[str, Any] | None) -> tuple[bool, str | None]:
+    """Evaluate symbol eligibility using exchange whitelist plus defensive metadata checks."""
+    if not isinstance(metadata, dict):
+        return False, "missing_metadata"
+
+    normalized_metadata = {str(key).lower(): value for key, value in metadata.items()}
+
+    normalized_exchange = normalize_exchange_name(normalized_metadata.get("exchange"))
+    if normalized_exchange is None:
+        return False, "missing_exchange_metadata"
+    if normalized_exchange not in _ALLOWED_US_EXCHANGES:
+        return False, f"exchange_not_allowed:{normalized_exchange}"
+
+    bool_flags = {
+        "isdelisted": "delisted",
+        "delisted": "delisted",
+        "issuspended": "suspended",
+        "suspended": "suspended",
+        "isactive": "inactive",
+        "active": "inactive",
+        "istradable": "not_tradable",
+        "tradable": "not_tradable",
+    }
+    for field, reason in bool_flags.items():
+        if field not in normalized_metadata:
+            continue
+        value = normalized_metadata.get(field)
+        if value is None:
+            continue
+        if field in {"isactive", "active", "istradable", "tradable"} and value is False:
+            return False, reason
+        if field in {"isdelisted", "delisted", "issuspended", "suspended"} and value is True:
+            return False, reason
+
+    fields_to_scan = {"exchange", "fullexchangename", "market", "status", "quotetype", "typedisp", "description"}
+    for key, value in normalized_metadata.items():
+        if key in fields_to_scan or any(token in key for token in ("exchange", "market", "status", "state", "quote", "type", "tradable")):
+            normalized_value = re.sub(r"\s+", " ", str(value).strip().lower())
+            for term, reason in _SYMBOL_BLOCKLIST_TERMS.items():
+                if term in normalized_value:
+                    return False, reason
+
+    return True, None
+
+
+def _fetch_symbol_metadata(symbol: str) -> dict[str, Any] | None:
+    """Fetch metadata for a symbol from yfinance with a cheap-first fallback."""
+    metadata: dict[str, Any] = {}
     try:
         ticker = yf.Ticker(symbol)
         fast_info = getattr(ticker, "fast_info", None)
         if fast_info:
-            exchange = fast_info.get("exchange")
-            if exchange:
-                return str(exchange)
+            fast_exchange = fast_info.get("exchange")
+            if fast_exchange:
+                metadata["exchange"] = str(fast_exchange)
 
         info = getattr(ticker, "info", None)
         if isinstance(info, dict):
-            exchange = info.get("exchange")
-            if exchange:
-                return str(exchange)
+            metadata.update(info)
     except Exception as exc:  # pragma: no cover - defensive for unstable runtime/network errors
-        logger.warning("Failed to fetch exchange metadata for %s: %s", symbol, str(exc))
+        logger.warning("Failed to fetch symbol metadata for %s: %s", symbol, str(exc))
+        return None
+
+    return metadata or None
+
+
+def _fetch_symbol_exchange(symbol: str) -> str | None:
+    """Fetch exchange metadata for a symbol from yfinance with a cheap-first fallback."""
+    metadata = _fetch_symbol_metadata(symbol)
+    if isinstance(metadata, dict):
+        exchange = metadata.get("exchange")
+        if exchange:
+            return str(exchange)
     return None
 
 
@@ -103,20 +170,10 @@ def _filter_entry_symbols_by_exchange(entry_symbols: list[str]) -> list[str]:
     """Filter entry symbols to conservative allowed exchanges before deeper analysis."""
     allowed_symbols: list[str] = []
     for symbol in entry_symbols:
-        raw_exchange = _fetch_symbol_exchange(symbol)
-        normalized_exchange = normalize_exchange_name(raw_exchange)
-
-        if normalized_exchange is None:
-            logger.info("Skipping %s: missing exchange metadata.", symbol)
-            continue
-
-        if normalized_exchange not in _ALLOWED_US_EXCHANGES:
-            logger.info(
-                "Skipping %s: exchange %s is not in allowed set %s.",
-                symbol,
-                normalized_exchange,
-                sorted(_ALLOWED_US_EXCHANGES),
-            )
+        metadata = _fetch_symbol_metadata(symbol)
+        is_eligible, skip_reason = evaluate_symbol_eligibility(metadata)
+        if not is_eligible:
+            logger.info("Skipping %s: %s.", symbol, skip_reason)
             continue
 
         allowed_symbols.append(symbol)
