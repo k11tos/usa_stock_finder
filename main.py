@@ -97,6 +97,23 @@ def evaluate_symbol_eligibility(metadata: dict[str, Any] | None) -> tuple[bool, 
 
     normalized_metadata = {str(key).lower(): value for key, value in metadata.items()}
 
+    fields_to_scan = {
+        "exchange",
+        "fullexchangename",
+        "market",
+        "status",
+        "quotetype",
+        "typedisp",
+        "description",
+    }
+    scan_tokens = ("exchange", "market", "status", "state", "quote", "type", "tradable")
+    for key, value in normalized_metadata.items():
+        if key in fields_to_scan or any(token in key for token in scan_tokens):
+            normalized_value = re.sub(r"\s+", " ", str(value).strip().lower())
+            for term, reason in _SYMBOL_BLOCKLIST_TERMS.items():
+                if term in normalized_value:
+                    return False, reason
+
     normalized_exchange = normalize_exchange_name(normalized_metadata.get("exchange"))
     if normalized_exchange is None:
         return False, "missing_exchange_metadata"
@@ -124,14 +141,6 @@ def evaluate_symbol_eligibility(metadata: dict[str, Any] | None) -> tuple[bool, 
         if field in {"isdelisted", "delisted", "issuspended", "suspended"} and value is True:
             return False, reason
 
-    fields_to_scan = {"exchange", "fullexchangename", "market", "status", "quotetype", "typedisp", "description"}
-    for key, value in normalized_metadata.items():
-        if key in fields_to_scan or any(token in key for token in ("exchange", "market", "status", "state", "quote", "type", "tradable")):
-            normalized_value = re.sub(r"\s+", " ", str(value).strip().lower())
-            for term, reason in _SYMBOL_BLOCKLIST_TERMS.items():
-                if term in normalized_value:
-                    return False, reason
-
     return True, None
 
 
@@ -140,18 +149,28 @@ def _fetch_symbol_metadata(symbol: str) -> dict[str, Any] | None:
     metadata: dict[str, Any] = {}
     try:
         ticker = yf.Ticker(symbol)
+    except Exception as exc:  # pragma: no cover - defensive for unstable runtime/network errors
+        logger.warning("Failed to initialize ticker lookup for %s: %s", symbol, str(exc))
+        return None
+
+    try:
         fast_info = getattr(ticker, "fast_info", None)
         if fast_info:
             fast_exchange = fast_info.get("exchange")
             if fast_exchange:
                 metadata["exchange"] = str(fast_exchange)
+    except Exception as exc:  # pragma: no cover - defensive for unstable runtime/network errors
+        logger.debug("Failed to fetch fast metadata for %s: %s", symbol, str(exc))
 
+    try:
         info = getattr(ticker, "info", None)
         if isinstance(info, dict):
-            metadata.update(info)
+            info_exchange = info.get("exchange")
+            metadata.update({key: value for key, value in info.items() if key != "exchange"})
+            if metadata.get("exchange") is None and info_exchange:
+                metadata["exchange"] = str(info_exchange)
     except Exception as exc:  # pragma: no cover - defensive for unstable runtime/network errors
-        logger.warning("Failed to fetch symbol metadata for %s: %s", symbol, str(exc))
-        return None
+        logger.warning("Failed to enrich symbol metadata for %s: %s", symbol, str(exc))
 
     return metadata or None
 
