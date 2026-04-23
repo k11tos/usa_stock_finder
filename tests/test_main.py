@@ -17,6 +17,7 @@ from main import (
     calculate_investment_per_stock,
     calculate_sell_quantities,
     calculate_share_quantities,
+    evaluate_symbol_eligibility,
     generate_telegram_message,
     is_allowed_exchange,
     is_profit_loss_rate_mismatch,
@@ -94,6 +95,35 @@ class TestMainFunctions(unittest.TestCase):
         self.assertFalse(is_allowed_exchange("OTC"))
         self.assertFalse(is_allowed_exchange("LSE"))
         self.assertFalse(is_allowed_exchange(None))
+
+    def test_evaluate_symbol_eligibility_rejects_otc_style_exchange(self):
+        """OTC-like exchange metadata should be explicitly rejected."""
+        is_eligible, skip_reason = evaluate_symbol_eligibility({"exchange": "OTCQX"})
+        self.assertFalse(is_eligible)
+        self.assertEqual(skip_reason, "otc_market")
+
+    def test_evaluate_symbol_eligibility_rejects_delisted_flag(self):
+        """Delisted metadata flags should always reject."""
+        is_eligible, skip_reason = evaluate_symbol_eligibility({"exchange": "NASDAQ", "isDelisted": True})
+        self.assertFalse(is_eligible)
+        self.assertEqual(skip_reason, "delisted")
+
+    def test_evaluate_symbol_eligibility_rejects_inactive_not_tradable(self):
+        """Inactive or non-tradable metadata should reject conservatively."""
+        is_inactive, inactive_reason = evaluate_symbol_eligibility({"exchange": "NYSE", "isActive": False})
+        self.assertFalse(is_inactive)
+        self.assertEqual(inactive_reason, "inactive")
+
+        is_not_tradable, tradable_reason = evaluate_symbol_eligibility({"exchange": "NASDAQ", "tradable": False})
+        self.assertFalse(is_not_tradable)
+        self.assertEqual(tradable_reason, "not_tradable")
+
+    def test_evaluate_symbol_eligibility_accepts_normal_listed_symbol(self):
+        """NYSE/NASDAQ/AMEX-listed active symbols should pass."""
+        for exchange in ["NYSE", "NASDAQGS", "AMEX"]:
+            is_eligible, skip_reason = evaluate_symbol_eligibility({"exchange": exchange, "isActive": True})
+            self.assertTrue(is_eligible, msg=f"{exchange} should be eligible")
+            self.assertIsNone(skip_reason)
 
     def test_select_stocks_buy_candidates(self):
         """Test select_stocks function for buy candidates"""
@@ -1071,7 +1101,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
 
     def test_filter_entry_symbols_by_exchange_skips_missing_metadata(self):
         """Missing exchange metadata should be skipped conservatively."""
-        with patch("main._fetch_symbol_exchange", return_value=None):
+        with patch("main._fetch_symbol_metadata", return_value=None):
             filtered = main_module._filter_entry_symbols_by_exchange(["AAPL"])  # pylint: disable=protected-access
         self.assertEqual(filtered, [])
 
@@ -1080,6 +1110,42 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         with patch("main.yf.Ticker", side_effect=RuntimeError("network down")):
             result = main_module._fetch_symbol_exchange("AAPL")  # pylint: disable=protected-access
         self.assertIsNone(result)
+
+    def test_fetch_symbol_metadata_keeps_fast_exchange_when_info_raises(self):
+        """Fast exchange metadata should be preserved when info enrichment fails."""
+        mock_ticker = MagicMock()
+        mock_ticker.fast_info = {"exchange": "NASDAQ"}
+        type(mock_ticker).info = property(lambda _self: (_ for _ in ()).throw(RuntimeError("info down")))
+
+        with patch("main.yf.Ticker", return_value=mock_ticker):
+            metadata = main_module._fetch_symbol_metadata("AAPL")  # pylint: disable=protected-access
+
+        self.assertEqual(metadata, {"exchange": "NASDAQ"})
+
+    def test_fetch_symbol_metadata_info_exchange_none_does_not_override_fast_exchange(self):
+        """Fallback info exchange=None should not downgrade valid fast exchange metadata."""
+        mock_ticker = MagicMock()
+        mock_ticker.fast_info = {"exchange": "NYSE"}
+        mock_ticker.info = {"exchange": None, "market": "us_market"}
+
+        with patch("main.yf.Ticker", return_value=mock_ticker):
+            metadata = main_module._fetch_symbol_metadata("IBM")  # pylint: disable=protected-access
+
+        self.assertEqual(metadata, {"exchange": "NYSE", "market": "us_market"})
+
+    def test_fetch_symbol_metadata_merges_info_when_both_sources_present(self):
+        """Metadata enrichment should keep fast exchange while merging non-conflicting info fields."""
+        mock_ticker = MagicMock()
+        mock_ticker.fast_info = {"exchange": "NASDAQ"}
+        mock_ticker.info = {"fullExchangeName": "NasdaqGS", "tradable": True}
+
+        with patch("main.yf.Ticker", return_value=mock_ticker):
+            metadata = main_module._fetch_symbol_metadata("AAPL")  # pylint: disable=protected-access
+
+        self.assertEqual(
+            metadata,
+            {"exchange": "NASDAQ", "fullExchangeName": "NasdaqGS", "tradable": True},
+        )
 
     def test_filter_entry_symbols_by_exchange_skips_lookup_exception_case(self):
         """Lookup exception should result in explicit symbol skip."""
