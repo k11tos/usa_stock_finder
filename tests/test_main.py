@@ -1153,6 +1153,52 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             filtered = main_module._filter_entry_symbols_by_exchange(["AAPL"])  # pylint: disable=protected-access
         self.assertEqual(filtered, [])
 
+    def test_filter_buy_symbols_by_exchange_eligibility_keeps_allowed_symbol(self):
+        """Portfolio symbol on allowed exchange should remain buy-eligible."""
+        with patch("main._fetch_symbol_metadata", return_value={"exchange": "NASDAQ"}):
+            filtered = main_module._filter_buy_symbols_by_exchange_eligibility(["AAPL"])  # pylint: disable=protected-access
+        self.assertEqual(filtered, ["AAPL"])
+
+    def test_filter_buy_symbols_by_exchange_eligibility_excludes_non_core_exchange(self):
+        """Portfolio symbol on disallowed exchange should be excluded from buy path."""
+        with patch("main._fetch_symbol_metadata", return_value={"exchange": "LSE"}):
+            filtered = main_module._filter_buy_symbols_by_exchange_eligibility(["VOD"])  # pylint: disable=protected-access
+        self.assertEqual(filtered, [])
+
+    def test_filter_buy_symbols_by_exchange_eligibility_excludes_inactive_otc_metadata(self):
+        """Inactive/OTC metadata should be excluded from buy path."""
+        metadata_by_symbol = {
+            "OTCM": {"exchange": "OTCQX"},
+            "INAC": {"exchange": "NYSE", "isActive": False},
+            "DLST": {"exchange": "NASDAQ", "isDelisted": True},
+        }
+        with patch("main._fetch_symbol_metadata", side_effect=lambda symbol: metadata_by_symbol[symbol]):
+            filtered = main_module._filter_buy_symbols_by_exchange_eligibility(["OTCM", "INAC", "DLST"])  # pylint: disable=protected-access
+        self.assertEqual(filtered, [])
+
+    def test_prepare_buy_side_orchestration_excludes_ineligible_before_sizing_and_reporting(self):
+        """Ineligible portfolio symbols should never reach buy sizing output."""
+        finder = MagicMock()
+        metadata_by_symbol = {"AAPL": {"exchange": "NASDAQ"}, "OTCM": {"exchange": "OTCQB"}}
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("main._fetch_symbol_metadata", side_effect=lambda symbol: metadata_by_symbol[symbol])
+            )
+            mock_calculate_investment = stack.enter_context(patch("main.calculate_investment_per_stock"))
+            mock_calculate_share_quantities = stack.enter_context(patch("main.calculate_share_quantities"))
+            mock_calculate_investment.return_value = {"AAPL": 1000.0}
+            mock_calculate_share_quantities.return_value = {"AAPL": {"shares_to_buy": 5}}
+
+            buy_items, investment_map, share_quantities = main_module._prepare_buy_side_orchestration(  # pylint: disable=protected-access
+                ["AAPL", "OTCM"], finder, 0.0
+            )
+
+        self.assertEqual(buy_items, ["AAPL"])
+        self.assertEqual(investment_map, {"AAPL": 1000.0})
+        self.assertEqual(share_quantities, {"AAPL": {"shares_to_buy": 5}})
+        mock_calculate_investment.assert_called_once_with(["AAPL"], additional_cash=0.0)
+        mock_calculate_share_quantities.assert_called_once_with({"AAPL": 1000.0}, finder)
+
     def test_main_filters_cooldown_before_sell_evaluation(self):
         """Cooldown-filtered symbols should not be passed as selected_buy into sell evaluation."""
         with ExitStack() as stack:
