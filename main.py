@@ -200,19 +200,6 @@ def _filter_entry_symbols_by_exchange(entry_symbols: list[str]) -> list[str]:
     return allowed_symbols
 
 
-def _filter_buy_symbols_by_exchange_eligibility(buy_symbols: list[str]) -> list[str]:
-    """Enforce exchange-eligible-only symbols for fresh buy-side processing."""
-    eligible_buy_symbols: list[str] = []
-    for symbol in buy_symbols:
-        metadata = _fetch_symbol_metadata(symbol)
-        is_eligible, skip_reason = evaluate_symbol_eligibility(metadata)
-        if not is_eligible:
-            logger.info("Skipping buy candidate %s due to exchange eligibility: %s.", symbol, skip_reason)
-            continue
-        eligible_buy_symbols.append(symbol)
-    return eligible_buy_symbols
-
-
 def is_within_execution_window() -> bool:
     """
     Check if current time is within the execution window (KST 기준).
@@ -1376,7 +1363,6 @@ def _prepare_buy_side_orchestration(
     buy_items: list[str], finder: UsaStockFinder, additional_cash_from_sell: float
 ) -> tuple[list[str], dict[str, float] | None, dict[str, dict[str, Any]] | None]:
     """Apply buy-side sizing steps for already-filtered buy candidates."""
-    buy_items = _filter_buy_symbols_by_exchange_eligibility(buy_items)
     investment_map, share_quantities = _prepare_buy_sizing_inputs(buy_items, finder, additional_cash_from_sell)
     return buy_items, investment_map, share_quantities
 
