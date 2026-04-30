@@ -212,7 +212,9 @@ def _build_source_pool_map(symbols: list[str], source_pool: str = CORE_QUANT_SOU
     return source_pool_by_symbol
 
 
-def _build_buy_candidate_records(buy_items: list[str], source_pool_by_symbol: dict[str, str] | None) -> list[dict[str, str]]:
+def _build_buy_candidate_records(
+    buy_items: list[str], source_pool_by_symbol: dict[str, str] | None
+) -> list[dict[str, str]]:
     """Build compact buy-candidate records with source metadata."""
     return [
         {"symbol": symbol, "source_pool": (source_pool_by_symbol or {}).get(symbol, CORE_QUANT_SOURCE_POOL)}
