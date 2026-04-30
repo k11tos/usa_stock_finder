@@ -1330,8 +1330,8 @@ class TestBuyFunnelFormatting(unittest.TestCase):
             "initial_input_symbols": 96,
             "exchange_eligible_symbols": 94,
             "trend_eligible_symbols": 12,
-            "price_liquidity_eligible_symbols": 88,
             "fundamental_quality_eligible_symbols": 71,
+            "cooldown_eligible_symbols": 11,
             "special_situation_excluded_symbols": 1,
         }
         self.assertEqual(
@@ -1340,9 +1340,9 @@ class TestBuyFunnelFormatting(unittest.TestCase):
                 "[Buy Funnel]",
                 "Initial: 96",
                 "Exchange OK: 94",
-                "Price/Liquidity OK: 88",
                 "Fundamental OK: 71",
                 "Trend OK: 12",
+                "Cooldown OK: 11",
                 "Special Excluded: 1",
                 "Final Buy: 10",
             ],
@@ -1379,12 +1379,11 @@ class TestBuyFunnelFormatting(unittest.TestCase):
         stage_counts = {
             "initial_input_symbols": 40,
             "exchange_eligible_symbols": 39,
-            "price_liquidity_eligible_symbols": 31,
             "trend_eligible_symbols": 9,
+            "cooldown_eligible_symbols": 8,
             "special_situation_excluded_symbols": 2,
             "final_buy_candidates": 7,
         }
         result = build_buy_funnel_lines(stage_counts)
         self.assertEqual(result[0], "[Buy Funnel]")
         self.assertEqual(result[-1], "Final Buy: 7")
-

@@ -456,9 +456,9 @@ def build_buy_funnel_lines(stage_counts: dict[str, int]) -> list[str]:
         ("initial_input_symbols", "Initial"),
         ("core_quant_input_symbols", "Core Quant Input"),
         ("exchange_eligible_symbols", "Exchange OK"),
-        ("price_liquidity_eligible_symbols", "Price/Liquidity OK"),
         ("fundamental_quality_eligible_symbols", "Fundamental OK"),
         ("trend_eligible_symbols", "Trend OK"),
+        ("cooldown_eligible_symbols", "Cooldown OK"),
         ("special_situation_excluded_symbols", "Special Excluded"),
         ("final_buy_candidates", "Final Buy"),
     ]
@@ -1515,7 +1515,7 @@ def main() -> None:
 
     finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts = finder_and_candidates
     buy_items = _filter_buy_candidates_by_cooldown(buy_items)
-    funnel_stage_counts["price_liquidity_eligible_symbols"] = len(buy_items)
+    funnel_stage_counts["cooldown_eligible_symbols"] = len(buy_items)
 
     pre_special_buy_count = len(buy_items)
     buy_items = _filter_buy_candidates_by_special_situation(buy_items, finder)
