@@ -49,6 +49,8 @@ from telegram_utils import send_telegram_message
 
 logger = logging.getLogger(__name__)
 
+CORE_QUANT_SOURCE_POOL = "core_quant"
+
 _ALLOWED_US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX"}
 _SYMBOL_BLOCKLIST_TERMS = {
     "otc": "otc_market",
@@ -199,6 +201,25 @@ def _filter_entry_symbols_by_exchange(entry_symbols: list[str]) -> list[str]:
 
     return allowed_symbols
 
+
+
+
+def _build_source_pool_map(symbols: list[str], source_pool: str = CORE_QUANT_SOURCE_POOL) -> dict[str, str]:
+    """Attach source-pool metadata to symbols while preserving first-seen order semantics."""
+    source_pool_by_symbol: dict[str, str] = {}
+    for symbol in symbols:
+        source_pool_by_symbol.setdefault(symbol, source_pool)
+    return source_pool_by_symbol
+
+
+def _build_buy_candidate_records(
+    buy_items: list[str], source_pool_by_symbol: dict[str, str] | None
+) -> list[dict[str, str]]:
+    """Build compact buy-candidate records with source metadata."""
+    return [
+        {"symbol": symbol, "source_pool": (source_pool_by_symbol or {}).get(symbol, CORE_QUANT_SOURCE_POOL)}
+        for symbol in buy_items
+    ]
 
 def is_within_execution_window() -> bool:
     """
@@ -1105,6 +1126,7 @@ def _prepare_finder_and_candidates(
     """Prepare stock finder and initial buy/hold candidates."""
     raw_entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
     entry_symbols = _filter_entry_symbols_by_exchange(raw_entry_symbols)
+    source_pool_by_symbol = _build_source_pool_map(entry_symbols)
 
     seen_symbols: set[str] = set()
     analysis_symbols: list[str] = []
@@ -1121,6 +1143,7 @@ def _prepare_finder_and_candidates(
     )
 
     finder = UsaStockFinder(analysis_symbols)
+    finder.source_pool_by_symbol = source_pool_by_symbol
 
     if not finder.is_data_valid():
         logger.error("Invalid data in UsaStockFinder")
@@ -1529,6 +1552,11 @@ def main() -> None:
     )
     funnel_stage_counts["final_buy_candidates"] = len(buy_items)
     buy_funnel_lines = log_buy_funnel(funnel_stage_counts)
+    buy_candidate_records = _build_buy_candidate_records(
+        buy_items, getattr(finder, "source_pool_by_symbol", None)
+    )
+    if buy_candidate_records:
+        logger.info("Final buy candidates with source pools: %s", buy_candidate_records)
 
     telegram_message = generate_telegram_message(
         us_stock_holdings,

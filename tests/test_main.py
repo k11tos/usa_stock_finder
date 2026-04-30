@@ -1132,6 +1132,54 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_read_csv.assert_called_once()
             mock_finder_cls.assert_called_once_with(["AAPL", "MSFT", "TSLA"])
 
+
+    def test_prepare_finder_candidates_attaches_core_quant_source_pool(self):
+        """Entry symbols should be tagged as coming from the core quant pool."""
+        with ExitStack() as stack:
+            stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "MSFT"]))
+            stack.enter_context(patch("main._filter_entry_symbols_by_exchange", return_value=["AAPL", "MSFT"]))
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 60.0}}))
+            stack.enter_context(patch("main.select_stocks", return_value=(["AAPL"], ["MSFT"])))
+
+            mock_finder = MagicMock()
+            mock_finder.is_data_valid.return_value = True
+            mock_finder_cls.return_value = mock_finder
+
+            result = main_module._prepare_finder_and_candidates([])  # pylint: disable=protected-access
+
+            self.assertIsNotNone(result)
+            finder, *_ = result
+            self.assertEqual(
+                finder.source_pool_by_symbol,
+                {"AAPL": "core_quant", "MSFT": "core_quant"},
+            )
+
+    def test_build_buy_candidate_records_preserves_source_pool(self):
+        """Final buy candidate records should keep source_pool metadata for each symbol."""
+        records = main_module._build_buy_candidate_records(  # pylint: disable=protected-access
+            ["AAPL", "MSFT"],
+            {"AAPL": "core_quant", "MSFT": "core_quant"},
+        )
+
+        self.assertEqual(
+            records,
+            [
+                {"symbol": "AAPL", "source_pool": "core_quant"},
+                {"symbol": "MSFT", "source_pool": "core_quant"},
+            ],
+        )
+
+    def test_build_buy_candidate_records_keeps_symbol_order(self):
+        """Candidate-record generation must not alter symbol order/selection behavior."""
+        buy_items = ["MSFT", "AAPL"]
+        records = main_module._build_buy_candidate_records(  # pylint: disable=protected-access
+            buy_items,
+            {"AAPL": "core_quant", "MSFT": "core_quant"},
+        )
+
+        self.assertEqual([row["symbol"] for row in records], buy_items)
+
     def test_filter_entry_symbols_by_exchange_skips_missing_metadata(self):
         """Missing exchange metadata should be skipped conservatively."""
         with patch("main._fetch_symbol_metadata", return_value=None):
