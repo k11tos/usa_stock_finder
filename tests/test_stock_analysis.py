@@ -322,6 +322,37 @@ class TestUsaStockFinder(unittest.TestCase):
             finder = UsaStockFinder(["VOLGAP"])
             self.assertFalse(finder.is_special_situation_price_pinned("VOLGAP"))
 
+    def test_is_special_situation_price_pinned_false_when_atr_invalid_zero(self):
+        """ATR calc failure (0.0) must not trigger special-situation exclusion."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.concatenate(
+                [
+                    np.linspace(10.0, 11.0, 60),
+                    np.array([14.3]),
+                    np.full(29, 14.35),
+                ]
+            )
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "EWCZ"): close + 0.03,
+                    ("Low", "EWCZ"): close - 0.03,
+                    ("Close", "EWCZ"): close,
+                    ("Volume", "EWCZ"): np.full(periods, 1000.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["EWCZ"])
+            with patch.object(finder, "get_atr", return_value=0.0):
+                metrics = finder.get_special_situation_price_pinned_metrics("EWCZ")
+                self.assertFalse(metrics["is_special_situation"])
+                self.assertEqual(metrics["atr_pct"], 0.0)
+                self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
+
     def test_calculate_vpci_components(self):
         """check calculate_vpci_components function"""
         for symbol in self.symbols:

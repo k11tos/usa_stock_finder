@@ -218,6 +218,14 @@ class UsaStockFinder:
         recent_range_pct = float((recent_close.max() - recent_close.min()) / current_close)
         recent_abs_return_pct = float(abs((recent_close.iloc[-1] - recent_close.iloc[0]) / recent_close.iloc[0]))
         atr = self.get_atr(symbol, period=14)
+        if atr is None or not np.isfinite(atr) or atr <= 0.0:
+            return {
+                "is_special_situation": False,
+                "max_gap_up_pct": max_gap_up_pct,
+                "recent_range_pct": recent_range_pct,
+                "recent_abs_return_pct": recent_abs_return_pct,
+                "atr_pct": 0.0,
+            }
         atr_pct = float(atr / current_close) if current_close > 0 else 0.0
 
         is_special_situation = bool(
