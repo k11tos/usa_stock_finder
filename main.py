@@ -448,6 +448,33 @@ def _collect_stale_holdings(
     return sorted(stale_symbols)
 
 
+
+
+def build_buy_funnel_lines(stage_counts: dict[str, int]) -> list[str]:
+    """Build a compact buy-funnel report from available stage counts."""
+    stage_order = [
+        ("initial_input_symbols", "Initial"),
+        ("core_quant_input_symbols", "Core Quant Input"),
+        ("exchange_eligible_symbols", "Exchange OK"),
+        ("price_liquidity_eligible_symbols", "Price/Liquidity OK"),
+        ("fundamental_quality_eligible_symbols", "Fundamental OK"),
+        ("trend_eligible_symbols", "Trend OK"),
+        ("special_situation_excluded_symbols", "Special Excluded"),
+        ("final_buy_candidates", "Final Buy"),
+    ]
+    lines = ["[Buy Funnel]"]
+    for key, label in stage_order:
+        if key in stage_counts:
+            lines.append(f"{label}: {stage_counts[key]}")
+    return lines
+
+
+def log_buy_funnel(stage_counts: dict[str, int]) -> list[str]:
+    """Log and return buy-funnel lines for telegram/reporting."""
+    lines = build_buy_funnel_lines(stage_counts)
+    for line in lines:
+        logger.info(line)
+    return lines
 def generate_telegram_message(
     prev_items: list[str],
     buy_items: list[str],
@@ -457,6 +484,7 @@ def generate_telegram_message(
     sell_decisions: dict[str, SellDecision] | None = None,
     finder: UsaStockFinder | None = None,
     entry_symbol_set: set[str] | None = None,
+    buy_funnel_lines: list[str] | None = None,
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
@@ -547,6 +575,11 @@ def generate_telegram_message(
     if stale_holdings:
         message.append("\n🧾 보유 유지:")
         message.append(_format_stale_holdings_line(stale_holdings))
+        has_changes = True
+
+    if buy_funnel_lines:
+        message.append("")
+        message.extend(buy_funnel_lines)
         has_changes = True
 
     if has_changes:
@@ -1068,10 +1101,10 @@ def _load_and_validate_runtime_prerequisites() -> bool:
 
 def _prepare_finder_and_candidates(
     current_holding_symbols: list[str],
-) -> tuple[UsaStockFinder, list[str], list[str], set[str]] | None:
+) -> tuple[UsaStockFinder, list[str], list[str], set[str], dict[str, int]] | None:
     """Prepare stock finder and initial buy/hold candidates."""
-    entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
-    entry_symbols = _filter_entry_symbols_by_exchange(entry_symbols)
+    raw_entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
+    entry_symbols = _filter_entry_symbols_by_exchange(raw_entry_symbols)
 
     seen_symbols: set[str] = set()
     analysis_symbols: list[str] = []
@@ -1098,7 +1131,12 @@ def _prepare_finder_and_candidates(
     entry_symbol_set = set(entry_symbols)
     buy_items = [symbol for symbol in buy_items if symbol in entry_symbol_set]
     not_sell_items = [symbol for symbol in not_sell_items if symbol in entry_symbol_set]
-    return finder, buy_items, not_sell_items, entry_symbol_set
+    funnel_stage_counts = {
+        "initial_input_symbols": len(raw_entry_symbols),
+        "exchange_eligible_symbols": len(entry_symbols),
+        "trend_eligible_symbols": len(buy_items),
+    }
+    return finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts
 
 
 def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
@@ -1475,9 +1513,13 @@ def main() -> None:
     if not finder_and_candidates:
         return
 
-    finder, buy_items, not_sell_items, entry_symbol_set = finder_and_candidates
+    finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts = finder_and_candidates
     buy_items = _filter_buy_candidates_by_cooldown(buy_items)
+    funnel_stage_counts["price_liquidity_eligible_symbols"] = len(buy_items)
+
+    pre_special_buy_count = len(buy_items)
     buy_items = _filter_buy_candidates_by_special_situation(buy_items, finder)
+    funnel_stage_counts["special_situation_excluded_symbols"] = pre_special_buy_count - len(buy_items)
 
     sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
         finder, buy_items, not_sell_items, entry_symbol_set
@@ -1485,6 +1527,8 @@ def main() -> None:
     buy_items, _investment_map, share_quantities = _prepare_buy_side_orchestration(
         buy_items, finder, additional_cash_from_sell
     )
+    funnel_stage_counts["final_buy_candidates"] = len(buy_items)
+    buy_funnel_lines = log_buy_funnel(funnel_stage_counts)
 
     telegram_message = generate_telegram_message(
         us_stock_holdings,
@@ -1495,6 +1539,7 @@ def main() -> None:
         sell_decisions,
         finder,
         entry_symbol_set,
+        buy_funnel_lines=buy_funnel_lines,
     )
 
     if telegram_message:
