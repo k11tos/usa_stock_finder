@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import main as main_module
 from main import (
     _filter_buy_candidates_by_special_situation,
+    build_buy_funnel_lines,
     calculate_profit_loss_rate_safely,
     calculate_correlations,
     calculate_investment_per_stock,
@@ -1122,10 +1123,11 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             result = main_module._prepare_finder_and_candidates(["TSLA"])  # pylint: disable=protected-access
 
             self.assertIsNotNone(result)
-            finder, buy_items, not_sell_items, entry_symbol_set = result
+            finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts = result
             self.assertIs(finder, mock_finder)
             self.assertEqual(buy_items, ["AAPL"])
             self.assertEqual(not_sell_items, ["MSFT"])
+            self.assertEqual(funnel_stage_counts["initial_input_symbols"], 2)
             self.assertEqual(entry_symbol_set, {"AAPL", "MSFT"})
             mock_read_csv.assert_called_once()
             mock_finder_cls.assert_called_once_with(["AAPL", "MSFT", "TSLA"])
@@ -1317,3 +1319,71 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBuyFunnelFormatting(unittest.TestCase):
+    """Tests for buy funnel report formatting helper."""
+
+    def test_buy_funnel_formatting_is_deterministic(self):
+        stage_counts = {
+            "final_buy_candidates": 10,
+            "initial_input_symbols": 96,
+            "exchange_eligible_symbols": 94,
+            "trend_eligible_symbols": 12,
+            "fundamental_quality_eligible_symbols": 71,
+            "cooldown_eligible_symbols": 11,
+            "special_situation_excluded_symbols": 1,
+        }
+        self.assertEqual(
+            build_buy_funnel_lines(stage_counts),
+            [
+                "[Buy Funnel]",
+                "Initial: 96",
+                "Exchange OK: 94",
+                "Fundamental OK: 71",
+                "Trend OK: 12",
+                "Cooldown OK: 11",
+                "Special Excluded: 1",
+                "Final Buy: 10",
+            ],
+        )
+
+    def test_buy_funnel_skips_missing_optional_stages(self):
+        stage_counts = {
+            "initial_input_symbols": 20,
+            "exchange_eligible_symbols": 18,
+            "trend_eligible_symbols": 5,
+            "final_buy_candidates": 4,
+        }
+        self.assertEqual(
+            build_buy_funnel_lines(stage_counts),
+            [
+                "[Buy Funnel]",
+                "Initial: 20",
+                "Exchange OK: 18",
+                "Trend OK: 5",
+                "Final Buy: 4",
+            ],
+        )
+
+    def test_buy_funnel_handles_zero_candidates(self):
+        stage_counts = {
+            "initial_input_symbols": 0,
+            "exchange_eligible_symbols": 0,
+            "trend_eligible_symbols": 0,
+            "final_buy_candidates": 0,
+        }
+        self.assertIn("Final Buy: 0", build_buy_funnel_lines(stage_counts))
+
+    def test_buy_funnel_normal_multi_stage_counts(self):
+        stage_counts = {
+            "initial_input_symbols": 40,
+            "exchange_eligible_symbols": 39,
+            "trend_eligible_symbols": 9,
+            "cooldown_eligible_symbols": 8,
+            "special_situation_excluded_symbols": 2,
+            "final_buy_candidates": 7,
+        }
+        result = build_buy_funnel_lines(stage_counts)
+        self.assertEqual(result[0], "[Buy Funnel]")
+        self.assertEqual(result[-1], "Final Buy: 7")
