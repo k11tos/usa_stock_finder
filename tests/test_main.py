@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import main as main_module
 from main import (
+    _filter_buy_candidates_by_special_situation,
     calculate_profit_loss_rate_safely,
     calculate_correlations,
     calculate_investment_per_stock,
@@ -257,6 +258,29 @@ class TestMainFunctions(unittest.TestCase):
         result = update_final_items(prev_items, buy_items, not_sell_items, sell_decisions={})
 
         self.assertEqual(result, ["AAPL", "OLD1", "MSFT"])
+
+    def test_filter_buy_candidates_by_special_situation(self):
+        """Special-situation symbols should be removed from buy candidates."""
+        mock_finder = MagicMock()
+        mock_finder.get_special_situation_price_pinned_metrics.side_effect = [
+            {
+                "is_special_situation": True,
+                "max_gap_up_pct": 0.31,
+                "recent_range_pct": 0.01,
+                "recent_abs_return_pct": 0.005,
+                "atr_pct": 0.01,
+            },
+            {
+                "is_special_situation": False,
+                "max_gap_up_pct": 0.05,
+                "recent_range_pct": 0.08,
+                "recent_abs_return_pct": 0.04,
+                "atr_pct": 0.02,
+            },
+        ]
+
+        filtered = _filter_buy_candidates_by_special_situation(["EWCZ", "AAPL"], mock_finder)
+        self.assertEqual(filtered, ["AAPL"])
 
     def test_update_final_items_removes_only_symbols_with_real_sell_decisions(self):
         """Only explicit sell decisions should remove symbols from saved state."""
@@ -1040,6 +1064,13 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
             mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0, "TSLA": 250.0}
+            mock_finder.get_special_situation_price_pinned_metrics.return_value = {
+                "is_special_situation": False,
+                "max_gap_up_pct": 0.0,
+                "recent_range_pct": 0.0,
+                "recent_abs_return_pct": 0.0,
+                "atr_pct": 0.0,
+            }
             mock_finder_cls.return_value = mock_finder
 
             mock_calculate_correlations.return_value = {"50": {"AAPL": 55.0, "MSFT": 52.0, "TSLA": 51.0}}
@@ -1187,6 +1218,13 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
             mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder.get_special_situation_price_pinned_metrics.return_value = {
+                "is_special_situation": False,
+                "max_gap_up_pct": 0.0,
+                "recent_range_pct": 0.0,
+                "recent_abs_return_pct": 0.0,
+                "atr_pct": 0.0,
+            }
             mock_finder_cls.return_value = mock_finder
 
             main()

@@ -178,6 +178,84 @@ class UsaStockFinder:
             logger.debug("Error calculating ATR for %s: %s", symbol, str(e))
             return 0.0
 
+    def get_special_situation_price_pinned_metrics(
+        self,
+        symbol: str,
+        lookback_days: int = 60,
+        post_window_days: int = 20,
+        min_gap_up_pct: float = 0.25,
+        max_recent_range_pct: float = 0.03,
+        max_recent_abs_return_pct: float = 0.03,
+        max_atr_pct: float = 0.015,
+    ) -> dict[str, float | bool]:
+        """Compute conservative pinned-price special-situation metrics from OHLC data."""
+        defaults: dict[str, float | bool] = {
+            "is_special_situation": False,
+            "max_gap_up_pct": 0.0,
+            "recent_range_pct": 0.0,
+            "recent_abs_return_pct": 0.0,
+            "atr_pct": 0.0,
+        }
+        df = self._get_symbol_df(symbol)
+        if df is None or len(df) < max(lookback_days + 1, post_window_days + 1, StrategyConfig.TRAILING_ATR_PERIOD + 1):
+            return defaults
+
+        close = df["Close"].dropna()
+        if len(close) < max(lookback_days + 1, post_window_days + 1):
+            return defaults
+
+        recent_close = close.iloc[-post_window_days:]
+        current_close = float(close.iloc[-1])
+        if current_close <= 0:
+            return defaults
+
+        lookback_close = close.iloc[-(lookback_days + 1) :]
+        close_to_close_returns = lookback_close.pct_change().dropna()
+        if close_to_close_returns.empty:
+            return defaults
+
+        max_gap_up_pct = float(close_to_close_returns.max())
+        recent_range_pct = float((recent_close.max() - recent_close.min()) / current_close)
+        recent_abs_return_pct = float(abs((recent_close.iloc[-1] - recent_close.iloc[0]) / recent_close.iloc[0]))
+        atr = self.get_atr(symbol, period=14)
+        atr_pct = float(atr / current_close) if current_close > 0 else 0.0
+
+        is_special_situation = bool(
+            max_gap_up_pct >= min_gap_up_pct
+            and recent_range_pct <= max_recent_range_pct
+            and recent_abs_return_pct <= max_recent_abs_return_pct
+            and atr_pct <= max_atr_pct
+        )
+        return {
+            "is_special_situation": is_special_situation,
+            "max_gap_up_pct": max_gap_up_pct,
+            "recent_range_pct": recent_range_pct,
+            "recent_abs_return_pct": recent_abs_return_pct,
+            "atr_pct": atr_pct,
+        }
+
+    def is_special_situation_price_pinned(
+        self,
+        symbol: str,
+        lookback_days: int = 60,
+        post_window_days: int = 20,
+        min_gap_up_pct: float = 0.25,
+        max_recent_range_pct: float = 0.03,
+        max_recent_abs_return_pct: float = 0.03,
+        max_atr_pct: float = 0.015,
+    ) -> bool:
+        """Return True when OHLC behavior looks like a pinned merger-arb/take-private profile."""
+        metrics = self.get_special_situation_price_pinned_metrics(
+            symbol=symbol,
+            lookback_days=lookback_days,
+            post_window_days=post_window_days,
+            min_gap_up_pct=min_gap_up_pct,
+            max_recent_range_pct=max_recent_range_pct,
+            max_recent_abs_return_pct=max_recent_abs_return_pct,
+            max_atr_pct=max_atr_pct,
+        )
+        return bool(metrics["is_special_situation"])
+
     def is_data_valid(self) -> bool:
         """
         Check if the loaded stock data is valid and not empty.
