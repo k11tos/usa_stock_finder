@@ -1122,6 +1122,38 @@ def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
     return filtered_buy_items
 
 
+def _filter_buy_candidates_by_special_situation(
+    buy_items: list[str], finder: UsaStockFinder
+) -> list[str]:
+    """Filter likely special-situation pinned-price symbols from buy candidates."""
+    original_buy_count = len(buy_items)
+    filtered_buy_items: list[str] = []
+
+    for symbol in buy_items:
+        metrics = finder.get_special_situation_price_pinned_metrics(symbol)
+        if metrics["is_special_situation"]:
+            logger.info(
+                "Skipping %s: likely special-situation pinned-price pattern detected "
+                "(max_gap_up_pct=%.4f, recent_range_pct=%.4f, recent_abs_return_pct=%.4f, atr_pct=%.4f)",
+                symbol,
+                metrics["max_gap_up_pct"],
+                metrics["recent_range_pct"],
+                metrics["recent_abs_return_pct"],
+                metrics["atr_pct"],
+            )
+        else:
+            filtered_buy_items.append(symbol)
+
+    if len(filtered_buy_items) < original_buy_count:
+        logger.info(
+            "Special-situation pinned-price 필터링 완료 - 원래: %d개, 필터링 후: %d개",
+            original_buy_count,
+            len(filtered_buy_items),
+        )
+
+    return filtered_buy_items
+
+
 def _log_holdings_details_for_sell_evaluation(
     current_holdings_detail: list[dict[str, Any]], finder: UsaStockFinder
 ) -> None:
@@ -1445,6 +1477,7 @@ def main() -> None:
 
     finder, buy_items, not_sell_items, entry_symbol_set = finder_and_candidates
     buy_items = _filter_buy_candidates_by_cooldown(buy_items)
+    buy_items = _filter_buy_candidates_by_special_situation(buy_items, finder)
 
     sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
         finder, buy_items, not_sell_items, entry_symbol_set

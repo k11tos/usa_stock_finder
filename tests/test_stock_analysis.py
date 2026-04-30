@@ -246,6 +246,113 @@ class TestUsaStockFinder(unittest.TestCase):
             self.assertIn(symbol, result)
             self.assertIsInstance(result[symbol], (bool, type(True)))
 
+    def test_is_special_situation_price_pinned_detects_ewcz_like_pattern(self):
+        """Large gap-up followed by tight, low-volatility pinning should be detected."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.concatenate(
+                [
+                    np.linspace(10.0, 11.0, 60),
+                    np.array([14.3]),
+                    np.full(29, 14.35),
+                ]
+            )
+            high = close + 0.03
+            low = close - 0.03
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "EWCZ"): high,
+                    ("Low", "EWCZ"): low,
+                    ("Close", "EWCZ"): close,
+                    ("Volume", "EWCZ"): np.full(periods, 1000.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["EWCZ"])
+            self.assertTrue(finder.is_special_situation_price_pinned("EWCZ"))
+
+    def test_is_special_situation_price_pinned_false_for_normal_trend(self):
+        """Steady uptrend without extreme one-day gap should not be detected."""
+        with patch("yfinance.download") as mock_download:
+            periods = 120
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.linspace(50.0, 80.0, periods)
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "TREND"): close * 1.01,
+                    ("Low", "TREND"): close * 0.99,
+                    ("Close", "TREND"): close,
+                    ("Volume", "TREND"): np.full(periods, 1500.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["TREND"])
+            self.assertFalse(finder.is_special_situation_price_pinned("TREND"))
+
+    def test_is_special_situation_price_pinned_false_when_post_gap_is_volatile(self):
+        """Large gap-up with broad post-window range/high ATR should not be detected."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            pre = np.linspace(20.0, 21.0, 60)
+            gap = np.array([27.5])
+            post = np.array([28.0, 26.0] * 14 + [27.2])
+            close = np.concatenate([pre, gap, post])
+            high = close * 1.05
+            low = close * 0.95
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "VOLGAP"): high,
+                    ("Low", "VOLGAP"): low,
+                    ("Close", "VOLGAP"): close,
+                    ("Volume", "VOLGAP"): np.full(periods, 2000.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["VOLGAP"])
+            self.assertFalse(finder.is_special_situation_price_pinned("VOLGAP"))
+
+    def test_is_special_situation_price_pinned_false_when_atr_invalid_zero(self):
+        """ATR calc failure (0.0) must not trigger special-situation exclusion."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.concatenate(
+                [
+                    np.linspace(10.0, 11.0, 60),
+                    np.array([14.3]),
+                    np.full(29, 14.35),
+                ]
+            )
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "EWCZ"): close + 0.03,
+                    ("Low", "EWCZ"): close - 0.03,
+                    ("Close", "EWCZ"): close,
+                    ("Volume", "EWCZ"): np.full(periods, 1000.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["EWCZ"])
+            with patch.object(finder, "get_atr", return_value=0.0):
+                metrics = finder.get_special_situation_price_pinned_metrics("EWCZ")
+                self.assertFalse(metrics["is_special_situation"])
+                self.assertEqual(metrics["atr_pct"], 0.0)
+                self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
+
     def test_calculate_vpci_components(self):
         """check calculate_vpci_components function"""
         for symbol in self.symbols:
