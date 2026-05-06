@@ -94,6 +94,19 @@ jobs:
     # 프로덕션 배포는 main 브랜치 push(PR merge 포함) 또는 수동 실행에서 허용
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
+      - name: Set up Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+
+      - name: Tailscale diagnostics
+        run: |
+          set -euo pipefail
+          tailscale status
+          tailscale ip -4 || true
+          echo "Tailscale diagnostics completed."
+
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.10.0
         with:
@@ -102,19 +115,44 @@ jobs:
 
       - name: Add Raspberry Pi host key
         run: |
-          set -eu
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           # Preserve SSH host key verification by adding the current host key to known_hosts.
-          ssh-keyscan -p "${{ secrets.PI_PORT }}" "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy to Raspberry Pi
         run: |
-          set -eu
-          ssh -p "${{ secrets.PI_PORT }}" "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'bash -se' <<'REMOTE_SCRIPT'
-          set -eu
-          cd ${{ secrets.PI_PROJECT_PATH }}
+          set -euo pipefail
+          timeout 10m ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'PI_PROJECT_PATH="${{ secrets.PI_PROJECT_PATH }}" bash -se' <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          TARGET_DIR="$PI_PROJECT_PATH"
+
+          if [ -z "$TARGET_DIR" ]; then
+            echo "ERROR: deployment target directory is not configured."
+            exit 1
+          fi
+
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "ERROR: deployment target directory is missing."
+            exit 1
+          fi
+          echo "Target deployment directory verified."
+
+          if [ ! -d "$TARGET_DIR/.git" ]; then
+            echo "ERROR: target deployment git working tree is missing."
+            exit 1
+          fi
+          echo "Target deployment git working tree verified."
+
+          cd "$TARGET_DIR"
+
+          if [ ! -f docker-compose.yml ] && [ ! -f compose.yaml ]; then
+            echo "ERROR: Docker Compose file is missing."
+            exit 1
+          fi
+          echo "Docker Compose file verified."
           docker --version
           docker compose version
           docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }} <<GITHUB_TOKEN_EOF
@@ -167,7 +205,8 @@ jobs:
 
           echo "== recent stock service logs =="
           docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
-          docker ps
+          echo "Deployment completed; showing container status."
+          docker compose ps
           docker logout ${{ env.REGISTRY }}
           REMOTE_SCRIPT
 
