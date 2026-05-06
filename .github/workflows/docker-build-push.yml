@@ -126,10 +126,8 @@ jobs:
       - name: Deploy to Raspberry Pi
         run: |
           set -euo pipefail
-          timeout 10m ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'PI_PROJECT_PATH="${{ secrets.PI_PROJECT_PATH }}" bash -se' <<'REMOTE_SCRIPT'
+          timeout 10m ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'TARGET_DIR="${{ secrets.PI_PROJECT_PATH }}" bash -se' <<'REMOTE_SCRIPT'
           set -euo pipefail
-          TARGET_DIR="$PI_PROJECT_PATH"
-
           if [ -z "$TARGET_DIR" ]; then
             echo "ERROR: deployment target directory is not configured."
             exit 1
@@ -141,15 +139,9 @@ jobs:
           fi
           echo "Target deployment directory verified."
 
-          if [ ! -d "$TARGET_DIR/.git" ]; then
-            echo "ERROR: target deployment git working tree is missing."
-            exit 1
-          fi
-          echo "Target deployment git working tree verified."
-
           cd "$TARGET_DIR"
 
-          if [ ! -f docker-compose.yml ] && [ ! -f compose.yaml ]; then
+          if [ ! -f docker-compose.yml ] && [ ! -f compose.yaml ] && [ ! -f compose.yml ]; then
             echo "ERROR: Docker Compose file is missing."
             exit 1
           fi
