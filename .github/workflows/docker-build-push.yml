@@ -91,8 +91,6 @@ jobs:
     name: Deploy to Raspberry Pi
     runs-on: ubuntu-latest
     needs: build-and-push
-    env:
-      TARGET_DIR: ${{ secrets.PI_PROJECT_PATH }}
     # 프로덕션 배포는 main 브랜치 push(PR merge 포함) 또는 수동 실행에서 허용
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
