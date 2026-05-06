@@ -128,7 +128,7 @@ jobs:
       - name: Deploy to Raspberry Pi
         run: |
           set -euo pipefail
-          timeout 10m ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "TARGET_DIR=\"$TARGET_DIR\" bash -se" <<'REMOTE_SCRIPT'
+          timeout 10m ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'TARGET_DIR="${{ secrets.PI_PROJECT_PATH }}" bash -se' <<'REMOTE_SCRIPT'
           set -euo pipefail
           if [ -z "$TARGET_DIR" ]; then
             echo "ERROR: deployment target directory is not configured."
