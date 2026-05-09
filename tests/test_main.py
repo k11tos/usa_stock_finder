@@ -20,6 +20,7 @@ from main import (
     calculate_sell_quantities,
     calculate_share_quantities,
     evaluate_symbol_eligibility,
+    is_tradable_common_stock,
     generate_telegram_message,
     is_allowed_exchange,
     is_profit_loss_rate_mismatch,
@@ -280,8 +281,21 @@ class TestMainFunctions(unittest.TestCase):
             },
         ]
 
-        filtered = _filter_buy_candidates_by_special_situation(["EWCZ", "AAPL"], mock_finder)
+        filtered, excluded = _filter_buy_candidates_by_special_situation(["EWCZ", "AAPL"], mock_finder)
         self.assertEqual(filtered, ["AAPL"])
+        self.assertEqual(excluded, ["EWCZ"])
+
+    def test_is_tradable_common_stock_rejects_non_common_types(self):
+        metadata = {"exchange": "NASDAQ", "quoteType": "EQUITY", "longName": "XYZ Warrant"}
+        allowed, reason = is_tradable_common_stock(metadata)
+        self.assertFalse(allowed)
+        self.assertIn("non_common_stock", reason)
+
+    def test_is_tradable_common_stock_missing_metadata_fields_is_not_auto_rejected(self):
+        metadata = {"exchange": "NASDAQ"}
+        allowed, reason = is_tradable_common_stock(metadata)
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
 
     def test_update_final_items_removes_only_symbols_with_real_sell_decisions(self):
         """Only explicit sell decisions should remove symbols from saved state."""
