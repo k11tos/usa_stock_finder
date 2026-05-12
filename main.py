@@ -173,48 +173,69 @@ def is_tradable_common_stock(
         return False, "missing_metadata"
 
     normalized = {str(key).lower(): value for key, value in metadata.items()}
-    quote_type = str(normalized.get("quotetype", "")).strip().lower()
+    reason = _get_non_common_stock_reason(normalized)
+    if reason:
+        return False, reason
+    reason = _get_invalid_market_price_reason(normalized)
+    if reason:
+        return False, reason
+    reason = _get_invalid_volume_reason(normalized, price_history)
+    if reason:
+        return False, reason
+
+    return True, None
+
+
+def _get_non_common_stock_reason(normalized_metadata: dict[str, Any]) -> str | None:
+    quote_type = str(normalized_metadata.get("quotetype", "")).strip().lower()
     if quote_type and quote_type not in {"equity"}:
-        return False, f"quote_type_not_equity:{quote_type}"
+        return f"quote_type_not_equity:{quote_type}"
 
     category_fields = ("shortname", "longname", "category", "instrumenttype", "securityname", "typedisp")
-    searchable_text = " ".join(str(normalized.get(field, "")) for field in category_fields).lower()
+    searchable_text = " ".join(str(normalized_metadata.get(field, "")) for field in category_fields).lower()
     for pattern, term_reason in _NON_COMMON_STOCK_PATTERNS:
         if pattern.search(searchable_text):
-            return False, term_reason
+            return term_reason
+    return None
 
+
+def _get_invalid_market_price_reason(normalized_metadata: dict[str, Any]) -> str | None:
     for price_key in ("regularmarketprice", "currentprice"):
-        if price_key in normalized:
-            try:
-                value = float(normalized.get(price_key))
-                if not math.isfinite(value) or value <= 0:
-                    return False, f"invalid_market_price:{price_key}"
-            except (TypeError, ValueError):
-                return False, f"invalid_market_price:{price_key}"
-            break
-
-    for volume_key in ("regularmarketvolume", "volume"):
-        if volume_key not in normalized:
+        if price_key not in normalized_metadata:
             continue
-        raw_volume = normalized.get(volume_key)
+        try:
+            value = float(normalized_metadata.get(price_key))
+            if not math.isfinite(value) or value <= 0:
+                return f"invalid_market_price:{price_key}"
+        except (TypeError, ValueError):
+            return f"invalid_market_price:{price_key}"
+        break
+    return None
+
+
+def _get_invalid_volume_reason(
+    normalized_metadata: dict[str, Any],
+    price_history: pd.DataFrame | None,
+) -> str | None:
+    for volume_key in ("regularmarketvolume", "volume"):
+        if volume_key not in normalized_metadata:
+            continue
+        raw_volume = normalized_metadata.get(volume_key)
         if raw_volume is None:
             continue
         try:
             volume_value = float(raw_volume)
-            if math.isfinite(volume_value) and volume_value <= 0:
-                return False, f"invalid_volume:{volume_key}"
-            if not math.isfinite(volume_value):
-                return False, f"invalid_volume:{volume_key}"
+            if not math.isfinite(volume_value) or volume_value <= 0:
+                return f"invalid_volume:{volume_key}"
         except (TypeError, ValueError):
-            return False, f"invalid_volume:{volume_key}"
+            return f"invalid_volume:{volume_key}"
         break
 
     if price_history is not None and "Volume" in price_history:
         recent_volume = price_history["Volume"].dropna().tail(10)
         if len(recent_volume) >= 3 and float(recent_volume.mean()) <= 0:
-            return False, "recent_volume_unavailable"
-
-    return True, None
+            return "recent_volume_unavailable"
+    return None
 
 
 def _fetch_symbol_metadata(symbol: str) -> dict[str, Any] | None:

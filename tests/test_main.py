@@ -10,8 +10,8 @@ from contextlib import ExitStack
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-import main as main_module
 import pandas as pd
+import main as main_module
 from main import (
     _filter_buy_candidates_by_special_situation,
     build_buy_funnel_lines,
