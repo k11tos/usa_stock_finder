@@ -11,6 +11,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import main as main_module
+import pandas as pd
 from main import (
     _filter_buy_candidates_by_special_situation,
     build_buy_funnel_lines,
@@ -294,6 +295,55 @@ class TestMainFunctions(unittest.TestCase):
     def test_is_tradable_common_stock_missing_metadata_fields_is_not_auto_rejected(self):
         metadata = {"exchange": "NASDAQ"}
         allowed, reason = is_tradable_common_stock(metadata)
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_is_tradable_common_stock_word_substrings_do_not_false_reject(self):
+        names = [
+            "UnitedHealth Group Incorporated",
+            "Community Health Systems",
+            "Bright Horizons Family Solutions",
+        ]
+        for name in names:
+            with self.subTest(name=name):
+                allowed, reason = is_tradable_common_stock({"exchange": "NYSE", "longName": name})
+                self.assertTrue(allowed)
+                self.assertIsNone(reason)
+
+    def test_is_tradable_common_stock_rejects_obvious_non_common_instruments(self):
+        names = [
+            "XYZ Warrant",
+            "ABC Warrants",
+            "ABC Unit",
+            "ABC Units",
+            "ABC Right",
+            "ABC Rights",
+            "Blank Check Company",
+            "SPAC",
+            "ETF",
+        ]
+        for name in names:
+            with self.subTest(name=name):
+                allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ", "longName": name})
+                self.assertFalse(allowed)
+                self.assertIn("non_common_stock", reason)
+
+    def test_is_tradable_common_stock_invalid_market_price_values_rejected(self):
+        invalid_values = [0, -1, float("nan"), "not-a-number"]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ", "regularMarketPrice": value})
+                self.assertFalse(allowed)
+                self.assertEqual(reason, "invalid_market_price:regularmarketprice")
+
+    def test_is_tradable_common_stock_zero_recent_volume_rejected_with_price_history(self):
+        price_history = pd.DataFrame({"Volume": [0, 0, 0, 0, 0]})
+        allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ"}, price_history=price_history)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "recent_volume_unavailable")
+
+    def test_is_tradable_common_stock_missing_volume_metadata_not_rejected(self):
+        allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ", "regularMarketPrice": 10.0})
         self.assertTrue(allowed)
         self.assertIsNone(reason)
 

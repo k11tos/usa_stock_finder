@@ -28,6 +28,7 @@ Date: 2024.05.19
 """
 
 import asyncio
+import math
 import logging
 import os.path
 import re
@@ -64,19 +65,19 @@ _SYMBOL_BLOCKLIST_TERMS = {
     "inactive": "inactive",
     "not tradable": "not_tradable",
 }
-_NON_COMMON_STOCK_TERMS = {
-    "warrant": "non_common_stock:warrant",
-    "unit": "non_common_stock:unit",
-    "right": "non_common_stock:right",
-    "preferred": "non_common_stock:preferred",
-    "acquisition": "non_common_stock:acquisition_vehicle",
-    "blank check": "non_common_stock:blank_check",
-    "spac": "non_common_stock:spac",
-    "liquidation": "non_common_stock:liquidation",
-    "etf": "non_common_stock:fund",
-    "fund": "non_common_stock:fund",
-    "trust": "non_common_stock:trust",
-}
+_NON_COMMON_STOCK_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bwarrants?\b"), "non_common_stock:warrant"),
+    (re.compile(r"\bunits?\b"), "non_common_stock:unit"),
+    (re.compile(r"\brights?\b"), "non_common_stock:right"),
+    (re.compile(r"\bpreferred\b"), "non_common_stock:preferred"),
+    (re.compile(r"\bblank\s+check\b"), "non_common_stock:blank_check"),
+    (re.compile(r"\bspac\b"), "non_common_stock:spac"),
+    (re.compile(r"\bliquidation\b"), "non_common_stock:liquidation"),
+    (re.compile(r"\betf\b"), "non_common_stock:fund"),
+    (re.compile(r"\bfund\b"), "non_common_stock:fund"),
+    (re.compile(r"\btrust\b"), "non_common_stock:trust"),
+    (re.compile(r"\bacquisition\b"), "non_common_stock:acquisition_vehicle"),
+)
 
 
 def normalize_exchange_name(raw_exchange: str | None) -> str | None:
@@ -178,19 +179,35 @@ def is_tradable_common_stock(
 
     category_fields = ("shortname", "longname", "category", "instrumenttype", "securityname", "typedisp")
     searchable_text = " ".join(str(normalized.get(field, "")) for field in category_fields).lower()
-    for term, term_reason in _NON_COMMON_STOCK_TERMS.items():
-        if term in searchable_text:
+    for pattern, term_reason in _NON_COMMON_STOCK_PATTERNS:
+        if pattern.search(searchable_text):
             return False, term_reason
 
     for price_key in ("regularmarketprice", "currentprice"):
         if price_key in normalized:
             try:
                 value = float(normalized.get(price_key))
-                if not np.isfinite(value) or value <= 0:
+                if not math.isfinite(value) or value <= 0:
                     return False, f"invalid_market_price:{price_key}"
             except (TypeError, ValueError):
                 return False, f"invalid_market_price:{price_key}"
             break
+
+    for volume_key in ("regularmarketvolume", "volume"):
+        if volume_key not in normalized:
+            continue
+        raw_volume = normalized.get(volume_key)
+        if raw_volume is None:
+            continue
+        try:
+            volume_value = float(raw_volume)
+            if math.isfinite(volume_value) and volume_value <= 0:
+                return False, f"invalid_volume:{volume_key}"
+            if not math.isfinite(volume_value):
+                return False, f"invalid_volume:{volume_key}"
+        except (TypeError, ValueError):
+            return False, f"invalid_volume:{volume_key}"
+        break
 
     if price_history is not None and "Volume" in price_history:
         recent_volume = price_history["Volume"].dropna().tail(10)
