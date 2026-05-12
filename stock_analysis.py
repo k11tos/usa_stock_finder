@@ -181,11 +181,11 @@ class UsaStockFinder:
     def get_special_situation_price_pinned_metrics(
         self,
         symbol: str,
-        lookback_days: int = 60,
-        post_window_days: int = 20,
-        min_gap_up_pct: float = 0.25,
-        max_recent_range_pct: float = 0.03,
-        max_recent_abs_return_pct: float = 0.03,
+        lookback_days: int = 30,
+        post_window_days: int = 10,
+        min_gap_up_pct: float = 0.15,
+        max_recent_range_pct: float = 0.015,
+        max_recent_abs_return_pct: float = 0.02,
         max_atr_pct: float = 0.015,
     ) -> dict[str, float | bool]:
         """Compute conservative pinned-price special-situation metrics from OHLC data."""
@@ -195,6 +195,7 @@ class UsaStockFinder:
             "recent_range_pct": 0.0,
             "recent_abs_return_pct": 0.0,
             "atr_pct": 0.0,
+            "plateau_deviation_pct": 0.0,
         }
         df = self._get_symbol_df(symbol)
         if df is None or len(df) < max(lookback_days + 1, post_window_days + 1, StrategyConfig.TRAILING_ATR_PERIOD + 1):
@@ -217,6 +218,8 @@ class UsaStockFinder:
         max_gap_up_pct = float(close_to_close_returns.max())
         recent_range_pct = float((recent_close.max() - recent_close.min()) / current_close)
         recent_abs_return_pct = float(abs((recent_close.iloc[-1] - recent_close.iloc[0]) / recent_close.iloc[0]))
+        plateau_price = float(recent_close.mean())
+        plateau_deviation_pct = float(abs(current_close - plateau_price) / plateau_price) if plateau_price > 0 else 0.0
         atr = self.get_atr(symbol, period=14)
         if atr is None or not np.isfinite(atr) or atr <= 0.0:
             return {
@@ -225,6 +228,7 @@ class UsaStockFinder:
                 "recent_range_pct": recent_range_pct,
                 "recent_abs_return_pct": recent_abs_return_pct,
                 "atr_pct": 0.0,
+                "plateau_deviation_pct": plateau_deviation_pct,
             }
         atr_pct = float(atr / current_close) if current_close > 0 else 0.0
 
@@ -233,6 +237,7 @@ class UsaStockFinder:
             and recent_range_pct <= max_recent_range_pct
             and recent_abs_return_pct <= max_recent_abs_return_pct
             and atr_pct <= max_atr_pct
+            and plateau_deviation_pct <= max_recent_range_pct
         )
         return {
             "is_special_situation": is_special_situation,
@@ -240,16 +245,17 @@ class UsaStockFinder:
             "recent_range_pct": recent_range_pct,
             "recent_abs_return_pct": recent_abs_return_pct,
             "atr_pct": atr_pct,
+            "plateau_deviation_pct": plateau_deviation_pct,
         }
 
     def is_special_situation_price_pinned(
         self,
         symbol: str,
-        lookback_days: int = 60,
-        post_window_days: int = 20,
-        min_gap_up_pct: float = 0.25,
-        max_recent_range_pct: float = 0.03,
-        max_recent_abs_return_pct: float = 0.03,
+        lookback_days: int = 30,
+        post_window_days: int = 10,
+        min_gap_up_pct: float = 0.15,
+        max_recent_range_pct: float = 0.015,
+        max_recent_abs_return_pct: float = 0.02,
         max_atr_pct: float = 0.015,
     ) -> bool:
         """Return True when OHLC behavior looks like a pinned merger-arb/take-private profile."""

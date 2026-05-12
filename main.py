@@ -28,6 +28,7 @@ Date: 2024.05.19
 """
 
 import asyncio
+import math
 import logging
 import os.path
 import re
@@ -36,6 +37,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
+import pandas as pd
 import yfinance as yf
 
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
@@ -63,6 +65,19 @@ _SYMBOL_BLOCKLIST_TERMS = {
     "inactive": "inactive",
     "not tradable": "not_tradable",
 }
+_NON_COMMON_STOCK_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bwarrants?\b"), "non_common_stock:warrant"),
+    (re.compile(r"\bunits?\b"), "non_common_stock:unit"),
+    (re.compile(r"\brights?\b"), "non_common_stock:right"),
+    (re.compile(r"\bpreferred\b"), "non_common_stock:preferred"),
+    (re.compile(r"\bblank\s+check\b"), "non_common_stock:blank_check"),
+    (re.compile(r"\bspac\b"), "non_common_stock:spac"),
+    (re.compile(r"\bliquidation\b"), "non_common_stock:liquidation"),
+    (re.compile(r"\betf\b"), "non_common_stock:fund"),
+    (re.compile(r"\bfund\b"), "non_common_stock:fund"),
+    (re.compile(r"\btrust\b"), "non_common_stock:trust"),
+    (re.compile(r"\bacquisition\b"), "non_common_stock:acquisition_vehicle"),
+)
 
 
 def normalize_exchange_name(raw_exchange: str | None) -> str | None:
@@ -146,6 +161,83 @@ def evaluate_symbol_eligibility(metadata: dict[str, Any] | None) -> tuple[bool, 
     return True, None
 
 
+def is_tradable_common_stock(
+    metadata: dict[str, Any] | None,
+    price_history: pd.DataFrame | None = None,
+) -> tuple[bool, str | None]:
+    """Conservative tradability filter that avoids non-common stock instruments."""
+    is_eligible, reason = evaluate_symbol_eligibility(metadata)
+    if not is_eligible:
+        return False, reason
+    if not isinstance(metadata, dict):
+        return False, "missing_metadata"
+
+    normalized = {str(key).lower(): value for key, value in metadata.items()}
+    reason = _get_non_common_stock_reason(normalized)
+    if reason:
+        return False, reason
+    reason = _get_invalid_market_price_reason(normalized)
+    if reason:
+        return False, reason
+    reason = _get_invalid_volume_reason(normalized, price_history)
+    if reason:
+        return False, reason
+
+    return True, None
+
+
+def _get_non_common_stock_reason(normalized_metadata: dict[str, Any]) -> str | None:
+    quote_type = str(normalized_metadata.get("quotetype", "")).strip().lower()
+    if quote_type and quote_type not in {"equity"}:
+        return f"quote_type_not_equity:{quote_type}"
+
+    category_fields = ("shortname", "longname", "category", "instrumenttype", "securityname", "typedisp")
+    searchable_text = " ".join(str(normalized_metadata.get(field, "")) for field in category_fields).lower()
+    for pattern, term_reason in _NON_COMMON_STOCK_PATTERNS:
+        if pattern.search(searchable_text):
+            return term_reason
+    return None
+
+
+def _get_invalid_market_price_reason(normalized_metadata: dict[str, Any]) -> str | None:
+    for price_key in ("regularmarketprice", "currentprice"):
+        if price_key not in normalized_metadata:
+            continue
+        try:
+            value = float(normalized_metadata.get(price_key))
+            if not math.isfinite(value) or value <= 0:
+                return f"invalid_market_price:{price_key}"
+        except (TypeError, ValueError):
+            return f"invalid_market_price:{price_key}"
+        break
+    return None
+
+
+def _get_invalid_volume_reason(
+    normalized_metadata: dict[str, Any],
+    price_history: pd.DataFrame | None,
+) -> str | None:
+    for volume_key in ("regularmarketvolume", "volume"):
+        if volume_key not in normalized_metadata:
+            continue
+        raw_volume = normalized_metadata.get(volume_key)
+        if raw_volume is None:
+            continue
+        try:
+            volume_value = float(raw_volume)
+            if not math.isfinite(volume_value) or volume_value <= 0:
+                return f"invalid_volume:{volume_key}"
+        except (TypeError, ValueError):
+            return f"invalid_volume:{volume_key}"
+        break
+
+    if price_history is not None and "Volume" in price_history:
+        recent_volume = price_history["Volume"].dropna().tail(10)
+        if len(recent_volume) >= 3 and float(recent_volume.mean()) <= 0:
+            return "recent_volume_unavailable"
+    return None
+
+
 def _fetch_symbol_metadata(symbol: str) -> dict[str, Any] | None:
     """Fetch metadata for a symbol from yfinance with a cheap-first fallback."""
     metadata: dict[str, Any] = {}
@@ -192,7 +284,7 @@ def _filter_entry_symbols_by_exchange(entry_symbols: list[str]) -> list[str]:
     allowed_symbols: list[str] = []
     for symbol in entry_symbols:
         metadata = _fetch_symbol_metadata(symbol)
-        is_eligible, skip_reason = evaluate_symbol_eligibility(metadata)
+        is_eligible, skip_reason = is_tradable_common_stock(metadata)
         if not is_eligible:
             logger.info("Skipping %s: %s.", symbol, skip_reason)
             continue
@@ -471,16 +563,18 @@ def _collect_stale_holdings(
 
 
 
-def build_buy_funnel_lines(stage_counts: dict[str, int]) -> list[str]:
+def build_buy_funnel_lines(stage_counts: dict[str, Any]) -> list[str]:
     """Build a compact buy-funnel report from available stage counts."""
     stage_order = [
         ("initial_input_symbols", "Initial"),
+        ("tradability_excluded_symbols", "Tradability Excluded"),
         ("core_quant_input_symbols", "Core Quant Input"),
         ("exchange_eligible_symbols", "Exchange OK"),
         ("fundamental_quality_eligible_symbols", "Fundamental OK"),
         ("trend_eligible_symbols", "Trend OK"),
         ("cooldown_eligible_symbols", "Cooldown OK"),
         ("special_situation_excluded_symbols", "Special Excluded"),
+        ("special_situation_excluded_symbol_list", "Special Excluded Symbols"),
         ("final_buy_candidates", "Final Buy"),
     ]
     lines = ["[Buy Funnel]"]
@@ -490,7 +584,7 @@ def build_buy_funnel_lines(stage_counts: dict[str, int]) -> list[str]:
     return lines
 
 
-def log_buy_funnel(stage_counts: dict[str, int]) -> list[str]:
+def log_buy_funnel(stage_counts: dict[str, Any]) -> list[str]:
     """Log and return buy-funnel lines for telegram/reporting."""
     lines = build_buy_funnel_lines(stage_counts)
     for line in lines:
@@ -1156,6 +1250,7 @@ def _prepare_finder_and_candidates(
     not_sell_items = [symbol for symbol in not_sell_items if symbol in entry_symbol_set]
     funnel_stage_counts = {
         "initial_input_symbols": len(raw_entry_symbols),
+        "tradability_excluded_symbols": len(raw_entry_symbols) - len(entry_symbols),
         "exchange_eligible_symbols": len(entry_symbols),
         "trend_eligible_symbols": len(buy_items),
     }
@@ -1185,16 +1280,18 @@ def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
 
 def _filter_buy_candidates_by_special_situation(
     buy_items: list[str], finder: UsaStockFinder
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Filter likely special-situation pinned-price symbols from buy candidates."""
     original_buy_count = len(buy_items)
     filtered_buy_items: list[str] = []
+    excluded_symbols: list[str] = []
 
     for symbol in buy_items:
         metrics = finder.get_special_situation_price_pinned_metrics(symbol)
         if metrics["is_special_situation"]:
+            excluded_symbols.append(symbol)
             logger.info(
-                "Skipping %s: likely special-situation pinned-price pattern detected "
+                "symbol=%s excluded reason=pinned_price_like_special_situation "
                 "(max_gap_up_pct=%.4f, recent_range_pct=%.4f, recent_abs_return_pct=%.4f, atr_pct=%.4f)",
                 symbol,
                 metrics["max_gap_up_pct"],
@@ -1212,7 +1309,7 @@ def _filter_buy_candidates_by_special_situation(
             len(filtered_buy_items),
         )
 
-    return filtered_buy_items
+    return filtered_buy_items, excluded_symbols
 
 
 def _log_holdings_details_for_sell_evaluation(
@@ -1541,8 +1638,10 @@ def main() -> None:
     funnel_stage_counts["cooldown_eligible_symbols"] = len(buy_items)
 
     pre_special_buy_count = len(buy_items)
-    buy_items = _filter_buy_candidates_by_special_situation(buy_items, finder)
+    buy_items, special_excluded_symbols = _filter_buy_candidates_by_special_situation(buy_items, finder)
     funnel_stage_counts["special_situation_excluded_symbols"] = pre_special_buy_count - len(buy_items)
+    if special_excluded_symbols:
+        funnel_stage_counts["special_situation_excluded_symbol_list"] = ", ".join(special_excluded_symbols)
 
     sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
         finder, buy_items, not_sell_items, entry_symbol_set

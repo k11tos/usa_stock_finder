@@ -10,6 +10,7 @@ from contextlib import ExitStack
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import main as main_module
 from main import (
     _filter_buy_candidates_by_special_situation,
@@ -20,6 +21,7 @@ from main import (
     calculate_sell_quantities,
     calculate_share_quantities,
     evaluate_symbol_eligibility,
+    is_tradable_common_stock,
     generate_telegram_message,
     is_allowed_exchange,
     is_profit_loss_rate_mismatch,
@@ -280,8 +282,70 @@ class TestMainFunctions(unittest.TestCase):
             },
         ]
 
-        filtered = _filter_buy_candidates_by_special_situation(["EWCZ", "AAPL"], mock_finder)
+        filtered, excluded = _filter_buy_candidates_by_special_situation(["EWCZ", "AAPL"], mock_finder)
         self.assertEqual(filtered, ["AAPL"])
+        self.assertEqual(excluded, ["EWCZ"])
+
+    def test_is_tradable_common_stock_rejects_non_common_types(self):
+        metadata = {"exchange": "NASDAQ", "quoteType": "EQUITY", "longName": "XYZ Warrant"}
+        allowed, reason = is_tradable_common_stock(metadata)
+        self.assertFalse(allowed)
+        self.assertIn("non_common_stock", reason)
+
+    def test_is_tradable_common_stock_missing_metadata_fields_is_not_auto_rejected(self):
+        metadata = {"exchange": "NASDAQ"}
+        allowed, reason = is_tradable_common_stock(metadata)
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_is_tradable_common_stock_word_substrings_do_not_false_reject(self):
+        names = [
+            "UnitedHealth Group Incorporated",
+            "Community Health Systems",
+            "Bright Horizons Family Solutions",
+        ]
+        for name in names:
+            with self.subTest(name=name):
+                allowed, reason = is_tradable_common_stock({"exchange": "NYSE", "longName": name})
+                self.assertTrue(allowed)
+                self.assertIsNone(reason)
+
+    def test_is_tradable_common_stock_rejects_obvious_non_common_instruments(self):
+        names = [
+            "XYZ Warrant",
+            "ABC Warrants",
+            "ABC Unit",
+            "ABC Units",
+            "ABC Right",
+            "ABC Rights",
+            "Blank Check Company",
+            "SPAC",
+            "ETF",
+        ]
+        for name in names:
+            with self.subTest(name=name):
+                allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ", "longName": name})
+                self.assertFalse(allowed)
+                self.assertIn("non_common_stock", reason)
+
+    def test_is_tradable_common_stock_invalid_market_price_values_rejected(self):
+        invalid_values = [0, -1, float("nan"), "not-a-number"]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ", "regularMarketPrice": value})
+                self.assertFalse(allowed)
+                self.assertEqual(reason, "invalid_market_price:regularmarketprice")
+
+    def test_is_tradable_common_stock_zero_recent_volume_rejected_with_price_history(self):
+        price_history = pd.DataFrame({"Volume": [0, 0, 0, 0, 0]})
+        allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ"}, price_history=price_history)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "recent_volume_unavailable")
+
+    def test_is_tradable_common_stock_missing_volume_metadata_not_rejected(self):
+        allowed, reason = is_tradable_common_stock({"exchange": "NASDAQ", "regularMarketPrice": 10.0})
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
 
     def test_update_final_items_removes_only_symbols_with_real_sell_decisions(self):
         """Only explicit sell decisions should remove symbols from saved state."""
