@@ -140,6 +140,13 @@ class StrategyConfig:
         os.getenv("TRAILING_MIN_PROFIT_PCT", "0.10")
     )  # 평단 대비 최소 수익률 (예: +10% 이상에서만 트레일링 활성화)
 
+    SPECIAL_SITUATION_TAKE_PROFIT_ENABLED = (
+        os.getenv("SPECIAL_SITUATION_TAKE_PROFIT_ENABLED", "True").lower() == "true"
+    )
+    SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT = float(
+        os.getenv("SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT", "0.05")
+    )
+
     # Event quarantine filter settings for fresh post-gap buy suppression
     EVENT_QUARANTINE_ENABLED = os.getenv("EVENT_QUARANTINE_ENABLED", "True").lower() == "true"
     EVENT_QUARANTINE_LOOKBACK_DAYS = int(os.getenv("EVENT_QUARANTINE_LOOKBACK_DAYS", "5"))

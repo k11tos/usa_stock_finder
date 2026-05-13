@@ -37,6 +37,7 @@ class SellReason(str, Enum):
     NONE = "HOLD"  # No sell signal - hold the stock
     STOP_LOSS = "STOP_LOSS"  # Absolute stop loss threshold exceeded
     TRAILING = "TRAILING"  # ATR 기반 트레일링 스탑
+    SPECIAL_SITUATION_TAKE_PROFIT = "SPECIAL_SITUATION_TAKE_PROFIT"  # 이벤트 가격 고정 수익실현
     AVSL = "AVSL"  # Average Volume Support Level broken
     TREND = "TREND"  # Trend/strategy conditions no longer met
 
@@ -84,9 +85,10 @@ def evaluate_sell_decisions(
 
     The evaluation follows this priority order:
     1. Stop Loss (highest priority): If loss exceeds STOP_LOSS_PCT, sell immediately
-    2. Trailing stop: If ATR trailing stop is broken, sell
-    3. AVSL: If volume support level is broken, sell
-    4. Trend: If explicit holding trend-exit condition is met, sell
+    2. Special Situation Take Profit: If pinned near event price with enough profit, sell
+    3. Trailing stop: If ATR trailing stop is broken, sell
+    4. AVSL: If volume support level is broken, sell
+    5. Trend: If explicit holding trend-exit condition is met, sell
 
     Args:
         finder (UsaStockFinder): Instance containing current stock prices
@@ -106,7 +108,7 @@ def evaluate_sell_decisions(
     Note:
         - Stop loss takes absolute priority - if triggered, other conditions are ignored
         - AVSL signals are checked only if stop loss is not triggered
-        - Trend-based sells are checked only if stop loss/trailing/AVSL are not triggered
+        - Trend-based sells are checked only if earlier tiers are not triggered
         - Holdings outside selected_buy/selected_not_sell are treated as stale_holding,
           and are not sold unless explicit holding trend-exit is True
     """
@@ -200,7 +202,37 @@ def evaluate_sell_decisions(
                     holding_price,
                 )
 
-        # Tier 2: ATR 기반 TRAILING STOP (수익 보호용)
+
+        # Tier 2: Special Situation Take Profit (price-pinned event gain realization)
+        if StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_ENABLED and avg_price > 0 and current_price > 0:
+            profit_pct = (current_price - avg_price) / avg_price
+            is_pinned = finder.is_special_situation_price_pinned(symbol)
+
+            logger.debug(
+                "%s: SPECIAL_SITUATION_TAKE_PROFIT 체크 - profit_pct=%.4f (%.2f%%), min_profit_pct=%.4f (%.2f%%), pinned=%s",
+                symbol,
+                profit_pct,
+                profit_pct * 100,
+                StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT,
+                StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT * 100,
+                is_pinned,
+            )
+
+            if profit_pct >= StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT and is_pinned:
+                logger.info(
+                    "%s: 🟩 SPECIAL_SITUATION_TAKE_PROFIT 매도 결정 - profit_pct=%.4f (%.2f%%), current_price=%.4f, avg_price=%.4f, reason=%s, quantity=%.2f",
+                    symbol,
+                    profit_pct,
+                    profit_pct * 100,
+                    current_price,
+                    avg_price,
+                    SellReason.SPECIAL_SITUATION_TAKE_PROFIT.value,
+                    quantity,
+                )
+                decisions[symbol] = SellDecision(symbol, SellReason.SPECIAL_SITUATION_TAKE_PROFIT, quantity)
+                continue
+
+        # Tier 3: ATR 기반 TRAILING STOP (수익 보호용)
         if StrategyConfig.TRAILING_ENABLED and avg_price > 0 and current_price > 0:
             profit_pct = (current_price - avg_price) / avg_price
 
@@ -287,7 +319,7 @@ def evaluate_sell_decisions(
             elif current_price <= 0:
                 logger.debug("%s: TRAILING 체크 스킵 - current_price=%.4f <= 0", symbol, current_price)
 
-        # Tier 3: AVSL (Volume Support Level Broken)
+         # Tier 4: AVSL (Volume Support Level Broken)
         avsl_signal = avsl_signals.get(symbol, False)
         logger.debug("%s: AVSL 체크 - avsl_signal=%s", symbol, avsl_signal)
 
@@ -304,7 +336,7 @@ def evaluate_sell_decisions(
             decisions[symbol] = SellDecision(symbol, SellReason.AVSL, quantity)
             continue
 
-        # Tier 4: Trend/Strategy Condition Failure (explicit holding trend-exit only)
+        # Tier 5: Trend/Strategy Condition Failure (explicit holding trend-exit only)
         should_exit_trend, stale_holding = evaluate_holding_trend_exit(
             symbol=symbol,
             selected_buy=selected_buy,
@@ -334,7 +366,7 @@ def evaluate_sell_decisions(
 
         # No sell signal - hold
         logger.debug(
-            "%s: HOLD 결정 - 모든 매도 조건 미충족 (Stop Loss, Trailing, AVSL, Trend 모두 통과)",
+            "%s: HOLD 결정 - 모든 매도 조건 미충족 (Stop Loss, Special Situation Take Profit, Trailing, AVSL, Trend 모두 통과)",
             symbol,
         )
         decisions[symbol] = SellDecision(symbol, SellReason.NONE, 0.0)

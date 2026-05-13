@@ -666,6 +666,13 @@ def generate_telegram_message(
         _append_sell_reason_section(
             message,
             sell_items_to_display,
+            SellReason.SPECIAL_SITUATION_TAKE_PROFIT,
+            "🟩 매도 (특수상황 가격고정 수익실현)",
+            sell_quantities,
+        )
+        _append_sell_reason_section(
+            message,
+            sell_items_to_display,
             SellReason.TRAILING,
             "🟨 매도 (ATR 트레일링 스탑)",
             sell_quantities,
@@ -1444,6 +1451,9 @@ def _evaluate_and_log_sell_decisions(
     )
 
     stop_loss_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.STOP_LOSS)
+    special_take_profit_count = sum(
+        1 for d in sell_decisions.values() if d.reason == SellReason.SPECIAL_SITUATION_TAKE_PROFIT
+    )
     trailing_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TRAILING)
     avsl_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.AVSL)
     trend_count = sum(1 for d in sell_decisions.values() if d.reason == SellReason.TREND)
@@ -1451,8 +1461,9 @@ def _evaluate_and_log_sell_decisions(
     stale_holdings = _collect_stale_holdings(sell_decisions, entry_symbol_set)
 
     logger.info(
-        "매도 결정 평가 완료 - Stop Loss=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d, StaleHold=%d",
+        "매도 결정 평가 완료 - Stop Loss=%d, SpecialTakeProfit=%d, Trailing=%d, AVSL=%d, Trend=%d, Hold=%d, StaleHold=%d",
         stop_loss_count,
+        special_take_profit_count,
         trailing_count,
         avsl_count,
         trend_count,
