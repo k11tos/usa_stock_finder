@@ -1034,6 +1034,48 @@ class TestMainFunctions(unittest.TestCase):
         self.assertIn("AVSL", message_text)  # AVSL signal mentioned
         self.assertIn("5,000", message_text)  # Sell amount (formatted)
 
+    def test_generate_telegram_message_special_situation_take_profit_label(self):
+        prev_items = ["AAPL", "TSLA"]
+        buy_items = ["AAPL"]
+        not_sell_items = ["AAPL"]
+        sell_quantities = {
+            "TSLA": {
+                "current_quantity": 10,
+                "current_price": 300.0,
+                "shares_to_sell": 10,
+                "sell_amount": 3000.0,
+                "profit_loss": 600.0,
+                "profit_loss_rate": 25.0,
+            }
+        }
+        sell_decisions = {"TSLA": SellDecision("TSLA", SellReason.SPECIAL_SITUATION_TAKE_PROFIT, 10.0)}
+
+        result = generate_telegram_message(prev_items, buy_items, not_sell_items, None, sell_quantities, sell_decisions)
+
+        self.assertIsNotNone(result)
+        message_text = "\n".join(result)
+        self.assertIn("🟩 매도 (특수상황 가격고정 수익실현)", message_text)
+
+    def test_generate_telegram_message_existing_sell_labels_unchanged(self):
+        prev_items = ["STOP", "TRAIL", "AVSLX", "TRENDX"]
+        buy_items: list[str] = []
+        not_sell_items: list[str] = []
+        sell_decisions = {
+            "STOP": SellDecision("STOP", SellReason.STOP_LOSS, 1.0),
+            "TRAIL": SellDecision("TRAIL", SellReason.TRAILING, 1.0),
+            "AVSLX": SellDecision("AVSLX", SellReason.AVSL, 1.0),
+            "TRENDX": SellDecision("TRENDX", SellReason.TREND, 1.0),
+        }
+
+        result = generate_telegram_message(prev_items, buy_items, not_sell_items, None, None, sell_decisions)
+
+        self.assertIsNotNone(result)
+        message_text = "\n".join(result)
+        self.assertIn("🟥 매도 (절대 손절)", message_text)
+        self.assertIn("🟨 매도 (ATR 트레일링 스탑)", message_text)
+        self.assertIn("🟧 매도 (AVSL 거래량 지지선 붕괴)", message_text)
+        self.assertIn("🟦 매도 (트렌드/전략 조건 이탈)", message_text)
+
     def test_generate_telegram_message_reports_stale_b_plan_holdings(self):
         """Stale holdings should be shown separately from true sell signals."""
         prev_items = ["AAPL", "OLD1"]
@@ -1547,10 +1589,11 @@ class TestBuyFunnelFormatting(unittest.TestCase):
         stage_counts = {
             "final_buy_candidates": 10,
             "initial_input_symbols": 96,
+            "tradability_excluded_symbols": 2,
             "exchange_eligible_symbols": 94,
             "trend_eligible_symbols": 12,
-            "fundamental_quality_eligible_symbols": 71,
             "cooldown_eligible_symbols": 11,
+            "event_quarantine_excluded_symbols": 0,
             "special_situation_excluded_symbols": 1,
         }
         self.assertEqual(
@@ -1558,10 +1601,11 @@ class TestBuyFunnelFormatting(unittest.TestCase):
             [
                 "[Buy Funnel]",
                 "Initial: 96",
+                "Tradability Excluded: 2",
                 "Exchange OK: 94",
-                "Fundamental OK: 71",
                 "Trend OK: 12",
                 "Cooldown OK: 11",
+                "Event Quarantine: 0",
                 "Special Excluded: 1",
                 "Final Buy: 10",
             ],
@@ -1606,3 +1650,23 @@ class TestBuyFunnelFormatting(unittest.TestCase):
         result = build_buy_funnel_lines(stage_counts)
         self.assertEqual(result[0], "[Buy Funnel]")
         self.assertEqual(result[-1], "Final Buy: 7")
+
+    def test_buy_funnel_event_quarantine_symbols_compact(self):
+        stage_counts = {
+            "initial_input_symbols": 20,
+            "event_quarantine_excluded_symbols": 7,
+            "event_quarantine_excluded_symbol_list": "A, B, C, D, E, F, G",
+            "final_buy_candidates": 13,
+        }
+        result = build_buy_funnel_lines(stage_counts)
+        self.assertIn("매수 보류: A, B, C, D, E 외 2개", result)
+
+    def test_buy_funnel_special_excluded_symbols_compact(self):
+        stage_counts = {
+            "initial_input_symbols": 12,
+            "special_situation_excluded_symbols": 6,
+            "special_situation_excluded_symbol_list": "AA, BB, CC, DD, EE, FF",
+            "final_buy_candidates": 6,
+        }
+        result = build_buy_funnel_lines(stage_counts)
+        self.assertIn("매수 제외: AA, BB, CC, DD, EE 외 1개", result)

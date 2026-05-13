@@ -561,6 +561,21 @@ def _collect_stale_holdings(
     return sorted(stale_symbols)
 
 
+def _format_compact_symbol_list(symbols: list[str], max_symbols: int = 5) -> str:
+    """Format symbols as a compact telegram-friendly list."""
+    if not symbols:
+        return ""
+    shown = symbols[:max_symbols]
+    remainder = len(symbols) - max_symbols
+    suffix = f" 외 {remainder}개" if remainder > 0 else ""
+    return f"{', '.join(shown)}{suffix}"
+
+
+def _format_funnel_line(label: str, value: Any) -> str:
+    """Format one buy-funnel line."""
+    return f"{label}: {value}"
+
+
 
 
 def build_buy_funnel_lines(stage_counts: dict[str, Any]) -> list[str]:
@@ -568,21 +583,31 @@ def build_buy_funnel_lines(stage_counts: dict[str, Any]) -> list[str]:
     stage_order = [
         ("initial_input_symbols", "Initial"),
         ("tradability_excluded_symbols", "Tradability Excluded"),
-        ("core_quant_input_symbols", "Core Quant Input"),
         ("exchange_eligible_symbols", "Exchange OK"),
-        ("fundamental_quality_eligible_symbols", "Fundamental OK"),
         ("trend_eligible_symbols", "Trend OK"),
         ("cooldown_eligible_symbols", "Cooldown OK"),
         ("event_quarantine_excluded_symbols", "Event Quarantine"),
-        ("event_quarantine_excluded_symbol_list", "Event Quarantine Symbols"),
         ("special_situation_excluded_symbols", "Special Excluded"),
-        ("special_situation_excluded_symbol_list", "Special Excluded Symbols"),
         ("final_buy_candidates", "Final Buy"),
     ]
     lines = ["[Buy Funnel]"]
     for key, label in stage_order:
         if key in stage_counts:
-            lines.append(f"{label}: {stage_counts[key]}")
+            lines.append(_format_funnel_line(label, stage_counts[key]))
+
+    event_symbols = stage_counts.get("event_quarantine_excluded_symbol_list")
+    if event_symbols:
+        compact_event_symbols = _format_compact_symbol_list(
+            [symbol.strip() for symbol in str(event_symbols).split(",") if symbol.strip()]
+        )
+        lines.append(_format_funnel_line("매수 보류", compact_event_symbols))
+
+    special_symbols = stage_counts.get("special_situation_excluded_symbol_list")
+    if special_symbols:
+        compact_special_symbols = _format_compact_symbol_list(
+            [symbol.strip() for symbol in str(special_symbols).split(",") if symbol.strip()]
+        )
+        lines.append(_format_funnel_line("매수 제외", compact_special_symbols))
     return lines
 
 
