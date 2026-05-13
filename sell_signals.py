@@ -206,21 +206,26 @@ def evaluate_sell_decisions(
         # Tier 2: Special Situation Take Profit (price-pinned event gain realization)
         if StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_ENABLED and avg_price > 0 and current_price > 0:
             profit_pct = (current_price - avg_price) / avg_price
-            is_pinned = finder.is_special_situation_price_pinned(symbol)
+            min_profit_pct = StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT
+            is_profit_eligible = profit_pct >= min_profit_pct
+            is_pinned = finder.is_special_situation_price_pinned(symbol) if is_profit_eligible else False
 
             logger.debug(
-                "%s: SPECIAL_SITUATION_TAKE_PROFIT 체크 - profit_pct=%.4f (%.2f%%), min_profit_pct=%.4f (%.2f%%), pinned=%s",
+                "%s: SPECIAL_SITUATION_TAKE_PROFIT 체크 - "
+                "profit_pct=%.4f (%.2f%%), min_profit_pct=%.4f (%.2f%%), pinned=%s",
                 symbol,
                 profit_pct,
                 profit_pct * 100,
-                StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT,
-                StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT * 100,
+                min_profit_pct,
+                min_profit_pct * 100,
                 is_pinned,
             )
 
-            if profit_pct >= StrategyConfig.SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT and is_pinned:
+            if is_profit_eligible and is_pinned:
                 logger.info(
-                    "%s: 🟩 SPECIAL_SITUATION_TAKE_PROFIT 매도 결정 - profit_pct=%.4f (%.2f%%), current_price=%.4f, avg_price=%.4f, reason=%s, quantity=%.2f",
+                    "%s: 🟩 SPECIAL_SITUATION_TAKE_PROFIT 매도 결정 - "
+                    "profit_pct=%.4f (%.2f%%), current_price=%.4f, avg_price=%.4f, "
+                    "reason=%s, quantity=%.2f",
                     symbol,
                     profit_pct,
                     profit_pct * 100,
@@ -319,7 +324,7 @@ def evaluate_sell_decisions(
             elif current_price <= 0:
                 logger.debug("%s: TRAILING 체크 스킵 - current_price=%.4f <= 0", symbol, current_price)
 
-         # Tier 4: AVSL (Volume Support Level Broken)
+        # Tier 4: AVSL (Volume Support Level Broken)
         avsl_signal = avsl_signals.get(symbol, False)
         logger.debug("%s: AVSL 체크 - avsl_signal=%s", symbol, avsl_signal)
 

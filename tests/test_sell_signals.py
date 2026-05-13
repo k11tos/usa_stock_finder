@@ -82,6 +82,7 @@ class TestSellSignals(unittest.TestCase):
         )
 
         self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+        self.mock_finder.is_special_situation_price_pinned.assert_not_called()
 
     def test_special_situation_take_profit_loss_case_no_special_sell(self):
         symbol = "LOSSPIN"
