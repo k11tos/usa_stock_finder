@@ -22,6 +22,8 @@ class TestSellSignals(unittest.TestCase):
         # Mock UsaStockFinder instance
         self.mock_finder = MagicMock()
         self.mock_finder.current_price = {}
+        self.mock_finder.is_special_situation_price_pinned.return_value = False
+        self.mock_finder.get_atr.return_value = 0.0
 
     def test_select_current_price_prefers_positive_finder_price(self):
         """Helper should use finder price when it is positive."""
@@ -31,6 +33,86 @@ class TestSellSignals(unittest.TestCase):
         """Helper should fall back to holding price for zero/negative finder prices."""
         self.assertEqual(select_current_price(0.0, 100.0), 100.0)
         self.assertEqual(select_current_price(-1.0, 100.0), 100.0)
+
+
+    @patch("sell_signals.record_stop_loss_event")
+    def test_special_situation_take_profit_profitable_and_pinned(self, mock_record_stop_loss_event):
+        symbol = "PINNED"
+        self.mock_finder.current_price = {symbol: 110.0}
+        self.mock_finder.is_special_situation_price_pinned.return_value = True
+
+        decisions = evaluate_sell_decisions(
+            finder=self.mock_finder,
+            holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 110.0}],
+            selected_buy=[symbol],
+            selected_not_sell=[],
+            avsl_signals={symbol: False},
+        )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.SPECIAL_SITUATION_TAKE_PROFIT)
+        self.assertEqual(decisions[symbol].quantity, 10.0)
+        mock_record_stop_loss_event.assert_not_called()
+
+    def test_special_situation_take_profit_not_pinned_no_sell(self):
+        symbol = "NOTPIN"
+        self.mock_finder.current_price = {symbol: 110.0}
+        self.mock_finder.is_special_situation_price_pinned.return_value = False
+
+        decisions = evaluate_sell_decisions(
+            finder=self.mock_finder,
+            holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 110.0}],
+            selected_buy=[symbol],
+            selected_not_sell=[],
+            avsl_signals={symbol: False},
+        )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+
+    def test_special_situation_take_profit_below_threshold_no_sell(self):
+        symbol = "LOWPROFIT"
+        self.mock_finder.current_price = {symbol: 104.0}
+        self.mock_finder.is_special_situation_price_pinned.return_value = True
+
+        decisions = evaluate_sell_decisions(
+            finder=self.mock_finder,
+            holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 104.0}],
+            selected_buy=[symbol],
+            selected_not_sell=[],
+            avsl_signals={symbol: False},
+        )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+        self.mock_finder.is_special_situation_price_pinned.assert_not_called()
+
+    def test_special_situation_take_profit_loss_case_no_special_sell(self):
+        symbol = "LOSSPIN"
+        self.mock_finder.current_price = {symbol: 96.0}
+        self.mock_finder.is_special_situation_price_pinned.return_value = True
+
+        decisions = evaluate_sell_decisions(
+            finder=self.mock_finder,
+            holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 96.0}],
+            selected_buy=[symbol],
+            selected_not_sell=[],
+            avsl_signals={symbol: False},
+        )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+
+    def test_stop_loss_priority_over_special_situation_take_profit(self):
+        symbol = "PRIORITY"
+        self.mock_finder.current_price = {symbol: 80.0}
+        self.mock_finder.is_special_situation_price_pinned.return_value = True
+
+        decisions = evaluate_sell_decisions(
+            finder=self.mock_finder,
+            holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 80.0}],
+            selected_buy=[symbol],
+            selected_not_sell=[],
+            avsl_signals={symbol: False},
+        )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.STOP_LOSS)
 
     def test_egan_case_stop_loss_priority(self):
         """
@@ -797,6 +879,7 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
         self.finder = MagicMock()
         self.finder.current_price = {self.symbol: 95.0}
         self.finder.get_atr.return_value = 0.0
+        self.finder.is_special_situation_price_pinned.return_value = False
 
     def _run_decision(
         self,
