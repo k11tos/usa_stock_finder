@@ -353,6 +353,96 @@ class TestUsaStockFinder(unittest.TestCase):
                 self.assertEqual(metrics["atr_pct"], 0.0)
                 self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
 
+
+    def test_is_event_quarantine_true_for_recent_gap_and_flat_price(self):
+        """Recent 20% gap-up with flat post-gap action should be quarantined."""
+        with patch("yfinance.download") as mock_download:
+            periods = 80
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            pre = np.linspace(10.0, 10.5, 75)
+            post = np.array([12.6, 12.58, 12.57, 12.59, 12.6])
+            close = np.concatenate([pre, post])
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "GAPF"): close * 1.01,
+                    ("Low", "GAPF"): close * 0.99,
+                    ("Close", "GAPF"): close,
+                    ("Volume", "GAPF"): np.full(periods, 1200.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["GAPF"])
+            self.assertTrue(finder.is_event_quarantine("GAPF"))
+
+    def test_is_event_quarantine_false_when_gap_is_outside_lookback(self):
+        """Older gap outside recent lookback should not be quarantined."""
+        with patch("yfinance.download") as mock_download:
+            periods = 80
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.concatenate([np.linspace(10.0, 10.2, 70), np.linspace(12.2, 12.4, 10)])
+            close[60] = close[59] * 1.2
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "OLDG"): close * 1.01,
+                    ("Low", "OLDG"): close * 0.99,
+                    ("Close", "OLDG"): close,
+                    ("Volume", "OLDG"): np.full(periods, 1200.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["OLDG"])
+            self.assertFalse(finder.is_event_quarantine("OLDG", lookback_days=5))
+
+    def test_is_event_quarantine_false_when_recent_gap_has_large_pullback(self):
+        """Recent gap with large drawdown should not be quarantined."""
+        with patch("yfinance.download") as mock_download:
+            periods = 80
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            pre = np.linspace(30.0, 31.0, 74)
+            post = np.array([37.2, 38.0, 35.0, 34.5, 34.2, 34.0])
+            close = np.concatenate([pre, post])
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "PULL"): close * 1.01,
+                    ("Low", "PULL"): close * 0.99,
+                    ("Close", "PULL"): close,
+                    ("Volume", "PULL"): np.full(periods, 1200.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["PULL"])
+            self.assertFalse(finder.is_event_quarantine("PULL"))
+
+    def test_is_event_quarantine_false_for_normal_uptrend(self):
+        """Normal uptrend without a single large gap should not be quarantined."""
+        with patch("yfinance.download") as mock_download:
+            periods = 100
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            close = np.linspace(50.0, 60.0, periods)
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "NORM"): close * 1.01,
+                    ("Low", "NORM"): close * 0.99,
+                    ("Close", "NORM"): close,
+                    ("Volume", "NORM"): np.full(periods, 1200.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["NORM"])
+            self.assertFalse(finder.is_event_quarantine("NORM"))
+
     def test_calculate_vpci_components(self):
         """check calculate_vpci_components function"""
         for symbol in self.symbols:

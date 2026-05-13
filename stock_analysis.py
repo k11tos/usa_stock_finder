@@ -248,6 +248,89 @@ class UsaStockFinder:
             "plateau_deviation_pct": plateau_deviation_pct,
         }
 
+    def get_event_quarantine_metrics(
+        self,
+        symbol: str,
+        lookback_days: int = 5,
+        min_gap_up_pct: float = 0.15,
+        max_current_vs_gap_close_pct: float = 0.05,
+        max_drawdown_from_post_gap_high_pct: float = 0.07,
+    ) -> dict[str, float | bool]:
+        """Compute conservative event-quarantine metrics using only recent OHLC close data."""
+        defaults: dict[str, float | bool] = {
+            "is_event_quarantine": False,
+            "max_gap_up_pct": 0.0,
+            "days_since_gap": float(lookback_days + 1),
+            "current_vs_gap_close_pct": 0.0,
+            "drawdown_from_post_gap_high_pct": 1.0,
+        }
+        df = self._get_symbol_df(symbol)
+        if df is None:
+            return defaults
+
+        close = df["Close"].dropna()
+        if len(close) < lookback_days + 1:
+            return defaults
+
+        lookback_close = close.iloc[-(lookback_days + 1) :]
+        returns = lookback_close.pct_change().dropna()
+        if returns.empty:
+            return defaults
+
+        max_gap_up_pct = float(returns.max())
+        if max_gap_up_pct < min_gap_up_pct:
+            defaults["max_gap_up_pct"] = max_gap_up_pct
+            return defaults
+
+        event_return_pos = int(np.argmax(returns.to_numpy()))
+        # pct_change result aligns to lookback_close positions starting at index 1
+        gap_close_pos = event_return_pos + 1
+        gap_close = float(lookback_close.iloc[gap_close_pos])
+        post_gap_close = lookback_close.iloc[gap_close_pos:]
+        if post_gap_close.empty or gap_close <= 0:
+            defaults["max_gap_up_pct"] = max_gap_up_pct
+            return defaults
+
+        current_close = float(close.iloc[-1])
+        post_gap_high = float(post_gap_close.max())
+        days_since_gap = int(len(lookback_close) - 1 - gap_close_pos)
+        current_vs_gap_close_pct = float(abs(current_close - gap_close) / gap_close)
+        drawdown_from_post_gap_high_pct = (
+            float((post_gap_high - current_close) / post_gap_high) if post_gap_high > 0 else 1.0
+        )
+
+        is_event_quarantine = bool(
+            days_since_gap <= lookback_days
+            and current_vs_gap_close_pct <= max_current_vs_gap_close_pct
+            and drawdown_from_post_gap_high_pct <= max_drawdown_from_post_gap_high_pct
+        )
+
+        return {
+            "is_event_quarantine": is_event_quarantine,
+            "max_gap_up_pct": max_gap_up_pct,
+            "days_since_gap": float(days_since_gap),
+            "current_vs_gap_close_pct": current_vs_gap_close_pct,
+            "drawdown_from_post_gap_high_pct": drawdown_from_post_gap_high_pct,
+        }
+
+    def is_event_quarantine(
+        self,
+        symbol: str,
+        lookback_days: int = 5,
+        min_gap_up_pct: float = 0.15,
+        max_current_vs_gap_close_pct: float = 0.05,
+        max_drawdown_from_post_gap_high_pct: float = 0.07,
+    ) -> bool:
+        """Return event-quarantine eligibility for fresh post-gap new buy suppression."""
+        metrics = self.get_event_quarantine_metrics(
+            symbol,
+            lookback_days=lookback_days,
+            min_gap_up_pct=min_gap_up_pct,
+            max_current_vs_gap_close_pct=max_current_vs_gap_close_pct,
+            max_drawdown_from_post_gap_high_pct=max_drawdown_from_post_gap_high_pct,
+        )
+        return bool(metrics["is_event_quarantine"])
+
     def is_special_situation_price_pinned(
         self,
         symbol: str,

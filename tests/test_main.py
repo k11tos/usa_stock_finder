@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import main as main_module
 from main import (
+    _filter_buy_candidates_by_event_quarantine,
     _filter_buy_candidates_by_special_situation,
     build_buy_funnel_lines,
     calculate_profit_loss_rate_safely,
@@ -261,6 +262,33 @@ class TestMainFunctions(unittest.TestCase):
         result = update_final_items(prev_items, buy_items, not_sell_items, sell_decisions={})
 
         self.assertEqual(result, ["AAPL", "OLD1", "MSFT"])
+
+
+    def test_filter_buy_candidates_by_event_quarantine(self):
+        """Event-quarantine symbols should be removed from buy candidates."""
+        mock_finder = MagicMock()
+        mock_finder.get_event_quarantine_metrics.side_effect = [
+            {
+                "is_event_quarantine": True,
+                "max_gap_up_pct": 0.22,
+                "days_since_gap": 2.0,
+                "current_vs_gap_close_pct": 0.01,
+                "drawdown_from_post_gap_high_pct": 0.02,
+            },
+            {
+                "is_event_quarantine": False,
+                "max_gap_up_pct": 0.04,
+                "days_since_gap": 1.0,
+                "current_vs_gap_close_pct": 0.08,
+                "drawdown_from_post_gap_high_pct": 0.15,
+            },
+        ]
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(["GAPX", "AAPL"], mock_finder)
+
+        self.assertEqual(filtered, ["AAPL"])
+        self.assertEqual(excluded, ["GAPX"])
 
     def test_filter_buy_candidates_by_special_situation(self):
         """Special-situation symbols should be removed from buy candidates."""
@@ -1129,6 +1157,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
             mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0, "TSLA": 250.0}
+            mock_finder.get_event_quarantine_metrics.return_value = {"is_event_quarantine": False}
             mock_finder.get_special_situation_price_pinned_metrics.return_value = {
                 "is_special_situation": False,
                 "max_gap_up_pct": 0.0,
@@ -1332,6 +1361,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
             mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder.get_event_quarantine_metrics.return_value = {"is_event_quarantine": False}
             mock_finder.get_special_situation_price_pinned_metrics.return_value = {
                 "is_special_situation": False,
                 "max_gap_up_pct": 0.0,
