@@ -41,7 +41,7 @@ import pandas as pd
 import yfinance as yf
 
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
-from file_utils import read_csv_first_column, save_json
+from file_utils import load_json, read_csv_first_column, save_json
 from logging_setup import setup_logging
 from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
 from stock_analysis import UsaStockFinder
@@ -573,6 +573,8 @@ def build_buy_funnel_lines(stage_counts: dict[str, Any]) -> list[str]:
         ("fundamental_quality_eligible_symbols", "Fundamental OK"),
         ("trend_eligible_symbols", "Trend OK"),
         ("cooldown_eligible_symbols", "Cooldown OK"),
+        ("event_quarantine_excluded_symbols", "Event Quarantine"),
+        ("event_quarantine_excluded_symbol_list", "Event Quarantine Symbols"),
         ("special_situation_excluded_symbols", "Special Excluded"),
         ("special_situation_excluded_symbol_list", "Special Excluded Symbols"),
         ("final_buy_candidates", "Final Buy"),
@@ -1278,6 +1280,56 @@ def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
     return filtered_buy_items
 
 
+def _filter_buy_candidates_by_event_quarantine(
+    buy_items: list[str],
+    finder: UsaStockFinder,
+    existing_symbols: set[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Filter recent suspicious gap-up symbols from new buy candidates."""
+    if not StrategyConfig.EVENT_QUARANTINE_ENABLED:
+        return buy_items, []
+
+    protected_symbols = existing_symbols or set()
+    original_buy_count = len(buy_items)
+    filtered_buy_items: list[str] = []
+    excluded_symbols: list[str] = []
+
+    for symbol in buy_items:
+        if symbol in protected_symbols:
+            filtered_buy_items.append(symbol)
+            continue
+        metrics = finder.get_event_quarantine_metrics(
+            symbol,
+            lookback_days=StrategyConfig.EVENT_QUARANTINE_LOOKBACK_DAYS,
+            min_gap_up_pct=StrategyConfig.EVENT_QUARANTINE_MIN_GAP_UP_PCT,
+            max_current_vs_gap_close_pct=StrategyConfig.EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT,
+            max_drawdown_from_post_gap_high_pct=StrategyConfig.EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT,
+        )
+        if bool(metrics.get("is_event_quarantine", False)):
+            excluded_symbols.append(symbol)
+            logger.info(
+                "symbol=%s excluded reason=event_quarantine "
+                "(max_gap_up_pct=%.4f, days_since_gap=%d, current_vs_gap_close_pct=%.4f, "
+                "drawdown_from_post_gap_high_pct=%.4f)",
+                symbol,
+                metrics["max_gap_up_pct"],
+                int(metrics["days_since_gap"]),
+                metrics["current_vs_gap_close_pct"],
+                metrics["drawdown_from_post_gap_high_pct"],
+            )
+        else:
+            filtered_buy_items.append(symbol)
+
+    if len(filtered_buy_items) < original_buy_count:
+        logger.info(
+            "Event-quarantine 필터링 완료 - 원래: %d개, 필터링 후: %d개",
+            original_buy_count,
+            len(filtered_buy_items),
+        )
+
+    return filtered_buy_items, excluded_symbols
+
+
 def _filter_buy_candidates_by_special_situation(
     buy_items: list[str], finder: UsaStockFinder
 ) -> tuple[list[str], list[str]]:
@@ -1557,6 +1609,17 @@ def _prepare_buy_side_orchestration(
     return buy_items, investment_map, share_quantities
 
 
+def _load_previous_tracked_items(file_path: str = "data/data.json") -> list[str]:
+    """Load previously saved final/tracking symbols for NEW BUY protection."""
+    try:
+        loaded = load_json(file_path)
+        if isinstance(loaded, list):
+            return [str(symbol) for symbol in loaded if isinstance(symbol, str) and symbol]
+    except (FileNotFoundError, ValueError, TypeError):
+        return []
+    return []
+
+
 def _log_execution_summary(
     prev_items: list[str],
     buy_items: list[str],
@@ -1634,8 +1697,19 @@ def main() -> None:
         return
 
     finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts = finder_and_candidates
+    prev_tracked_items = _load_previous_tracked_items("data/data.json")
     buy_items = _filter_buy_candidates_by_cooldown(buy_items)
     funnel_stage_counts["cooldown_eligible_symbols"] = len(buy_items)
+
+    pre_event_quarantine_count = len(buy_items)
+    buy_items, event_quarantine_excluded_symbols = _filter_buy_candidates_by_event_quarantine(
+        buy_items,
+        finder,
+        existing_symbols=set(prev_tracked_items) | set(us_stock_holdings),
+    )
+    funnel_stage_counts["event_quarantine_excluded_symbols"] = pre_event_quarantine_count - len(buy_items)
+    if event_quarantine_excluded_symbols:
+        funnel_stage_counts["event_quarantine_excluded_symbol_list"] = ", ".join(event_quarantine_excluded_symbols)
 
     pre_special_buy_count = len(buy_items)
     buy_items, special_excluded_symbols = _filter_buy_candidates_by_special_situation(buy_items, finder)

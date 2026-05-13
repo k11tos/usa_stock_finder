@@ -140,6 +140,17 @@ class StrategyConfig:
         os.getenv("TRAILING_MIN_PROFIT_PCT", "0.10")
     )  # 평단 대비 최소 수익률 (예: +10% 이상에서만 트레일링 활성화)
 
+    # Event quarantine filter settings for fresh post-gap buy suppression
+    EVENT_QUARANTINE_ENABLED = os.getenv("EVENT_QUARANTINE_ENABLED", "True").lower() == "true"
+    EVENT_QUARANTINE_LOOKBACK_DAYS = int(os.getenv("EVENT_QUARANTINE_LOOKBACK_DAYS", "5"))
+    EVENT_QUARANTINE_MIN_GAP_UP_PCT = float(os.getenv("EVENT_QUARANTINE_MIN_GAP_UP_PCT", "0.15"))
+    EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT = float(
+        os.getenv("EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT", "0.05")
+    )
+    EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT = float(
+        os.getenv("EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT", "0.07")
+    )
+
 
 class InvestmentConfig:
     """Investment calculation parameters."""
@@ -246,6 +257,15 @@ def get_config() -> dict[str, Any]:
             "trailing_atr_period": StrategyConfig.TRAILING_ATR_PERIOD,
             "trailing_atr_multiplier": StrategyConfig.TRAILING_ATR_MULTIPLIER,
             "trailing_min_profit_pct": StrategyConfig.TRAILING_MIN_PROFIT_PCT,
+            "event_quarantine_enabled": StrategyConfig.EVENT_QUARANTINE_ENABLED,
+            "event_quarantine_lookback_days": StrategyConfig.EVENT_QUARANTINE_LOOKBACK_DAYS,
+            "event_quarantine_min_gap_up_pct": StrategyConfig.EVENT_QUARANTINE_MIN_GAP_UP_PCT,
+            "event_quarantine_max_current_vs_gap_close_pct": (
+                StrategyConfig.EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT
+            ),
+            "event_quarantine_max_drawdown_from_post_gap_high_pct": (
+                StrategyConfig.EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT
+            ),
         },
         "investment": {
             "reserve_ratio": InvestmentConfig.RESERVE_RATIO,

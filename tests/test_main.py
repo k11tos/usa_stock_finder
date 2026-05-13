@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import main as main_module
 from main import (
+    _filter_buy_candidates_by_event_quarantine,
     _filter_buy_candidates_by_special_situation,
     build_buy_funnel_lines,
     calculate_profit_loss_rate_safely,
@@ -261,6 +262,67 @@ class TestMainFunctions(unittest.TestCase):
         result = update_final_items(prev_items, buy_items, not_sell_items, sell_decisions={})
 
         self.assertEqual(result, ["AAPL", "OLD1", "MSFT"])
+
+
+    def test_filter_buy_candidates_by_event_quarantine(self):
+        """Event-quarantine symbols should be removed from buy candidates."""
+        mock_finder = MagicMock()
+        mock_finder.get_event_quarantine_metrics.side_effect = [
+            {
+                "is_event_quarantine": True,
+                "max_gap_up_pct": 0.22,
+                "days_since_gap": 2.0,
+                "current_vs_gap_close_pct": 0.01,
+                "drawdown_from_post_gap_high_pct": 0.02,
+            },
+            {
+                "is_event_quarantine": False,
+                "max_gap_up_pct": 0.04,
+                "days_since_gap": 1.0,
+                "current_vs_gap_close_pct": 0.08,
+                "drawdown_from_post_gap_high_pct": 0.15,
+            },
+        ]
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(["GAPX", "AAPL"], mock_finder)
+
+        self.assertEqual(filtered, ["AAPL"])
+        self.assertEqual(excluded, ["GAPX"])
+
+    def test_filter_buy_candidates_by_event_quarantine_protects_existing_symbols(self):
+        """Existing symbols should bypass quarantine while fresh symbols are still filtered."""
+        mock_finder = MagicMock()
+        mock_finder.get_event_quarantine_metrics.side_effect = [
+            {
+                "is_event_quarantine": True,
+                "max_gap_up_pct": 0.2,
+                "days_since_gap": 1.0,
+                "current_vs_gap_close_pct": 0.01,
+                "drawdown_from_post_gap_high_pct": 0.02,
+            },
+        ]
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(
+                ["AAPL", "NEW1"],
+                mock_finder,
+                existing_symbols={"AAPL"},
+            )
+
+        self.assertEqual(filtered, ["AAPL"])
+        self.assertEqual(excluded, ["NEW1"])
+        mock_finder.get_event_quarantine_metrics.assert_called_once_with(
+            "NEW1",
+            lookback_days=main_module.StrategyConfig.EVENT_QUARANTINE_LOOKBACK_DAYS,
+            min_gap_up_pct=main_module.StrategyConfig.EVENT_QUARANTINE_MIN_GAP_UP_PCT,
+            max_current_vs_gap_close_pct=(
+                main_module.StrategyConfig.EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT
+            ),
+            max_drawdown_from_post_gap_high_pct=(
+                main_module.StrategyConfig.EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT
+            ),
+        )
 
     def test_filter_buy_candidates_by_special_situation(self):
         """Special-situation symbols should be removed from buy candidates."""
@@ -1129,6 +1191,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
             mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0, "TSLA": 250.0}
+            mock_finder.get_event_quarantine_metrics.return_value = {"is_event_quarantine": False}
             mock_finder.get_special_situation_price_pinned_metrics.return_value = {
                 "is_special_situation": False,
                 "max_gap_up_pct": 0.0,
@@ -1165,6 +1228,49 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_generate_message.assert_called_once()
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
+
+    def test_main_event_quarantine_uses_previous_tracking_and_holdings_as_protected_set(self):
+        """main should protect both previous tracked symbols and current holdings from event quarantine."""
+        with ExitStack() as stack:
+            stack.enter_context(patch("main.setup_logging"))
+            stack.enter_context(patch("main.load_dotenv"))
+            stack.enter_context(patch("main.is_within_execution_window", return_value=True))
+            stack.enter_context(patch("main.EnvironmentConfig.validate"))
+            stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
+            stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=["AAPL"]))
+            stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "NEW1"]))
+            stack.enter_context(patch("main.load_json", return_value=["TRACK1"]))
+            stack.enter_context(patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols))
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 55.0, "NEW1": 55.0}}))
+            stack.enter_context(patch("main.select_stocks", return_value=(["AAPL", "NEW1"], [])))
+            stack.enter_context(patch("main.is_in_cooldown", return_value=False))
+            stack.enter_context(patch("main._filter_buy_candidates_by_special_situation", return_value=(["AAPL"], [])))
+            stack.enter_context(patch("main.fetch_holdings_detail", return_value=[]))
+            stack.enter_context(patch("main.evaluate_sell_decisions", return_value={}))
+            stack.enter_context(patch("main.calculate_sell_quantities", return_value=None))
+            stack.enter_context(patch("main.calculate_investment_per_stock", return_value={"AAPL": 100.0}))
+            stack.enter_context(patch("main.calculate_share_quantities", return_value={"AAPL": {"shares_to_buy": 1}}))
+            stack.enter_context(patch("main.generate_telegram_message", return_value=None))
+            stack.enter_context(patch("main.update_final_items", return_value=["AAPL"]))
+            stack.enter_context(patch("main.save_json"))
+            mock_event_filter = stack.enter_context(
+                patch("main._filter_buy_candidates_by_event_quarantine", return_value=(["AAPL"], ["NEW1"]))
+            )
+
+            mock_finder = MagicMock()
+            mock_finder.is_data_valid.return_value = True
+            mock_finder.current_price = {"AAPL": 100.0, "NEW1": 20.0}
+            mock_finder.check_avsl_sell_signal.return_value = {}
+            mock_finder_cls.return_value = mock_finder
+
+            main()
+
+            self.assertTrue(mock_event_filter.called)
+            self.assertEqual(
+                mock_event_filter.call_args.kwargs["existing_symbols"],
+                {"TRACK1", "AAPL"},
+            )
 
     def test_prepare_finder_candidates_filters_not_sell_to_entry_universe(self):
         """Holding-only symbols from analysis universe should not leak into returned not_sell_items."""
@@ -1332,6 +1438,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_finder.is_data_valid.return_value = True
             mock_finder.check_avsl_sell_signal.return_value = {"AAPL": False}
             mock_finder.current_price = {"AAPL": 100.0, "MSFT": 200.0}
+            mock_finder.get_event_quarantine_metrics.return_value = {"is_event_quarantine": False}
             mock_finder.get_special_situation_price_pinned_metrics.return_value = {
                 "is_special_situation": False,
                 "max_gap_up_pct": 0.0,
