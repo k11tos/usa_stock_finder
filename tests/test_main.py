@@ -1229,6 +1229,49 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
 
+    def test_main_event_quarantine_uses_previous_tracking_and_holdings_as_protected_set(self):
+        """main should protect both previous tracked symbols and current holdings from event quarantine."""
+        with ExitStack() as stack:
+            stack.enter_context(patch("main.setup_logging"))
+            stack.enter_context(patch("main.load_dotenv"))
+            stack.enter_context(patch("main.is_within_execution_window", return_value=True))
+            stack.enter_context(patch("main.EnvironmentConfig.validate"))
+            stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
+            stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=["AAPL"]))
+            stack.enter_context(patch("main.read_csv_first_column", return_value=["AAPL", "NEW1"]))
+            stack.enter_context(patch("main.load_json", return_value=["TRACK1"]))
+            stack.enter_context(patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols))
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            stack.enter_context(patch("main.calculate_correlations", return_value={"50": {"AAPL": 55.0, "NEW1": 55.0}}))
+            stack.enter_context(patch("main.select_stocks", return_value=(["AAPL", "NEW1"], [])))
+            stack.enter_context(patch("main.is_in_cooldown", return_value=False))
+            stack.enter_context(patch("main._filter_buy_candidates_by_special_situation", return_value=(["AAPL"], [])))
+            stack.enter_context(patch("main.fetch_holdings_detail", return_value=[]))
+            stack.enter_context(patch("main.evaluate_sell_decisions", return_value={}))
+            stack.enter_context(patch("main.calculate_sell_quantities", return_value=None))
+            stack.enter_context(patch("main.calculate_investment_per_stock", return_value={"AAPL": 100.0}))
+            stack.enter_context(patch("main.calculate_share_quantities", return_value={"AAPL": {"shares_to_buy": 1}}))
+            stack.enter_context(patch("main.generate_telegram_message", return_value=None))
+            stack.enter_context(patch("main.update_final_items", return_value=["AAPL"]))
+            stack.enter_context(patch("main.save_json"))
+            mock_event_filter = stack.enter_context(
+                patch("main._filter_buy_candidates_by_event_quarantine", return_value=(["AAPL"], ["NEW1"]))
+            )
+
+            mock_finder = MagicMock()
+            mock_finder.is_data_valid.return_value = True
+            mock_finder.current_price = {"AAPL": 100.0, "NEW1": 20.0}
+            mock_finder.check_avsl_sell_signal.return_value = {}
+            mock_finder_cls.return_value = mock_finder
+
+            main()
+
+            self.assertTrue(mock_event_filter.called)
+            self.assertEqual(
+                mock_event_filter.call_args.kwargs["existing_symbols"],
+                {"TRACK1", "AAPL"},
+            )
+
     def test_prepare_finder_candidates_filters_not_sell_to_entry_universe(self):
         """Holding-only symbols from analysis universe should not leak into returned not_sell_items."""
         with ExitStack() as stack:

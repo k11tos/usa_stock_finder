@@ -41,7 +41,7 @@ import pandas as pd
 import yfinance as yf
 
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
-from file_utils import read_csv_first_column, save_json
+from file_utils import load_json, read_csv_first_column, save_json
 from logging_setup import setup_logging
 from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
 from stock_analysis import UsaStockFinder
@@ -1609,6 +1609,17 @@ def _prepare_buy_side_orchestration(
     return buy_items, investment_map, share_quantities
 
 
+def _load_previous_tracked_items(file_path: str = "data/data.json") -> list[str]:
+    """Load previously saved final/tracking symbols for NEW BUY protection."""
+    try:
+        loaded = load_json(file_path)
+        if isinstance(loaded, list):
+            return [str(symbol) for symbol in loaded if isinstance(symbol, str) and symbol]
+    except (FileNotFoundError, ValueError, TypeError):
+        return []
+    return []
+
+
 def _log_execution_summary(
     prev_items: list[str],
     buy_items: list[str],
@@ -1686,12 +1697,15 @@ def main() -> None:
         return
 
     finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts = finder_and_candidates
+    prev_tracked_items = _load_previous_tracked_items("data/data.json")
     buy_items = _filter_buy_candidates_by_cooldown(buy_items)
     funnel_stage_counts["cooldown_eligible_symbols"] = len(buy_items)
 
     pre_event_quarantine_count = len(buy_items)
     buy_items, event_quarantine_excluded_symbols = _filter_buy_candidates_by_event_quarantine(
-        buy_items, finder, existing_symbols=set(us_stock_holdings)
+        buy_items,
+        finder,
+        existing_symbols=set(prev_tracked_items) | set(us_stock_holdings),
     )
     funnel_stage_counts["event_quarantine_excluded_symbols"] = pre_event_quarantine_count - len(buy_items)
     if event_quarantine_excluded_symbols:
