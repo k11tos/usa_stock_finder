@@ -260,8 +260,12 @@ def get_config() -> dict[str, Any]:
             "event_quarantine_enabled": StrategyConfig.EVENT_QUARANTINE_ENABLED,
             "event_quarantine_lookback_days": StrategyConfig.EVENT_QUARANTINE_LOOKBACK_DAYS,
             "event_quarantine_min_gap_up_pct": StrategyConfig.EVENT_QUARANTINE_MIN_GAP_UP_PCT,
-            "event_quarantine_max_current_vs_gap_close_pct": StrategyConfig.EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT,
-            "event_quarantine_max_drawdown_from_post_gap_high_pct": StrategyConfig.EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT,
+            "event_quarantine_max_current_vs_gap_close_pct": (
+                StrategyConfig.EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT
+            ),
+            "event_quarantine_max_drawdown_from_post_gap_high_pct": (
+                StrategyConfig.EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT
+            ),
         },
         "investment": {
             "reserve_ratio": InvestmentConfig.RESERVE_RATIO,

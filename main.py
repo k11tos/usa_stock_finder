@@ -1281,17 +1281,23 @@ def _filter_buy_candidates_by_cooldown(buy_items: list[str]) -> list[str]:
 
 
 def _filter_buy_candidates_by_event_quarantine(
-    buy_items: list[str], finder: UsaStockFinder
+    buy_items: list[str],
+    finder: UsaStockFinder,
+    existing_symbols: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Filter recent suspicious gap-up symbols from new buy candidates."""
     if not StrategyConfig.EVENT_QUARANTINE_ENABLED:
         return buy_items, []
 
+    protected_symbols = existing_symbols or set()
     original_buy_count = len(buy_items)
     filtered_buy_items: list[str] = []
     excluded_symbols: list[str] = []
 
     for symbol in buy_items:
+        if symbol in protected_symbols:
+            filtered_buy_items.append(symbol)
+            continue
         metrics = finder.get_event_quarantine_metrics(
             symbol,
             lookback_days=StrategyConfig.EVENT_QUARANTINE_LOOKBACK_DAYS,
@@ -1684,7 +1690,9 @@ def main() -> None:
     funnel_stage_counts["cooldown_eligible_symbols"] = len(buy_items)
 
     pre_event_quarantine_count = len(buy_items)
-    buy_items, event_quarantine_excluded_symbols = _filter_buy_candidates_by_event_quarantine(buy_items, finder)
+    buy_items, event_quarantine_excluded_symbols = _filter_buy_candidates_by_event_quarantine(
+        buy_items, finder, existing_symbols=set(us_stock_holdings)
+    )
     funnel_stage_counts["event_quarantine_excluded_symbols"] = pre_event_quarantine_count - len(buy_items)
     if event_quarantine_excluded_symbols:
         funnel_stage_counts["event_quarantine_excluded_symbol_list"] = ", ".join(event_quarantine_excluded_symbols)

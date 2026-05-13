@@ -290,6 +290,40 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(filtered, ["AAPL"])
         self.assertEqual(excluded, ["GAPX"])
 
+    def test_filter_buy_candidates_by_event_quarantine_protects_existing_symbols(self):
+        """Existing symbols should bypass quarantine while fresh symbols are still filtered."""
+        mock_finder = MagicMock()
+        mock_finder.get_event_quarantine_metrics.side_effect = [
+            {
+                "is_event_quarantine": True,
+                "max_gap_up_pct": 0.2,
+                "days_since_gap": 1.0,
+                "current_vs_gap_close_pct": 0.01,
+                "drawdown_from_post_gap_high_pct": 0.02,
+            },
+        ]
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(
+                ["AAPL", "NEW1"],
+                mock_finder,
+                existing_symbols={"AAPL"},
+            )
+
+        self.assertEqual(filtered, ["AAPL"])
+        self.assertEqual(excluded, ["NEW1"])
+        mock_finder.get_event_quarantine_metrics.assert_called_once_with(
+            "NEW1",
+            lookback_days=main_module.StrategyConfig.EVENT_QUARANTINE_LOOKBACK_DAYS,
+            min_gap_up_pct=main_module.StrategyConfig.EVENT_QUARANTINE_MIN_GAP_UP_PCT,
+            max_current_vs_gap_close_pct=(
+                main_module.StrategyConfig.EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT
+            ),
+            max_drawdown_from_post_gap_high_pct=(
+                main_module.StrategyConfig.EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT
+            ),
+        )
+
     def test_filter_buy_candidates_by_special_situation(self):
         """Special-situation symbols should be removed from buy candidates."""
         mock_finder = MagicMock()
