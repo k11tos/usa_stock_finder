@@ -254,8 +254,20 @@ def test_html_report_and_publish_bundles(tmp_path, monkeypatch) -> None:
     snapshots = tmp_path / "account_snapshots.csv"
     pd.DataFrame(
         [
-            {"run_id": "20260101_160000", "run_date": "2026-01-01", "cash": 100, "market_value": 100, "total_equity": 200},
-            {"run_id": "20260102_160000", "run_date": "2026-01-02", "cash": 100, "market_value": 120, "total_equity": 220},
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 100,
+                "total_equity": 200,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 120,
+                "total_equity": 220,
+            },
         ]
     ).to_csv(snapshots, index=False)
 
@@ -316,3 +328,58 @@ def test_empty_snapshot_generates_safe_html(tmp_path) -> None:
     html = (out / "index.html").read_text(encoding="utf-8")
     assert "usa_stock_finder Performance Report" in html
     assert "Chart unavailable" in html
+
+
+@pytest.mark.parametrize(
+    "invalid_run_id",
+    ["/tmp/x", "../../outside", "nested/path"],
+)
+def test_invalid_history_run_id_raises_value_error(
+    tmp_path,
+    monkeypatch,
+    invalid_run_id: str,
+) -> None:
+    snapshots = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 100,
+                "total_equity": 200,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 120,
+                "total_equity": 220,
+            },
+        ]
+    ).to_csv(snapshots, index=False)
+
+    def fake_fetch(_symbols, _start, _end):
+        idx = pd.to_datetime(["2026-01-01", "2026-01-02"])
+        return pd.DataFrame({"SPY": [100, 102], "IWM": [100, 101]}, index=idx)
+
+    monkeypatch.setattr("tools.performance_report.fetch_benchmark_prices", fake_fetch)
+
+    out = tmp_path / "perf_publish_invalid"
+    args = argparse.Namespace(
+        snapshots=str(snapshots),
+        trades=str(tmp_path / "trades.csv"),
+        benchmarks=["SPY", "IWM"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+        publish_latest=False,
+        history=True,
+        report_run_id=invalid_run_id,
+    )
+
+    with pytest.raises(ValueError):
+        build_report(args)
+
+    outside_path = (out / "history" / invalid_run_id).resolve()
+    assert not outside_path.exists()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -254,6 +255,10 @@ def _fmt_pct(value: float | None, digits: int = 2) -> str:
     return "N/A" if value is None else f"{value:.{digits}f}%"
 
 
+def _safe_str(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
 def write_html_report(output_dir: Path, summary: dict[str, object], benchmarks: list[str]) -> None:
     chart_sections = []
     for chart_file, label in [
@@ -262,20 +267,36 @@ def write_html_report(output_dir: Path, summary: dict[str, object], benchmarks: 
         ("charts/excess_return.png", "Excess Return"),
     ]:
         if (output_dir / chart_file).exists():
+            image_tag = (
+                f"<img src=\"{_safe_str(chart_file)}\" "
+                f"alt=\"{_safe_str(label)} chart\" "
+                "style=\"max-width:100%;height:auto;border:1px solid #ddd;padding:8px;\">"
+            )
             chart_sections.append(
-                f"<h3>{label}</h3><img src=\"{chart_file}\" alt=\"{label} chart\" style=\"max-width:100%;height:auto;border:1px solid #ddd;padding:8px;\">"
+                f"<h3>{_safe_str(label)}</h3>{image_tag}"
             )
         else:
-            chart_sections.append(f"<h3>{label}</h3><p><em>Chart unavailable: {chart_file}</em></p>")
+            chart_sections.append(
+                f"<h3>{_safe_str(label)}</h3>"
+                f"<p><em>Chart unavailable: {_safe_str(chart_file)}</em></p>"
+            )
 
     benchmark_lines = []
     for symbol in benchmarks:
         benchmark_lines.append(
-            f"<li>{symbol} cumulative return: {_fmt_pct(summary.get(f'{symbol}_cumulative_return_pct'))}</li>"
+            f"<li>{_safe_str(symbol)} cumulative return: "
+            f"{_safe_str(_fmt_pct(summary.get(f'{symbol}_cumulative_return_pct')))}</li>"
         )
         benchmark_lines.append(
-            f"<li>Excess return vs {symbol}: {_fmt_pct(summary.get(f'excess_return_vs_{symbol}'))}</li>"
+            f"<li>Excess return vs {_safe_str(symbol)}: "
+            f"{_safe_str(_fmt_pct(summary.get(f'excess_return_vs_{symbol}')))}</li>"
         )
+
+    report_period = (
+        f"{_safe_str(summary.get('start_date', 'N/A'))} to "
+        f"{_safe_str(summary.get('end_date', 'N/A'))} "
+        f"({_safe_str(summary.get('num_days', 0))} snapshot days)"
+    )
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -287,10 +308,10 @@ def write_html_report(output_dir: Path, summary: dict[str, object], benchmarks: 
 <body style="font-family:Arial,sans-serif;max-width:960px;margin:24px auto;line-height:1.5;padding:0 16px;">
   <h1>usa_stock_finder Performance Report</h1>
   <ul>
-    <li>Report period: {summary.get("start_date", "N/A")} to {summary.get("end_date", "N/A")} ({summary.get("num_days", 0)} snapshot days)</li>
-    <li>Strategy cumulative return: {_fmt_pct(summary.get("cumulative_return_pct"))}</li>
-    <li>Max drawdown: {_fmt_pct(summary.get("max_drawdown_pct"))}</li>
-    <li>Annualized volatility: {_fmt_pct(summary.get("annualized_volatility_pct"))}</li>
+    <li>Report period: {report_period}</li>
+    <li>Strategy cumulative return: {_safe_str(_fmt_pct(summary.get("cumulative_return_pct")))}</li>
+    <li>Max drawdown: {_safe_str(_fmt_pct(summary.get("max_drawdown_pct")))}</li>
+    <li>Annualized volatility: {_safe_str(_fmt_pct(summary.get("annualized_volatility_pct")))}</li>
   </ul>
   <h2>Benchmark Comparison</h2>
   <ul>
@@ -311,12 +332,33 @@ def _default_report_run_id() -> str:
     return datetime.now(kst).strftime("%Y%m%d_%H%M%S")
 
 
+def validate_report_run_id(report_run_id: str) -> str:
+    candidate = report_run_id.strip()
+    if not candidate:
+        raise ValueError("report_run_id must not be empty.")
+    run_path = Path(candidate)
+    if run_path.is_absolute():
+        raise ValueError("report_run_id must be a simple directory name, not an absolute path.")
+    if run_path.name != candidate:
+        raise ValueError("report_run_id must not include path separators.")
+    if ".." in candidate:
+        raise ValueError("report_run_id must not contain path traversal segments.")
+    return candidate
+
+
 def publish_report_bundle(output_dir: Path, publish_latest: bool, publish_history: bool, report_run_id: str) -> None:
     targets: list[Path] = []
     if publish_latest:
         targets.append(output_dir / "latest")
     if publish_history:
-        targets.append(output_dir / "history" / report_run_id)
+        safe_run_id = validate_report_run_id(report_run_id)
+        history_root = (output_dir / "history").resolve()
+        history_target = (history_root / safe_run_id).resolve()
+        try:
+            history_target.relative_to(history_root)
+        except ValueError as exc:
+            raise ValueError("report_run_id resolves outside the history directory.") from exc
+        targets.append(history_target)
     for target in targets:
         target.mkdir(parents=True, exist_ok=True)
         for rel_path in REPORT_FILES + CHART_FILES:
