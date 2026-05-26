@@ -137,6 +137,24 @@ def build_account_snapshot_rows(
     total_equity = float(balance.get("total_balance", 0.0) or 0.0)
 
     rows: list[dict[str, Any]] = []
+    if not holdings:
+        return [
+            {
+                "run_id": run_id,
+                "run_date": run_date,
+                "symbol": "",
+                "quantity": 0.0,
+                "avg_price": 0.0,
+                "current_price": 0.0,
+                "market_value": 0.0,
+                "profit_loss": 0.0,
+                "profit_loss_rate": 0.0,
+                "exchange": "",
+                "cash": cash,
+                "total_equity": total_equity,
+            }
+        ]
+
     for holding in holdings:
         rows.append(
             {

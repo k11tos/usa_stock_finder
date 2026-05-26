@@ -123,3 +123,23 @@ def test_snapshot_row_mapping(tmp_path):
     with path.open("r", encoding="utf-8") as f:
         header = f.readline().strip().split(",")
     assert header == ACCOUNT_SNAPSHOT_HEADERS
+
+
+def test_snapshot_row_mapping_empty_holdings(tmp_path):
+    rows = build_account_snapshot_rows(
+        "20260101_090000",
+        "2026-01-01",
+        holdings_detail=[],
+        account_balance={"available_cash": 7000, "total_balance": 7000},
+    )
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == ""
+    assert rows[0]["cash"] == 7000.0
+    assert rows[0]["total_equity"] == 7000.0
+
+    out_dir = tmp_path / "live"
+    append_account_snapshots(rows, output_dir=str(out_dir))
+    path = out_dir / "account_snapshots.csv"
+    with path.open("r", encoding="utf-8") as f:
+        header = f.readline().strip().split(",")
+    assert header == ACCOUNT_SNAPSHOT_HEADERS
