@@ -360,6 +360,8 @@ def publish_report_bundle(output_dir: Path, publish_latest: bool, publish_histor
             raise ValueError("report_run_id resolves outside the history directory.") from exc
         targets.append(history_target)
     for target in targets:
+        if target.exists():
+            shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         for rel_path in REPORT_FILES + CHART_FILES:
             src = output_dir / rel_path

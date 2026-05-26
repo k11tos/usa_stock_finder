@@ -383,3 +383,54 @@ def test_invalid_history_run_id_raises_value_error(
 
     outside_path = (out / "history" / invalid_run_id).resolve()
     assert not outside_path.exists()
+
+
+def test_publish_latest_replaces_stale_files_on_empty_snapshot(tmp_path) -> None:
+    out = tmp_path / "perf_latest_stale"
+    stale_file = out / "latest" / "charts" / "stale.png"
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    stale_file.write_text("stale", encoding="utf-8")
+
+    args = argparse.Namespace(
+        snapshots=str(tmp_path / "missing.csv"),
+        trades=str(tmp_path / "trades.csv"),
+        benchmarks=["SPY", "IWM"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+        publish_latest=True,
+        history=False,
+        report_run_id=None,
+    )
+    build_report(args)
+
+    assert not stale_file.exists()
+    latest_html = (out / "latest" / "index.html")
+    assert latest_html.exists()
+    assert "Chart unavailable" in latest_html.read_text(encoding="utf-8")
+
+
+def test_reused_history_run_id_replaces_stale_files(tmp_path) -> None:
+    out = tmp_path / "perf_history_stale"
+    run_id = "20260115_101010"
+    stale_file = out / "history" / run_id / "charts" / "stale.png"
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    stale_file.write_text("stale", encoding="utf-8")
+
+    args = argparse.Namespace(
+        snapshots=str(tmp_path / "missing.csv"),
+        trades=str(tmp_path / "trades.csv"),
+        benchmarks=["SPY", "IWM"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+        publish_latest=False,
+        history=True,
+        report_run_id=run_id,
+    )
+    build_report(args)
+
+    assert not stale_file.exists()
+    history_html = out / "history" / run_id / "index.html"
+    assert history_html.exists()
+    assert "Chart unavailable" in history_html.read_text(encoding="utf-8")
