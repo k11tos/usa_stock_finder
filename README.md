@@ -296,3 +296,34 @@ Hook이 차단하는 항목:
 ## 📧 문의
 
 이슈나 질문이 있으시면 GitHub Issues를 이용해주세요.
+
+## 📉 Live Performance Report (vs SPY/IWM)
+
+라이브 로그(`data/live/account_snapshots.csv`, `data/live/trade_signals.csv`)를 사용해
+전략 성과를 SPY/IWM 벤치마크와 비교하는 리포트를 생성할 수 있습니다.
+
+```bash
+python tools/performance_report.py
+```
+
+옵션 예시:
+
+```bash
+python tools/performance_report.py \
+  --snapshots data/live/account_snapshots.csv \
+  --trades data/live/trade_signals.csv \
+  --benchmarks SPY IWM \
+  --output outputs/performance \
+  --start-date 2026-01-01 \
+  --end-date 2026-03-31
+```
+
+출력 파일:
+- `outputs/performance/equity_curve.csv`
+- `outputs/performance/benchmark_comparison.csv`
+- `outputs/performance/performance_summary.json`
+- `outputs/performance/performance_report.md`
+
+주의:
+- 외부 입출금이 있었던 경우 단순 equity 기반 수익률은 왜곡될 수 있습니다.
+- 향후 cash-flow 로그를 추가하면 정확도를 개선할 수 있습니다.
