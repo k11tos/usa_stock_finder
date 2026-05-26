@@ -48,6 +48,14 @@ from stock_analysis import UsaStockFinder
 from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from stop_loss_cooldown import is_in_cooldown
 from telegram_utils import send_telegram_message
+from live_performance_logger import (
+    append_account_snapshots,
+    append_trade_signals,
+    build_account_snapshot_rows,
+    build_buy_signal_rows,
+    build_sell_signal_rows,
+    generate_run_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -742,6 +750,7 @@ def calculate_investment_per_stock(
     min_investment: float | None = None,
     max_investment: float | None = None,
     additional_cash: float = 0.0,
+    account_balance: dict[str, float] | None = None,
 ) -> dict[str, float] | None:
     """
     Calculate investment amount per stock based on available cash and buy signals.
@@ -758,6 +767,7 @@ def calculate_investment_per_stock(
         min_investment (float | None): Minimum investment amount per stock (None = use config default)
         max_investment (float | None): Maximum investment amount per stock (None = use config default)
         additional_cash (float): Additional cash to add to buyable_cash (e.g., from sell proceeds). Default: 0.0
+        account_balance (dict[str, float] | None): Optional pre-fetched account balance to reuse.
 
     Returns:
         dict[str, float] | None: Dictionary mapping stock symbols to investment amounts,
@@ -783,11 +793,12 @@ def calculate_investment_per_stock(
     if max_investment is None or max_investment == 0:
         max_investment = InvestmentConfig.MAX_INVESTMENT if InvestmentConfig.MAX_INVESTMENT > 0 else None
 
-    try:
-        account_balance = fetch_account_balance()
-    except APIError as e:
-        logger.error("Failed to fetch account balance: %s", str(e))
-        return None
+    if account_balance is None:
+        try:
+            account_balance = fetch_account_balance()
+        except APIError as e:
+            logger.error("Failed to fetch account balance: %s", str(e))
+            return None
 
     if not account_balance:
         logger.error("Failed to fetch account balance")
@@ -1586,7 +1597,12 @@ def _sum_expected_sell_proceeds(sell_quantities: dict[str, dict[str, Any]] | Non
 
 def _prepare_sell_decisions_and_quantities(
     finder: UsaStockFinder, buy_items: list[str], not_sell_items: list[str], entry_symbol_set: set[str]
-) -> tuple[dict[str, SellDecision], dict[str, dict[str, Any]] | None, float]:
+) -> tuple[
+    dict[str, SellDecision],
+    dict[str, dict[str, Any]] | None,
+    float,
+    list[dict[str, Any]] | None,
+]:
     """Evaluate sell decisions and calculate sell quantities/cash."""
     sell_decisions: dict[str, SellDecision] = {}
     current_holdings_detail = fetch_holdings_detail()
@@ -1602,25 +1618,48 @@ def _prepare_sell_decisions_and_quantities(
 
     sell_quantities = _derive_sell_quantities(sell_decisions, finder, current_holdings_detail)
     additional_cash_from_sell = _sum_expected_sell_proceeds(sell_quantities)
-    return sell_decisions, sell_quantities, additional_cash_from_sell
+    return sell_decisions, sell_quantities, additional_cash_from_sell, current_holdings_detail
 
 
 def _prepare_buy_sizing_inputs(
-    buy_items: list[str], finder: UsaStockFinder, additional_cash_from_sell: float
-) -> tuple[dict[str, float] | None, dict[str, dict[str, Any]] | None]:
+    buy_items: list[str],
+    finder: UsaStockFinder,
+    additional_cash_from_sell: float,
+    current_holdings_detail: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, float] | None, dict[str, dict[str, Any]] | None, dict[str, float] | None]:
     """Prepare investment map and share quantities for buy candidates."""
     investment_map = None
     share_quantities = None
+    account_balance = None
 
     if buy_items:
-        investment_map = calculate_investment_per_stock(buy_items, additional_cash=additional_cash_from_sell)
+        try:
+            account_balance = fetch_account_balance()
+        except APIError as exc:
+            logger.error("Failed to fetch account balance for buy sizing: %s", str(exc))
+            account_balance = None
+        if account_balance is None:
+            investment_map = calculate_investment_per_stock(
+                buy_items,
+                additional_cash=additional_cash_from_sell,
+            )
+        else:
+            investment_map = calculate_investment_per_stock(
+                buy_items,
+                additional_cash=additional_cash_from_sell,
+                account_balance=account_balance,
+            )
         if investment_map:
             logger.info(
                 "Investment amounts calculated: %d stocks, total investment: %s",
                 len(investment_map),
                 sum(investment_map.values()),
             )
-            share_quantities = calculate_share_quantities(investment_map, finder)
+            share_quantities = calculate_share_quantities(
+                investment_map,
+                finder,
+                current_holdings=current_holdings_detail,
+            )
             if share_quantities:
                 logger.info("Share quantities calculated for %d stocks", len(share_quantities))
                 filtered_count = len(investment_map) - len(share_quantities)
@@ -1634,15 +1673,23 @@ def _prepare_buy_sizing_inputs(
         else:
             logger.warning("Failed to calculate investment amounts")
 
-    return investment_map, share_quantities
+    return investment_map, share_quantities, account_balance
 
 
 def _prepare_buy_side_orchestration(
-    buy_items: list[str], finder: UsaStockFinder, additional_cash_from_sell: float
-) -> tuple[list[str], dict[str, float] | None, dict[str, dict[str, Any]] | None]:
+    buy_items: list[str],
+    finder: UsaStockFinder,
+    additional_cash_from_sell: float,
+    current_holdings_detail: list[dict[str, Any]] | None = None,
+) -> tuple[list[str], dict[str, float] | None, dict[str, dict[str, Any]] | None, dict[str, float] | None]:
     """Apply buy-side sizing steps for already-filtered buy candidates."""
-    investment_map, share_quantities = _prepare_buy_sizing_inputs(buy_items, finder, additional_cash_from_sell)
-    return buy_items, investment_map, share_quantities
+    investment_map, share_quantities, account_balance = _prepare_buy_sizing_inputs(
+        buy_items,
+        finder,
+        additional_cash_from_sell,
+        current_holdings_detail=current_holdings_detail,
+    )
+    return buy_items, investment_map, share_quantities, account_balance
 
 
 def _load_previous_tracked_items(file_path: str = "data/data.json") -> list[str]:
@@ -1719,6 +1766,8 @@ def main() -> None:
     if not _load_and_validate_runtime_prerequisites():
         return
 
+    run_id, run_date = generate_run_metadata()
+
     try:
         us_stock_holdings = fetch_us_stock_holdings()
         if not us_stock_holdings:
@@ -1753,11 +1802,22 @@ def main() -> None:
     if special_excluded_symbols:
         funnel_stage_counts["special_situation_excluded_symbol_list"] = ", ".join(special_excluded_symbols)
 
-    sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
-        finder, buy_items, not_sell_items, entry_symbol_set
+    (
+        sell_decisions,
+        sell_quantities,
+        additional_cash_from_sell,
+        current_holdings_detail,
+    ) = _prepare_sell_decisions_and_quantities(
+        finder,
+        buy_items,
+        not_sell_items,
+        entry_symbol_set,
     )
-    buy_items, _investment_map, share_quantities = _prepare_buy_side_orchestration(
-        buy_items, finder, additional_cash_from_sell
+    buy_items, _investment_map, share_quantities, account_balance = _prepare_buy_side_orchestration(
+        buy_items,
+        finder,
+        additional_cash_from_sell,
+        current_holdings_detail=current_holdings_detail,
     )
     funnel_stage_counts["final_buy_candidates"] = len(buy_items)
     buy_funnel_lines = log_buy_funnel(funnel_stage_counts)
@@ -1794,6 +1854,47 @@ def main() -> None:
             logger.debug(telegram_message)
         else:
             logger.error("Missing Telegram API credentials")
+
+
+    sell_reason_map = {symbol: decision.reason.value for symbol, decision in sell_decisions.items()}
+    trade_signal_rows = []
+    trade_signal_rows.extend(
+        build_buy_signal_rows(
+            run_id=run_id,
+            run_date=run_date,
+            share_quantities=share_quantities,
+            source_pool_by_symbol=getattr(finder, "source_pool_by_symbol", None),
+        )
+    )
+    trade_signal_rows.extend(
+        build_sell_signal_rows(
+            run_id=run_id,
+            run_date=run_date,
+            sell_quantities=sell_quantities,
+            sell_reasons=sell_reason_map,
+        )
+    )
+    try:
+        append_trade_signals(trade_signal_rows)
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to append trade signals CSV: %s", str(exc))
+
+    if account_balance is None:
+        try:
+            account_balance = fetch_account_balance()
+        except APIError as exc:
+            logger.warning("Account balance snapshot skipped due to API error: %s", str(exc))
+            account_balance = None
+    try:
+        snapshot_rows = build_account_snapshot_rows(
+            run_id=run_id,
+            run_date=run_date,
+            holdings_detail=current_holdings_detail,
+            account_balance=account_balance,
+        )
+        append_account_snapshots(snapshot_rows)
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to append account snapshots CSV: %s", str(exc))
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items, sell_decisions)
     save_json(final_items, "data/data.json")

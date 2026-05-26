@@ -243,3 +243,6 @@ pyrightconfig.json
 
 # Codex CLI local artifact
 .codex
+# Live runtime outputs
+data/live/*.csv
+outputs/performance/
