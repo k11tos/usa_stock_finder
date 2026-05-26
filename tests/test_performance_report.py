@@ -205,8 +205,20 @@ def test_build_report_with_no_benchmark_data(tmp_path, monkeypatch) -> None:
     snapshots = tmp_path / "account_snapshots.csv"
     pd.DataFrame(
         [
-            {"run_id": "20260101_160000", "run_date": "2026-01-01", "cash": 100, "market_value": 100, "total_equity": 200},
-            {"run_id": "20260102_160000", "run_date": "2026-01-02", "cash": 100, "market_value": 120, "total_equity": 220},
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 100,
+                "total_equity": 200,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 120,
+                "total_equity": 220,
+            },
         ]
     ).to_csv(snapshots, index=False)
 

@@ -5,11 +5,12 @@ import json
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position
 
 DEFAULT_SNAPSHOTS = "data/live/account_snapshots.csv"
 DEFAULT_TRADES = "data/live/trade_signals.csv"
