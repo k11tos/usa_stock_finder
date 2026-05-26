@@ -1,10 +1,11 @@
-import pytest
 import argparse
 import json
 
 import pandas as pd
+import pytest
 
 from tools.performance_report import (
+    align_benchmarks_to_strategy_dates,
     build_report,
     cumulative_return_pct,
     load_strategy_equity_curve,
@@ -14,20 +15,20 @@ from tools.performance_report import (
 
 
 def test_cumulative_return_calculation() -> None:
-    s = pd.Series([100, 110, 120])
-    assert cumulative_return_pct(s) == pytest.approx(20.0)
+    series = pd.Series([100, 110, 120])
+    assert cumulative_return_pct(series) == pytest.approx(20.0)
 
 
 def test_max_drawdown_calculation() -> None:
-    s = pd.Series([100, 120, 90, 130])
-    assert round(max_drawdown_pct(s), 2) == -25.0
+    series = pd.Series([100, 120, 90, 130])
+    assert round(max_drawdown_pct(series), 2) == -25.0
 
 
 def test_benchmark_normalization() -> None:
-    s = pd.Series([200, 220, 180], index=pd.date_range("2026-01-01", periods=3))
-    n = normalize_series(s)
-    assert n.iloc[0] == 1.0
-    assert n.iloc[1] == 1.1
+    series = pd.Series([200, 220, 180], index=pd.date_range("2026-01-01", periods=3))
+    normalized = normalize_series(series)
+    assert normalized.iloc[0] == 1.0
+    assert normalized.iloc[1] == 1.1
 
 
 def test_missing_empty_logs(tmp_path) -> None:
@@ -47,31 +48,110 @@ def test_missing_empty_logs(tmp_path) -> None:
 
 def test_group_duplicate_same_day_snapshots(tmp_path) -> None:
     path = tmp_path / "account_snapshots.csv"
-    df = pd.DataFrame(
+    data = pd.DataFrame(
         [
-            {"run_id": "20260101_090000", "run_date": "2026-01-01", "cash": 100, "market_value": 50, "total_equity": 150},
-            {"run_id": "20260101_160000", "run_date": "2026-01-01", "cash": 120, "market_value": 60, "total_equity": 180},
-            {"run_id": "20260102_160000", "run_date": "2026-01-02", "cash": 100, "market_value": 100, "total_equity": ""},
+            {
+                "run_id": "20260101_090000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 50,
+                "total_equity": 150,
+            },
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 120,
+                "market_value": 60,
+                "total_equity": 180,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 100,
+                "total_equity": "",
+            },
         ]
     )
-    df.to_csv(path, index=False)
+    data.to_csv(path, index=False)
 
-    out = load_strategy_equity_curve(path)
-    assert len(out) == 2
-    assert out.iloc[0]["strategy_equity"] == 180
-    assert out.iloc[1]["strategy_equity"] == 200
+    result = load_strategy_equity_curve(path)
+    assert len(result) == 2
+    assert result.iloc[0]["strategy_equity"] == 180
+    assert result.iloc[1]["strategy_equity"] == 200
+
+
+def test_latest_run_fallback_sums_all_symbol_market_values(tmp_path) -> None:
+    path = tmp_path / "account_snapshots.csv"
+    data = pd.DataFrame(
+        [
+            {
+                "run_id": "20260103_090000",
+                "run_date": "2026-01-03",
+                "symbol": "OLD",
+                "cash": 50,
+                "market_value": 100,
+                "total_equity": "",
+            },
+            {
+                "run_id": "20260103_160000",
+                "run_date": "2026-01-03",
+                "symbol": "AAPL",
+                "cash": 200,
+                "market_value": 300,
+                "total_equity": "",
+            },
+            {
+                "run_id": "20260103_160000",
+                "run_date": "2026-01-03",
+                "symbol": "MSFT",
+                "cash": 200,
+                "market_value": 400,
+                "total_equity": "",
+            },
+        ]
+    )
+    data.to_csv(path, index=False)
+
+    result = load_strategy_equity_curve(path)
+    assert len(result) == 1
+    assert result.iloc[0]["strategy_equity"] == 900
+
+
+def test_align_benchmarks_handles_non_trading_strategy_dates() -> None:
+    benchmark_index = pd.to_datetime(["2026-01-02", "2026-01-05"])
+    strategy_index = pd.to_datetime(["2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"])
+    benchmarks = pd.DataFrame({"SPY": [100.0, 101.0]}, index=benchmark_index)
+
+    aligned = align_benchmarks_to_strategy_dates(benchmarks, strategy_index)
+
+    assert aligned.loc[pd.Timestamp("2026-01-03"), "SPY"] == 100.0
+    assert aligned.loc[pd.Timestamp("2026-01-04"), "SPY"] == 100.0
+    assert aligned.loc[pd.Timestamp("2026-01-05"), "SPY"] == 101.0
 
 
 def test_build_report_with_mocked_benchmarks(tmp_path, monkeypatch) -> None:
     snapshots = tmp_path / "account_snapshots.csv"
     pd.DataFrame(
         [
-            {"run_id": "20260101_160000", "run_date": "2026-01-01", "cash": 100, "market_value": 100, "total_equity": 200},
-            {"run_id": "20260102_160000", "run_date": "2026-01-02", "cash": 100, "market_value": 120, "total_equity": 220},
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 100,
+                "total_equity": 200,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 120,
+                "total_equity": 220,
+            },
         ]
     ).to_csv(snapshots, index=False)
 
-    def fake_fetch(symbols, start, end):
+    def fake_fetch(_symbols, _start, _end):
         idx = pd.to_datetime(["2026-01-01", "2026-01-02"])
         return pd.DataFrame({"SPY": [100, 102], "IWM": [100, 101]}, index=idx)
 

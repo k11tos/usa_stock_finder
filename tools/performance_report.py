@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-
 DEFAULT_SNAPSHOTS = "data/live/account_snapshots.csv"
 DEFAULT_TRADES = "data/live/trade_signals.csv"
 DEFAULT_BENCHMARKS = ["SPY", "IWM"]
@@ -17,6 +16,36 @@ DEFAULT_OUTPUT = "outputs/performance"
 
 def _clean_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
+
+
+def _select_latest_run_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if "run_id" not in df.columns:
+        return df.copy()
+
+    run_id_dt = pd.to_datetime(
+        df["run_id"],
+        format="%Y%m%d_%H%M%S",
+        errors="coerce",
+    )
+    candidates = df.assign(_run_id_dt=run_id_dt)
+    latest = (
+        candidates.sort_values(["run_date", "_run_id_dt"], na_position="last")
+        .groupby("run_date", as_index=False)
+        .tail(1)[["run_date", "run_id"]]
+    )
+    return df.merge(latest, on=["run_date", "run_id"], how="inner")
+
+
+def _compute_run_equity(run_rows: pd.DataFrame) -> float:
+    total_equity = _clean_numeric(run_rows.get("total_equity", pd.Series(dtype=float)))
+    valid_total = total_equity[(total_equity > 0) & total_equity.notna()]
+    if not valid_total.empty:
+        return float(valid_total.iloc[0])
+
+    cash_series = _clean_numeric(run_rows.get("cash", pd.Series(dtype=float))).dropna()
+    cash_value = float(cash_series.iloc[0]) if not cash_series.empty else 0.0
+    market_value = _clean_numeric(run_rows.get("market_value", pd.Series(dtype=float))).fillna(0.0)
+    return cash_value + float(market_value.sum())
 
 
 def load_strategy_equity_curve(
@@ -44,34 +73,49 @@ def load_strategy_equity_curve(
     if df.empty:
         return pd.DataFrame(columns=["run_date", "strategy_equity"])
 
-    run_ids = pd.to_datetime(df.get("run_id", pd.Series(index=df.index, dtype=object)), format="%Y%m%d_%H%M%S", errors="coerce")
-    if "run_id" in df.columns:
-        df = df.assign(_run_id_dt=run_ids).sort_values(["run_date", "_run_id_dt"], na_position="last")
-        daily = df.groupby("run_date", as_index=False).tail(1).copy()
-    else:
-        daily = df.sort_values(["run_date"]).groupby("run_date", as_index=False).tail(1).copy()
+    selected = _select_latest_run_rows(df)
+    daily = (
+        selected.groupby("run_date", as_index=False)
+        .apply(lambda group: pd.Series({"strategy_equity": _compute_run_equity(group)}))
+        .reset_index(drop=True)
+    )
 
-    daily["total_equity"] = _clean_numeric(daily.get("total_equity", np.nan))
-    daily["cash"] = _clean_numeric(daily.get("cash", np.nan)).fillna(0.0)
-    daily["market_value"] = _clean_numeric(daily.get("market_value", np.nan)).fillna(0.0)
-
-    has_valid_total = daily["total_equity"].notna() & (daily["total_equity"] > 0)
-    daily["strategy_equity"] = np.where(has_valid_total, daily["total_equity"], daily["cash"] + daily["market_value"])
-    daily = daily[["run_date", "strategy_equity"]].dropna().sort_values("run_date").reset_index(drop=True)
-    return daily
+    return daily[["run_date", "strategy_equity"]].sort_values("run_date").reset_index(drop=True)
 
 
 def fetch_benchmark_prices(symbols: list[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     prices = pd.DataFrame()
     for symbol in symbols:
-        data = yf.download(symbol, start=start.date(), end=(end + pd.Timedelta(days=1)).date(), progress=False, auto_adjust=False)
+        data = yf.download(
+            symbol,
+            start=start.date(),
+            end=(end + pd.Timedelta(days=1)).date(),
+            progress=False,
+            auto_adjust=False,
+        )
         if data.empty:
             continue
         col = "Adj Close" if "Adj Close" in data.columns else "Close"
-        s = data[col].rename(symbol)
-        s.index = pd.to_datetime(s.index).normalize()
-        prices = prices.join(s, how="outer") if not prices.empty else s.to_frame()
+        benchmark_series = data[col].rename(symbol)
+        benchmark_series.index = pd.to_datetime(benchmark_series.index).normalize()
+        prices = (
+            prices.join(benchmark_series, how="outer")
+            if not prices.empty
+            else benchmark_series.to_frame()
+        )
     return prices.sort_index()
+
+
+def align_benchmarks_to_strategy_dates(
+    benchmarks: pd.DataFrame,
+    strategy_index: pd.DatetimeIndex,
+) -> pd.DataFrame:
+    if benchmarks.empty:
+        return benchmarks
+
+    union_index = benchmarks.index.union(strategy_index)
+    aligned = benchmarks.reindex(union_index).sort_index().ffill()
+    return aligned.reindex(strategy_index)
 
 
 def normalize_series(series: pd.Series) -> pd.Series:
@@ -101,10 +145,10 @@ def max_drawdown_pct(series: pd.Series) -> float | None:
 
 
 def annualized_volatility_pct(daily_returns: pd.Series) -> float | None:
-    r = daily_returns.dropna()
-    if len(r) < 2:
+    returns = daily_returns.dropna()
+    if len(returns) < 2:
         return None
-    return float(r.std(ddof=1) * np.sqrt(252) * 100.0)
+    return float(returns.std(ddof=1) * np.sqrt(252) * 100.0)
 
 
 def cagr_pct(series: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> float | None:
@@ -129,9 +173,15 @@ def build_report(args: argparse.Namespace) -> None:
             "error": "No valid account snapshots found for the selected period.",
             "benchmarks": args.benchmarks,
         }
-        (output_dir / "performance_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        (output_dir / "performance_summary.json").write_text(
+            json.dumps(summary, indent=2),
+            encoding="utf-8",
+        )
         (output_dir / "benchmark_comparison.csv").write_text("", encoding="utf-8")
-        (output_dir / "performance_report.md").write_text("# Performance Report\n\nNo valid snapshots found.\n", encoding="utf-8")
+        (output_dir / "performance_report.md").write_text(
+            "# Performance Report\n\nNo valid snapshots found.\n",
+            encoding="utf-8",
+        )
         return
 
     start, end = strategy["run_date"].min(), strategy["run_date"].max()
@@ -139,7 +189,7 @@ def build_report(args: argparse.Namespace) -> None:
 
     df = strategy.set_index("run_date").copy()
     if not benchmarks.empty:
-        benchmarks = benchmarks.reindex(df.index).ffill()
+        benchmarks = align_benchmarks_to_strategy_dates(benchmarks, df.index)
         for symbol in args.benchmarks:
             if symbol in benchmarks.columns:
                 df[symbol] = benchmarks[symbol]
@@ -159,7 +209,9 @@ def build_report(args: argparse.Namespace) -> None:
         "cumulative_return_pct": cumulative_return_pct(df["strategy_equity"]),
         "cagr_pct": cagr_pct(df["strategy_equity"], start, end),
         "max_drawdown_pct": max_drawdown_pct(df["strategy_equity"]),
-        "annualized_volatility_pct": annualized_volatility_pct(df["strategy_equity"].pct_change()),
+        "annualized_volatility_pct": annualized_volatility_pct(
+            df["strategy_equity"].pct_change()
+        ),
     }
 
     benchmark_rows = []
@@ -168,55 +220,97 @@ def build_report(args: argparse.Namespace) -> None:
             continue
         ret = cumulative_return_pct(df[symbol])
         benchmark_rows.append({"asset": symbol, "cumulative_return_pct": ret})
-        summary[f"excess_return_vs_{symbol}"] = None if ret is None or summary["cumulative_return_pct"] is None else summary["cumulative_return_pct"] - ret
+        strat_ret = summary["cumulative_return_pct"]
+        summary[f"excess_return_vs_{symbol}"] = (
+            None if ret is None or strat_ret is None else strat_ret - ret
+        )
 
     if benchmark_rows:
-        best = max((r for r in benchmark_rows if r["cumulative_return_pct"] is not None), key=lambda x: x["cumulative_return_pct"], default=None)
+        best = max(
+            (row for row in benchmark_rows if row["cumulative_return_pct"] is not None),
+            key=lambda row: row["cumulative_return_pct"],
+            default=None,
+        )
         summary["best_benchmark"] = best["asset"] if best else None
     else:
         summary["best_benchmark"] = None
 
-    benchmark_comparison = pd.DataFrame([
-        {"asset": "Strategy", "cumulative_return_pct": summary["cumulative_return_pct"]},
-        *benchmark_rows,
-    ])
+    benchmark_comparison = pd.DataFrame(
+        [{"asset": "Strategy", "cumulative_return_pct": summary["cumulative_return_pct"]}]
+        + benchmark_rows
+    )
     benchmark_comparison.to_csv(output_dir / "benchmark_comparison.csv", index=False)
-    (output_dir / "performance_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (output_dir / "performance_summary.json").write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
 
     lines = [
         "# Performance Report",
         "",
-        f"- Period: {summary['start_date']} to {summary['end_date']} ({summary['num_days']} snapshot days)",
-        f"- Strategy cumulative return: {summary['cumulative_return_pct']:.2f}%" if summary["cumulative_return_pct"] is not None else "- Strategy cumulative return: N/A",
-        f"- Strategy CAGR: {summary['cagr_pct']:.2f}%" if summary["cagr_pct"] is not None else "- Strategy CAGR: N/A (< 30 days or insufficient data)",
-        f"- Strategy max drawdown: {summary['max_drawdown_pct']:.2f}%" if summary["max_drawdown_pct"] is not None else "- Strategy max drawdown: N/A",
-        f"- Strategy annualized volatility: {summary['annualized_volatility_pct']:.2f}%" if summary["annualized_volatility_pct"] is not None else "- Strategy annualized volatility: N/A",
+        (
+            f"- Period: {summary['start_date']} to {summary['end_date']} "
+            f"({summary['num_days']} snapshot days)"
+        ),
+        (
+            f"- Strategy cumulative return: {summary['cumulative_return_pct']:.2f}%"
+            if summary["cumulative_return_pct"] is not None
+            else "- Strategy cumulative return: N/A"
+        ),
+        (
+            f"- Strategy CAGR: {summary['cagr_pct']:.2f}%"
+            if summary["cagr_pct"] is not None
+            else "- Strategy CAGR: N/A (< 30 days or insufficient data)"
+        ),
+        (
+            f"- Strategy max drawdown: {summary['max_drawdown_pct']:.2f}%"
+            if summary["max_drawdown_pct"] is not None
+            else "- Strategy max drawdown: N/A"
+        ),
+        (
+            f"- Strategy annualized volatility: {summary['annualized_volatility_pct']:.2f}%"
+            if summary["annualized_volatility_pct"] is not None
+            else "- Strategy annualized volatility: N/A"
+        ),
         "",
         "## Benchmark Comparison",
         "",
     ]
+
     for row in benchmark_rows:
-        lines.append(f"- {row['asset']} cumulative return: {row['cumulative_return_pct']:.2f}%" if row["cumulative_return_pct"] is not None else f"- {row['asset']} cumulative return: N/A")
+        lines.append(
+            f"- {row['asset']} cumulative return: {row['cumulative_return_pct']:.2f}%"
+            if row["cumulative_return_pct"] is not None
+            else f"- {row['asset']} cumulative return: N/A"
+        )
         excess_key = f"excess_return_vs_{row['asset']}"
         excess = summary.get(excess_key)
-        lines.append(f"  - Excess return vs {row['asset']}: {excess:.2f}%" if excess is not None else f"  - Excess return vs {row['asset']}: N/A")
+        lines.append(
+            f"  - Excess return vs {row['asset']}: {excess:.2f}%"
+            if excess is not None
+            else f"  - Excess return vs {row['asset']}: N/A"
+        )
 
-    lines.extend([
-        "",
-        f"- Best benchmark by cumulative return: {summary['best_benchmark']}",
-        "",
-        "## Caveat",
-        "",
-        "If external deposits/withdrawals occurred, simple equity-based returns may be distorted.",
-        "A future cash-flow log can improve accuracy.",
-        "",
-        "This report is for decision support only and does not place trades.",
-    ])
+    lines.extend(
+        [
+            "",
+            f"- Best benchmark by cumulative return: {summary['best_benchmark']}",
+            "",
+            "## Caveat",
+            "",
+            "If external deposits/withdrawals occurred, simple equity-based returns may be distorted.",
+            "A future cash-flow log can improve accuracy.",
+            "",
+            "This report is for decision support only and does not place trades.",
+        ]
+    )
     (output_dir / "performance_report.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build live performance report vs benchmarks.")
+    parser = argparse.ArgumentParser(
+        description="Build live performance report vs benchmarks.",
+    )
     parser.add_argument("--snapshots", default=DEFAULT_SNAPSHOTS)
     parser.add_argument("--trades", default=DEFAULT_TRADES)
     parser.add_argument("--benchmarks", nargs="+", default=DEFAULT_BENCHMARKS)
