@@ -103,6 +103,19 @@ python main.py
 0 20 * * * cd /path/to/usa_stock_finder && /path/to/env/bin/python main.py
 ```
 
+
+## 📈 Live Performance Logs
+
+런타임 실행 시 실제 운용 성과 추적을 위한 CSV 로그가 생성됩니다.
+
+- `data/live/trade_signals.csv`: 매수/매도 신호 로그 (run_id, side, symbol, quantity, price, reason 등)
+- `data/live/account_snapshots.csv`: 일별 계좌/보유 스냅샷 (현금, 총자산, 종목별 평가손익 등)
+
+특징:
+- append-only 저장 (기존 기록 보존)
+- 파일이 없으면 헤더 자동 생성
+- 실행 단위 `run_id`는 KST 기준 `YYYYMMDD_HHMMSS` 형식으로 생성
+
 ## Backtesting
 
 `run_backtest.py`로 CSV 기반 백테스트를 실행할 수 있습니다.

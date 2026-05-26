@@ -48,6 +48,14 @@ from stock_analysis import UsaStockFinder
 from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from stop_loss_cooldown import is_in_cooldown
 from telegram_utils import send_telegram_message
+from live_performance_logger import (
+    append_account_snapshots,
+    append_trade_signals,
+    build_account_snapshot_rows,
+    build_buy_signal_rows,
+    build_sell_signal_rows,
+    generate_run_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1586,7 +1594,12 @@ def _sum_expected_sell_proceeds(sell_quantities: dict[str, dict[str, Any]] | Non
 
 def _prepare_sell_decisions_and_quantities(
     finder: UsaStockFinder, buy_items: list[str], not_sell_items: list[str], entry_symbol_set: set[str]
-) -> tuple[dict[str, SellDecision], dict[str, dict[str, Any]] | None, float]:
+) -> tuple[
+    dict[str, SellDecision],
+    dict[str, dict[str, Any]] | None,
+    float,
+    list[dict[str, Any]] | None,
+]:
     """Evaluate sell decisions and calculate sell quantities/cash."""
     sell_decisions: dict[str, SellDecision] = {}
     current_holdings_detail = fetch_holdings_detail()
@@ -1602,7 +1615,7 @@ def _prepare_sell_decisions_and_quantities(
 
     sell_quantities = _derive_sell_quantities(sell_decisions, finder, current_holdings_detail)
     additional_cash_from_sell = _sum_expected_sell_proceeds(sell_quantities)
-    return sell_decisions, sell_quantities, additional_cash_from_sell
+    return sell_decisions, sell_quantities, additional_cash_from_sell, current_holdings_detail
 
 
 def _prepare_buy_sizing_inputs(
@@ -1719,6 +1732,8 @@ def main() -> None:
     if not _load_and_validate_runtime_prerequisites():
         return
 
+    run_id, run_date = generate_run_metadata()
+
     try:
         us_stock_holdings = fetch_us_stock_holdings()
         if not us_stock_holdings:
@@ -1753,7 +1768,7 @@ def main() -> None:
     if special_excluded_symbols:
         funnel_stage_counts["special_situation_excluded_symbol_list"] = ", ".join(special_excluded_symbols)
 
-    sell_decisions, sell_quantities, additional_cash_from_sell = _prepare_sell_decisions_and_quantities(
+    sell_decisions, sell_quantities, additional_cash_from_sell, current_holdings_detail = _prepare_sell_decisions_and_quantities(
         finder, buy_items, not_sell_items, entry_symbol_set
     )
     buy_items, _investment_map, share_quantities = _prepare_buy_side_orchestration(
@@ -1794,6 +1809,41 @@ def main() -> None:
             logger.debug(telegram_message)
         else:
             logger.error("Missing Telegram API credentials")
+
+
+    sell_reason_map = {symbol: decision.reason.value for symbol, decision in sell_decisions.items()}
+    trade_signal_rows = []
+    trade_signal_rows.extend(
+        build_buy_signal_rows(
+            run_id=run_id,
+            run_date=run_date,
+            share_quantities=share_quantities,
+            source_pool_by_symbol=getattr(finder, "source_pool_by_symbol", None),
+        )
+    )
+    trade_signal_rows.extend(
+        build_sell_signal_rows(
+            run_id=run_id,
+            run_date=run_date,
+            sell_quantities=sell_quantities,
+            sell_reasons=sell_reason_map,
+        )
+    )
+    append_trade_signals(trade_signal_rows)
+
+    try:
+        account_balance = fetch_account_balance()
+    except APIError as exc:
+        logger.warning("Account balance snapshot skipped due to API error: %s", str(exc))
+        account_balance = None
+
+    snapshot_rows = build_account_snapshot_rows(
+        run_id=run_id,
+        run_date=run_date,
+        holdings_detail=current_holdings_detail,
+        account_balance=account_balance,
+    )
+    append_account_snapshots(snapshot_rows)
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items, sell_decisions)
     save_json(final_items, "data/data.json")
