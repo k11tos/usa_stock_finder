@@ -314,6 +314,8 @@ python tools/performance_report.py \
   --trades data/live/trade_signals.csv \
   --benchmarks SPY IWM \
   --output outputs/performance \
+  --publish-latest \
+  --history \
   --start-date 2026-01-01 \
   --end-date 2026-03-31
 ```
@@ -323,6 +325,14 @@ python tools/performance_report.py \
 - `outputs/performance/benchmark_comparison.csv`
 - `outputs/performance/performance_summary.json`
 - `outputs/performance/performance_report.md`
+- `outputs/performance/index.html`
+- `outputs/performance/latest/index.html` (`--publish-latest` 사용 시)
+- `outputs/performance/history/<report_run_id>/index.html` (`--history` 사용 시)
+
+브라우저 정적 호스팅용 publish 옵션:
+- `--publish-latest`: 번들을 `outputs/performance/latest/`에 복사합니다.
+- `--history`: 번들을 `outputs/performance/history/<report_run_id>/`에 복사합니다.
+- `--report-run-id`: history 디렉터리 이름. 생략 시 KST 타임스탬프(`YYYYMMDD_HHMMSS`)를 자동 생성합니다.
 
 주의:
 - 외부 입출금이 있었던 경우 단순 equity 기반 수익률은 왜곡될 수 있습니다.
