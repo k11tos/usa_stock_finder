@@ -10,7 +10,7 @@ import pandas as pd
 import yfinance as yf
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position
+import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position,ungrouped-imports
 
 DEFAULT_SNAPSHOTS = "data/live/account_snapshots.csv"
 DEFAULT_TRADES = "data/live/trade_signals.csv"
