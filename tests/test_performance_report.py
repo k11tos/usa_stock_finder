@@ -7,6 +7,8 @@ import pytest
 from tools.performance_report import (
     align_benchmarks_to_strategy_dates,
     build_report,
+    build_chart_data,
+    calculate_drawdown_series,
     cumulative_return_pct,
     load_strategy_equity_curve,
     max_drawdown_pct,
@@ -22,6 +24,15 @@ def test_cumulative_return_calculation() -> None:
 def test_max_drawdown_calculation() -> None:
     series = pd.Series([100, 120, 90, 130])
     assert round(max_drawdown_pct(series), 2) == -25.0
+
+
+def test_calculate_drawdown_series() -> None:
+    series = pd.Series([100.0, 120.0, 90.0, 130.0])
+    drawdown = calculate_drawdown_series(series)
+    assert drawdown.iloc[0] == pytest.approx(0.0)
+    assert drawdown.iloc[1] == pytest.approx(0.0)
+    assert drawdown.iloc[2] == pytest.approx(-25.0)
+    assert drawdown.iloc[3] == pytest.approx(0.0)
 
 
 def test_benchmark_normalization() -> None:
@@ -172,3 +183,47 @@ def test_build_report_with_mocked_benchmarks(tmp_path, monkeypatch) -> None:
     assert (out / "benchmark_comparison.csv").exists()
     assert (out / "performance_summary.json").exists()
     assert (out / "performance_report.md").exists()
+    assert (out / "charts" / "cumulative_return.png").exists()
+    assert (out / "charts" / "drawdown.png").exists()
+    assert (out / "charts" / "excess_return.png").exists()
+    assert (out / "charts" / "cumulative_return.png").stat().st_size > 0
+    assert (out / "charts" / "drawdown.png").stat().st_size > 0
+    assert (out / "charts" / "excess_return.png").stat().st_size > 0
+
+
+def test_build_chart_data_with_missing_benchmark_series() -> None:
+    idx = pd.to_datetime(["2026-01-01", "2026-01-02"])
+    norm_df = pd.DataFrame({"Strategy": [1.0, 1.1]}, index=idx)
+    chart_data = build_chart_data(norm_df, ["SPY", "IWM"])
+
+    assert list(chart_data["cumulative"].columns) == ["Strategy"]
+    assert list(chart_data["drawdown"].columns) == ["Strategy"]
+    assert chart_data["excess"].empty
+
+
+def test_build_report_with_no_benchmark_data(tmp_path, monkeypatch) -> None:
+    snapshots = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {"run_id": "20260101_160000", "run_date": "2026-01-01", "cash": 100, "market_value": 100, "total_equity": 200},
+            {"run_id": "20260102_160000", "run_date": "2026-01-02", "cash": 100, "market_value": 120, "total_equity": 220},
+        ]
+    ).to_csv(snapshots, index=False)
+
+    monkeypatch.setattr("tools.performance_report.fetch_benchmark_prices", lambda *_args, **_kwargs: pd.DataFrame())
+
+    out = tmp_path / "perf_no_bench"
+    args = argparse.Namespace(
+        snapshots=str(snapshots),
+        trades=str(tmp_path / "trades.csv"),
+        benchmarks=["SPY", "IWM"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+    )
+    build_report(args)
+
+    for chart_name in ["cumulative_return.png", "drawdown.png", "excess_return.png"]:
+        chart_path = out / "charts" / chart_name
+        assert chart_path.exists()
+        assert chart_path.stat().st_size > 0

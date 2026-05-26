@@ -4,6 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -144,6 +147,78 @@ def max_drawdown_pct(series: pd.Series) -> float | None:
     return float(drawdowns.min() * 100.0)
 
 
+def calculate_drawdown_series(series: pd.Series) -> pd.Series:
+    s = series.copy()
+    rolling_peak = s.cummax()
+    return ((s / rolling_peak) - 1.0) * 100.0
+
+
+def build_chart_data(norm_df: pd.DataFrame, benchmarks: list[str]) -> dict[str, pd.DataFrame]:
+    cumulative = pd.DataFrame(index=norm_df.index)
+    if "Strategy" in norm_df.columns:
+        cumulative["Strategy"] = norm_df["Strategy"] * 100.0
+    for symbol in benchmarks:
+        if symbol in norm_df.columns:
+            cumulative[symbol] = norm_df[symbol] * 100.0
+
+    drawdown = pd.DataFrame(index=norm_df.index)
+    for column in cumulative.columns:
+        drawdown[column] = calculate_drawdown_series(cumulative[column])
+
+    excess = pd.DataFrame(index=norm_df.index)
+    if "Strategy" in norm_df.columns:
+        for symbol in benchmarks:
+            if symbol in cumulative.columns:
+                excess[f"Strategy - {symbol}"] = (norm_df["Strategy"] - norm_df[symbol]) * 100.0
+
+    return {"cumulative": cumulative, "drawdown": drawdown, "excess": excess}
+
+
+def _save_line_chart(
+    data: pd.DataFrame,
+    output_path: Path,
+    title: str,
+    y_label: str,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    if not data.empty:
+        for column in data.columns:
+            ax.plot(data.index, data[column], label=column, linewidth=2)
+        ax.legend()
+    else:
+        ax.text(0.5, 0.5, "No data available", ha="center", va="center", transform=ax.transAxes)
+    ax.set_title(title)
+    ax.set_xlabel("Date")
+    ax.set_ylabel(y_label)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
+def write_performance_charts(chart_data: dict[str, pd.DataFrame], output_dir: Path) -> None:
+    charts_dir = output_dir / "charts"
+    _save_line_chart(
+        chart_data["cumulative"],
+        charts_dir / "cumulative_return.png",
+        "Cumulative Return",
+        "Growth of $100",
+    )
+    _save_line_chart(
+        chart_data["drawdown"],
+        charts_dir / "drawdown.png",
+        "Drawdown",
+        "Drawdown (%)",
+    )
+    _save_line_chart(
+        chart_data["excess"],
+        charts_dir / "excess_return.png",
+        "Excess Return",
+        "Excess Return (%)",
+    )
+
+
 def annualized_volatility_pct(daily_returns: pd.Series) -> float | None:
     returns = daily_returns.dropna()
     if len(returns) < 2:
@@ -201,6 +276,8 @@ def build_report(args: argparse.Namespace) -> None:
             norm_df[symbol] = normalize_series(df[symbol])
 
     norm_df.to_csv(equity_curve_path, index_label="date")
+    chart_data = build_chart_data(norm_df, args.benchmarks)
+    write_performance_charts(chart_data, output_dir)
 
     summary: dict[str, object] = {
         "start_date": start.strftime("%Y-%m-%d"),
@@ -293,6 +370,14 @@ def build_report(args: argparse.Namespace) -> None:
 
     lines.extend(
         [
+            "",
+            "## Charts",
+            "",
+            "![Cumulative Return](charts/cumulative_return.png)",
+            "",
+            "![Drawdown](charts/drawdown.png)",
+            "",
+            "![Excess Return](charts/excess_return.png)",
             "",
             f"- Best benchmark by cumulative return: {summary['best_benchmark']}",
             "",
