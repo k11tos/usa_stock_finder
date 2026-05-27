@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from tools.performance_report import (
+    _calculate_modified_dietz_return_pct,
     align_benchmarks_to_strategy_dates,
     build_report,
     build_chart_data,
@@ -361,3 +362,106 @@ def test_empty_snapshot_generates_safe_html(tmp_path) -> None:
     assert "Missing chart:" in html
     assert (out / "latest" / "index.html").exists()
     assert (out / "history" / "20260527_130000" / "index.html").exists()
+
+
+def test_no_cash_flow_file_keeps_simple_behavior() -> None:
+    strategy = pd.DataFrame(
+        {
+            "run_date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
+            "strategy_equity": [1000.0, 1100.0],
+        }
+    )
+    adjusted = _calculate_modified_dietz_return_pct(
+        strategy,
+        pd.DataFrame(columns=["date", "external_flow"]),
+    )
+    assert adjusted == pytest.approx(10.0)
+
+
+def test_deposit_reduces_return_distortion() -> None:
+    strategy = pd.DataFrame(
+        {
+            "run_date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
+            "strategy_equity": [1000.0, 1600.0],
+        }
+    )
+    cash_flows = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-02"]), "external_flow": [500.0]}
+    )
+    simple_return = cumulative_return_pct(strategy["strategy_equity"])
+    adjusted_return = _calculate_modified_dietz_return_pct(strategy, cash_flows)
+    assert simple_return == pytest.approx(60.0)
+    assert adjusted_return == pytest.approx(10.0)
+
+
+def test_withdrawal_handling_increases_adjusted_return() -> None:
+    strategy = pd.DataFrame(
+        {
+            "run_date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
+            "strategy_equity": [1000.0, 900.0],
+        }
+    )
+    cash_flows = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-02"]), "external_flow": [-200.0]}
+    )
+    simple_return = cumulative_return_pct(strategy["strategy_equity"])
+    adjusted_return = _calculate_modified_dietz_return_pct(strategy, cash_flows)
+    assert simple_return == pytest.approx(-10.0)
+    assert adjusted_return == pytest.approx(10.0)
+
+
+def test_cash_flow_between_snapshot_dates_is_included() -> None:
+    strategy = pd.DataFrame(
+        {
+            "run_date": pd.to_datetime(["2026-01-01", "2026-01-03"]),
+            "strategy_equity": [1000.0, 1550.0],
+        }
+    )
+    cash_flows = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-02"]), "external_flow": [500.0]}
+    )
+
+    simple_return = cumulative_return_pct(strategy["strategy_equity"])
+    adjusted_return = _calculate_modified_dietz_return_pct(strategy, cash_flows)
+
+    assert simple_return == pytest.approx(55.0)
+    assert adjusted_return == pytest.approx(4.0)
+    assert adjusted_return != pytest.approx(simple_return)
+
+
+def test_invalid_cash_flow_rows_are_reported_safely(tmp_path, monkeypatch) -> None:
+    snapshots = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {"run_id": "20260101_160000", "run_date": "2026-01-01", "total_equity": 1000},
+            {"run_id": "20260102_160000", "run_date": "2026-01-02", "total_equity": 1050},
+        ]
+    ).to_csv(snapshots, index=False)
+
+    cash_flows = tmp_path / "cash_flows.csv"
+    pd.DataFrame(
+        [
+            {"date": "2026-01-02", "amount": "bad", "currency": "USD", "type": "deposit", "memo": "bad amount"},
+            {"date": "2026-01-02", "amount": 20, "currency": "USD", "type": "unknown", "memo": "bad type"},
+        ]
+    ).to_csv(cash_flows, index=False)
+
+    monkeypatch.setattr("tools.performance_report.fetch_benchmark_prices", lambda *_a, **_k: pd.DataFrame())
+
+    out = tmp_path / "perf_invalid_cf"
+    args = argparse.Namespace(
+        snapshots=str(snapshots),
+        trades=str(tmp_path / "trades.csv"),
+        cash_flows=str(cash_flows),
+        benchmarks=["SPY"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+        publish_latest=False,
+        history=False,
+        report_run_id=None,
+    )
+    build_report(args)
+    summary = json.loads((out / "performance_summary.json").read_text(encoding="utf-8"))
+    assert summary["cash_flow_adjusted_return_pct"] == pytest.approx(5.0)
+    assert "Skipped 2 invalid cash-flow row(s)." in summary["cash_flow_warnings"]

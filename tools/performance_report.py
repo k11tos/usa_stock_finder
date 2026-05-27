@@ -15,9 +15,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position,ungrouped-imports
 
 DEFAULT_SNAPSHOTS = "data/live/account_snapshots.csv"
+DEFAULT_CASH_FLOWS = "data/live/cash_flows.csv"
 DEFAULT_TRADES = "data/live/trade_signals.csv"
 DEFAULT_BENCHMARKS = ["SPY", "IWM"]
 DEFAULT_OUTPUT = "outputs/performance"
+REQUIRED_CASH_FLOW_COLUMNS = {"date", "amount", "currency", "type", "memo"}
+VALID_CASH_FLOW_TYPES = {"deposit", "withdrawal", "dividend", "fee", "tax", "adjustment"}
 
 
 
@@ -66,6 +69,7 @@ def _write_html_report(output_dir: Path, summary: dict[str, object], benchmarks:
   <ul>
     <li>Report period: {period}</li>
     <li>Strategy cumulative return: {_fmt_pct(summary.get('cumulative_return_pct'))}</li>
+    <li>Strategy cash-flow-adjusted return: {_fmt_pct(summary.get('cash_flow_adjusted_return_pct'))}</li>
     <li>Max drawdown: {_fmt_pct(summary.get('max_drawdown_pct'))}</li>
     <li>Annualized volatility: {_fmt_pct(summary.get('annualized_volatility_pct'))}</li>
     {''.join(benchmark_lines)}
@@ -114,6 +118,84 @@ def _publish_report_bundles(output_dir: Path, args: argparse.Namespace) -> None:
 
 def _clean_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
+
+
+def _load_cash_flows(cash_flows_path: str | Path) -> tuple[pd.DataFrame, list[str]]:
+    path = Path(cash_flows_path)
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame(columns=["date", "external_flow"]), []
+
+    raw = pd.read_csv(path)
+    missing = REQUIRED_CASH_FLOW_COLUMNS - set(raw.columns)
+    if missing:
+        return pd.DataFrame(columns=["date", "external_flow"]), [
+            f"Missing required cash-flow columns: {', '.join(sorted(missing))}"
+        ]
+
+    df = raw.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+    df["type"] = df["type"].astype(str).str.strip().str.lower()
+
+    valid_type_mask = df["type"].isin(VALID_CASH_FLOW_TYPES)
+    valid_row_mask = df["date"].notna() & df["amount"].notna() & valid_type_mask
+    invalid_rows = int((~valid_row_mask).sum())
+    warnings = []
+    if invalid_rows:
+        warnings.append(f"Skipped {invalid_rows} invalid cash-flow row(s).")
+
+    cleaned = df.loc[valid_row_mask, ["date", "amount", "type"]].copy()
+    if cleaned.empty:
+        return pd.DataFrame(columns=["date", "external_flow"]), warnings
+
+    sign = np.where(cleaned["type"] == "withdrawal", -1.0, 1.0)
+    cleaned["external_flow"] = cleaned["amount"] * sign
+    daily = cleaned.groupby("date", as_index=False)["external_flow"].sum()
+    return daily, warnings
+
+
+def _calculate_modified_dietz_return_pct(
+    strategy_df: pd.DataFrame,
+    daily_cash_flows: pd.DataFrame,
+) -> float | None:
+    if strategy_df.empty or len(strategy_df) < 2:
+        return None
+
+    start = float(strategy_df["strategy_equity"].iloc[0])
+    end = float(strategy_df["strategy_equity"].iloc[-1])
+    if start <= 0:
+        return None
+
+    flow_series = (
+        daily_cash_flows.set_index("date")["external_flow"]
+        if not daily_cash_flows.empty
+        else pd.Series(dtype=float)
+    )
+    if flow_series.empty:
+        return float(((end - start) / start) * 100.0)
+    flow_series.index = pd.to_datetime(flow_series.index, errors="coerce").normalize()
+    flow_series = flow_series[flow_series.index.notna()]
+
+    start_date = pd.Timestamp(strategy_df["run_date"].iloc[0]).normalize()
+    end_date = pd.Timestamp(strategy_df["run_date"].iloc[-1]).normalize()
+    period_flows = flow_series[(flow_series.index >= start_date) & (flow_series.index <= end_date)]
+    if period_flows.empty:
+        return float(((end - start) / start) * 100.0)
+    total_days = max((end_date - start_date).days, 1)
+
+    weighted_flows = 0.0
+    net_flows = 0.0
+    for flow_date, flow_amount in period_flows.items():
+        day_flow = float(flow_amount)
+        days_from_start = (pd.Timestamp(flow_date).normalize() - start_date).days
+        weight = (total_days - days_from_start) / total_days
+        weighted_flows += day_flow * weight
+        net_flows += day_flow
+
+    denominator = start + weighted_flows
+    if denominator == 0:
+        return None
+    return float(((end - start - net_flows) / denominator) * 100.0)
 
 
 def _select_latest_run_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -335,6 +417,7 @@ def build_report(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     strategy = load_strategy_equity_curve(args.snapshots, args.start_date, args.end_date)
+    cash_flows, cash_flow_warnings = _load_cash_flows(getattr(args, "cash_flows", DEFAULT_CASH_FLOWS))
     equity_curve_path = output_dir / "equity_curve.csv"
 
     if strategy.empty:
@@ -348,6 +431,8 @@ def build_report(args: argparse.Namespace) -> None:
             "cumulative_return_pct": None,
             "max_drawdown_pct": None,
             "annualized_volatility_pct": None,
+            "cash_flow_adjusted_return_pct": None,
+            "cash_flow_warnings": cash_flow_warnings,
         }
         (output_dir / "performance_summary.json").write_text(
             json.dumps(summary, indent=2),
@@ -392,6 +477,8 @@ def build_report(args: argparse.Namespace) -> None:
         "annualized_volatility_pct": annualized_volatility_pct(
             df["strategy_equity"].pct_change()
         ),
+        "cash_flow_adjusted_return_pct": _calculate_modified_dietz_return_pct(strategy, cash_flows),
+        "cash_flow_warnings": cash_flow_warnings,
     }
 
     benchmark_rows = []
@@ -437,6 +524,11 @@ def build_report(args: argparse.Namespace) -> None:
             f"- Strategy cumulative return: {summary['cumulative_return_pct']:.2f}%"
             if summary["cumulative_return_pct"] is not None
             else "- Strategy cumulative return: N/A"
+        ),
+        (
+            f"- Strategy cash-flow-adjusted return: {summary['cash_flow_adjusted_return_pct']:.2f}%"
+            if summary["cash_flow_adjusted_return_pct"] is not None
+            else "- Strategy cash-flow-adjusted return: N/A (no valid cash-flow data)"
         ),
         (
             f"- Strategy CAGR: {summary['cagr_pct']:.2f}%"
@@ -504,6 +596,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--snapshots", default=DEFAULT_SNAPSHOTS)
     parser.add_argument("--trades", default=DEFAULT_TRADES)
+    parser.add_argument("--cash-flows", default=DEFAULT_CASH_FLOWS)
     parser.add_argument("--benchmarks", nargs="+", default=DEFAULT_BENCHMARKS)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--start-date")

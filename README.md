@@ -110,6 +110,7 @@ python main.py
 
 - `data/live/trade_signals.csv`: 매수/매도 신호 로그 (run_id, side, symbol, quantity, price, reason 등)
 - `data/live/account_snapshots.csv`: 일별 계좌/보유 스냅샷 (현금, 총자산, 종목별 평가손익 등)
+- `data/live/cash_flows.csv` (선택): 입출금/배당/수수료 로그 (`date,amount,currency,type,memo`)
 
 특징:
 - append-only 저장 (기존 기록 보존)
@@ -136,9 +137,21 @@ python main.py
 ```bash
 python tools/performance_report.py \
   --output outputs/performance \
+  --cash-flows data/live/cash_flows.csv \
   --publish-latest \
   --history
 ```
+
+`--cash-flows` 파일이 존재하면 Modified Dietz 방식의 현금흐름 보정 수익률을 함께 계산합니다.  
+파일이 없거나 비어 있으면 기존과 동일하게 단순 equity 기반 수익률만으로 동작하며 호환성을 유지합니다.
+
+`type` 허용값:
+- `deposit`
+- `withdrawal`
+- `dividend`
+- `fee`
+- `tax`
+- `adjustment`
 
 리포트 번들에는 아래 파일이 포함됩니다:
 - `index.html`
