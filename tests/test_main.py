@@ -6,9 +6,10 @@ It tests the main functions for stock analysis and selection.
 """
 
 import unittest
+import json
 from contextlib import ExitStack
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, mock_open
 
 import pandas as pd
 import main as main_module
@@ -1627,6 +1628,49 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
 
         self.assertFalse(attempted)
         mock_build_report.assert_not_called()
+
+    def test_performance_telegram_sends_without_url(self):
+        """Performance Telegram should still send when URL is not configured."""
+        summary_payload = {
+            "start_date": "2026-05-26",
+            "end_date": "2026-08-26",
+            "cumulative_return_pct": 7.2,
+            "excess_return_vs_SPY": 3.1,
+            "excess_return_vs_IWM": 3.9,
+            "max_drawdown_pct": -6.8,
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "PERFORMANCE_REPORT_OUTPUT_DIR": "outputs/performance",
+                "PERFORMANCE_REPORT_TELEGRAM_ENABLED": "true",
+            },
+            clear=False,
+        ), patch("main.open", mock_open(read_data=json.dumps(summary_payload))), patch(
+            "main.EnvironmentConfig.get", side_effect=["token", "chat"]
+        ), patch("main.send_telegram_message") as mock_send:
+            main_module._send_performance_report_telegram_if_enabled(True)  # pylint: disable=protected-access
+
+        self.assertTrue(mock_send.called)
+        sent_message = mock_send.call_args.kwargs["message"]
+        self.assertNotIn("상세:", sent_message)
+
+    def test_performance_telegram_skips_when_summary_missing(self):
+        """Missing summary JSON should be logged and skipped without failure."""
+        with patch.dict(
+            "os.environ",
+            {
+                "PERFORMANCE_REPORT_OUTPUT_DIR": "outputs/performance",
+                "PERFORMANCE_REPORT_TELEGRAM_ENABLED": "true",
+            },
+            clear=False,
+        ), patch("main.open", side_effect=FileNotFoundError("missing")), patch(
+            "main.logger.warning"
+        ) as mock_warning, patch("main.send_telegram_message") as mock_send:
+            main_module._send_performance_report_telegram_if_enabled(True)  # pylint: disable=protected-access
+
+        mock_send.assert_not_called()
+        self.assertTrue(mock_warning.called)
 
 
 if __name__ == "__main__":

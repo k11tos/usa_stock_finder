@@ -310,6 +310,8 @@ Environment variables:
 - `PERFORMANCE_REPORT_BENCHMARKS` (default: `SPY,IWM`)
 - `PERFORMANCE_REPORT_PUBLISH_LATEST` (default: `true`)
 - `PERFORMANCE_REPORT_HISTORY` (default: `false`)
+- `PERFORMANCE_REPORT_TELEGRAM_ENABLED` (default: `false`)
+- `PERFORMANCE_REPORT_URL` (optional, example: `http://breadpig:8091/latest/`)
 
 `.env` example:
 
@@ -319,7 +321,12 @@ PERFORMANCE_REPORT_OUTPUT_DIR=outputs/performance
 PERFORMANCE_REPORT_BENCHMARKS=SPY,IWM
 PERFORMANCE_REPORT_PUBLISH_LATEST=true
 PERFORMANCE_REPORT_HISTORY=true
+PERFORMANCE_REPORT_TELEGRAM_ENABLED=true
+PERFORMANCE_REPORT_URL=http://breadpig:8091/latest/
 ```
+
+`PERFORMANCE_REPORT_URL`는 텔레그램 요약 알림에서 최신 HTML 리포트로 이동하는 링크입니다.  
+공개 인터넷 URL 대신 **Tailscale / Cloudflare Access 등으로 보호된 private 페이지**를 사용하세요.
 
 ## ⚠️ 주의사항
 

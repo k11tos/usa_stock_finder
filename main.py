@@ -31,6 +31,7 @@ import asyncio
 import math
 import logging
 import os.path
+import json
 import re
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -47,7 +48,7 @@ from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, sele
 from stock_analysis import UsaStockFinder
 from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from stop_loss_cooldown import is_in_cooldown
-from telegram_utils import send_telegram_message
+from telegram_utils import build_performance_summary_message, send_telegram_message
 from live_performance_logger import (
     append_account_snapshots,
     append_trade_signals,
@@ -1900,7 +1901,8 @@ def main() -> None:
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items, sell_decisions)
     save_json(final_items, "data/data.json")
-    run_performance_report_safely()
+    report_attempted = run_performance_report_safely()
+    _send_performance_report_telegram_if_enabled(report_attempted)
     _log_execution_summary(
         prev_items=us_stock_holdings,
         buy_items=buy_items,
@@ -1911,6 +1913,39 @@ def main() -> None:
         final_items=final_items,
         entry_symbol_set=entry_symbol_set,
     )
+
+
+def _send_performance_report_telegram_if_enabled(report_attempted: bool) -> None:
+    if os.getenv("PERFORMANCE_REPORT_TELEGRAM_ENABLED", "false").strip().lower() != "true":
+        return
+    if not report_attempted:
+        logger.info("Performance Telegram notification skipped because report generation was not attempted.")
+        return
+
+    summary_path = os.path.join(
+        os.getenv("PERFORMANCE_REPORT_OUTPUT_DIR", "outputs/performance"),
+        "performance_summary.json",
+    )
+    try:
+        with open(summary_path, encoding="utf-8") as fp:
+            summary = json.load(fp)
+        if not isinstance(summary, dict):
+            raise ValueError("summary payload is not an object")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning("Performance Telegram notification skipped: invalid summary file (%s).", str(exc))
+        return
+
+    bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
+    chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        logger.warning("Performance Telegram notification skipped: missing Telegram credentials.")
+        return
+
+    message = build_performance_summary_message(summary, os.getenv("PERFORMANCE_REPORT_URL"))
+    try:
+        asyncio.run(send_telegram_message(bot_token=bot_token, chat_id=chat_id, message=message))
+    except Exception as exc:  # pragma: no cover - defensive runtime protection
+        logger.warning("Performance Telegram notification failed: %s", str(exc))
 
 
 if __name__ == "__main__":
