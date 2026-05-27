@@ -57,6 +57,8 @@ from live_performance_logger import (
     generate_run_metadata,
 )
 
+from performance_report_runner import run_performance_report_safely
+
 logger = logging.getLogger(__name__)
 
 CORE_QUANT_SOURCE_POOL = "core_quant"
@@ -1898,6 +1900,7 @@ def main() -> None:
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items, sell_decisions)
     save_json(final_items, "data/data.json")
+    run_performance_report_safely()
     _log_execution_summary(
         prev_items=us_stock_holdings,
         buy_items=buy_items,

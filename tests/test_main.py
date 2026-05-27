@@ -1271,6 +1271,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
 
+
     def test_main_event_quarantine_uses_previous_tracking_and_holdings_as_protected_set(self):
         """main should protect both previous tracked symbols and current holdings from event quarantine."""
         with ExitStack() as stack:
@@ -1576,6 +1577,56 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         mock_validate.assert_not_called()
         mock_fetch_holdings.assert_not_called()
         mock_save_json.assert_not_called()
+
+    def test_performance_report_runner_invokes_builder_when_enabled(self):
+        """Report runner should call performance report builder when enabled."""
+        from performance_report_runner import run_performance_report_safely
+
+        with patch.dict(
+            "os.environ",
+            {
+                "PERFORMANCE_REPORT_ENABLED": "true",
+                "PERFORMANCE_REPORT_OUTPUT_DIR": "outputs/perf",
+                "PERFORMANCE_REPORT_BENCHMARKS": "SPY,IWM",
+                "PERFORMANCE_REPORT_PUBLISH_LATEST": "true",
+                "PERFORMANCE_REPORT_HISTORY": "true",
+            },
+            clear=False,
+        ), patch("performance_report_runner.build_report") as mock_build_report:
+            attempted = run_performance_report_safely()
+
+        self.assertTrue(attempted)
+        mock_build_report.assert_called_once()
+
+    def test_performance_report_runner_swallows_builder_exceptions(self):
+        """Runner should log warning and continue when builder raises."""
+        from performance_report_runner import run_performance_report_safely
+
+        with patch.dict(
+            "os.environ",
+            {"PERFORMANCE_REPORT_ENABLED": "true"},
+            clear=False,
+        ), patch("performance_report_runner.build_report", side_effect=RuntimeError("boom")), patch(
+            "performance_report_runner.logger.warning"
+        ) as mock_warning:
+            attempted = run_performance_report_safely()
+
+        self.assertTrue(attempted)
+        mock_warning.assert_called_once()
+
+    def test_performance_report_runner_skips_when_disabled(self):
+        """Runner should skip build when env flag is false."""
+        from performance_report_runner import run_performance_report_safely
+
+        with patch.dict(
+            "os.environ",
+            {"PERFORMANCE_REPORT_ENABLED": "false"},
+            clear=False,
+        ), patch("performance_report_runner.build_report") as mock_build_report:
+            attempted = run_performance_report_safely()
+
+        self.assertFalse(attempted)
+        mock_build_report.assert_not_called()
 
 
 if __name__ == "__main__":
