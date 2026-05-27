@@ -50,6 +50,10 @@ def _write_html_report(output_dir: Path, summary: dict[str, object], benchmarks:
             f"<li>Excess return vs {symbol}: {_fmt_pct(summary.get(f'excess_return_vs_{symbol}'))}</li>"
         )
 
+    period = (
+        f"{summary.get('start_date', 'N/A')} to {summary.get('end_date', 'N/A')}"
+        f" ({summary.get('num_days', 0)} snapshot days)"
+    )
     html = f"""<!doctype html>
 <html lang=\"en\">
 <head>
@@ -60,7 +64,7 @@ def _write_html_report(output_dir: Path, summary: dict[str, object], benchmarks:
 <body>
   <h1>usa_stock_finder Performance Report</h1>
   <ul>
-    <li>Report period: {summary.get('start_date', 'N/A')} to {summary.get('end_date', 'N/A')} ({summary.get('num_days', 0)} snapshot days)</li>
+    <li>Report period: {period}</li>
     <li>Strategy cumulative return: {_fmt_pct(summary.get('cumulative_return_pct'))}</li>
     <li>Max drawdown: {_fmt_pct(summary.get('max_drawdown_pct'))}</li>
     <li>Annualized volatility: {_fmt_pct(summary.get('annualized_volatility_pct'))}</li>
@@ -97,10 +101,14 @@ def _copy_report_bundle(source_dir: Path, destination_dir: Path) -> None:
 
 
 def _publish_report_bundles(output_dir: Path, args: argparse.Namespace) -> None:
-    run_id = args.report_run_id or _generate_kst_run_id()
-    if args.publish_latest:
+    publish_latest = getattr(args, "publish_latest", False)
+    history = getattr(args, "history", False)
+
+    if publish_latest:
         _copy_report_bundle(output_dir, output_dir / "latest")
-    if args.history:
+    if history:
+        report_run_id = getattr(args, "report_run_id", None)
+        run_id = report_run_id or _generate_kst_run_id()
         _copy_report_bundle(output_dir, output_dir / "history" / run_id)
 
 

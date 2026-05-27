@@ -254,14 +254,29 @@ def test_build_report_publish_latest_and_history(tmp_path, monkeypatch) -> None:
     snapshots = tmp_path / "account_snapshots.csv"
     pd.DataFrame(
         [
-            {"run_id": "20260101_160000", "run_date": "2026-01-01", "cash": 100, "market_value": 100, "total_equity": 200},
-            {"run_id": "20260102_160000", "run_date": "2026-01-02", "cash": 100, "market_value": 120, "total_equity": 220},
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 100,
+                "total_equity": 200,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 120,
+                "total_equity": 220,
+            },
         ]
     ).to_csv(snapshots, index=False)
 
     monkeypatch.setattr(
         "tools.performance_report.fetch_benchmark_prices",
-        lambda *_args, **_kwargs: pd.DataFrame({"SPY": [100, 101], "IWM": [100, 100.5]}, index=pd.to_datetime(["2026-01-01", "2026-01-02"])),
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {"SPY": [100, 101], "IWM": [100, 100.5]},
+            index=pd.to_datetime(["2026-01-01", "2026-01-02"]),
+        ),
     )
 
     out = tmp_path / "perf_publish"
@@ -282,6 +297,47 @@ def test_build_report_publish_latest_and_history(tmp_path, monkeypatch) -> None:
     assert 'charts/cumulative_return.png' in (out / "index.html").read_text(encoding="utf-8")
     assert (out / "latest" / "index.html").exists()
     assert (out / "history" / "20260527_120000" / "index.html").exists()
+
+
+def test_build_report_old_namespace_shape_still_works(tmp_path, monkeypatch) -> None:
+    snapshots = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 100,
+                "total_equity": 200,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 120,
+                "total_equity": 220,
+            },
+        ]
+    ).to_csv(snapshots, index=False)
+    monkeypatch.setattr(
+        "tools.performance_report.fetch_benchmark_prices",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {"SPY": [100, 101], "IWM": [100, 100.5]},
+            index=pd.to_datetime(["2026-01-01", "2026-01-02"]),
+        ),
+    )
+
+    out = tmp_path / "perf_old_shape"
+    args = argparse.Namespace(
+        snapshots=str(snapshots),
+        trades=str(tmp_path / "trades.csv"),
+        benchmarks=["SPY", "IWM"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+    )
+    build_report(args)
+    assert (out / "index.html").exists()
 
 
 def test_empty_snapshot_generates_safe_html(tmp_path) -> None:
