@@ -116,6 +116,40 @@ python main.py
 - 파일이 없으면 헤더 자동 생성
 - 실행 단위 `run_id`는 KST 기준 `YYYYMMDD_HHMMSS` 형식으로 생성
 
+## 📊 Performance Report (Browser HTML)
+
+`tools/performance_report.py`는 기본 산출물(CSV/JSON/Markdown)과 함께 정적 `index.html` 리포트를 생성합니다.
+
+기본 출력(기존 호환):
+- `outputs/performance/equity_curve.csv`
+- `outputs/performance/benchmark_comparison.csv`
+- `outputs/performance/performance_summary.json`
+- `outputs/performance/performance_report.md`
+- `outputs/performance/index.html`
+
+배포 옵션:
+- `--publish-latest`: `outputs/performance/latest/`에 리포트 번들 복사
+- `--history`: `outputs/performance/history/<report_run_id>/`에 리포트 번들 복사
+- `--report-run-id`: 미지정 시 KST 기준 `YYYYMMDD_HHMMSS` 자동 생성
+
+예시:
+```bash
+python tools/performance_report.py \
+  --output outputs/performance \
+  --publish-latest \
+  --history
+```
+
+리포트 번들에는 아래 파일이 포함됩니다:
+- `index.html`
+- `performance_report.md`
+- `performance_summary.json`
+- `equity_curve.csv`
+- `benchmark_comparison.csv`
+- `charts/cumulative_return.png`
+- `charts/drawdown.png`
+- `charts/excess_return.png`
+
 ## Backtesting
 
 `run_backtest.py`로 CSV 기반 백테스트를 실행할 수 있습니다.
