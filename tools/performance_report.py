@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import matplotlib
@@ -16,6 +18,90 @@ DEFAULT_SNAPSHOTS = "data/live/account_snapshots.csv"
 DEFAULT_TRADES = "data/live/trade_signals.csv"
 DEFAULT_BENCHMARKS = ["SPY", "IWM"]
 DEFAULT_OUTPUT = "outputs/performance"
+
+
+
+def _fmt_pct(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:.2f}%"
+
+
+def _generate_kst_run_id() -> str:
+    kst = timezone(timedelta(hours=9))
+    return datetime.now(kst).strftime("%Y%m%d_%H%M%S")
+
+
+def _write_html_report(output_dir: Path, summary: dict[str, object], benchmarks: list[str]) -> None:
+    chart_names = ["cumulative_return.png", "drawdown.png", "excess_return.png"]
+    sections = []
+    for chart in chart_names:
+        chart_path = output_dir / "charts" / chart
+        rel = f"charts/{chart}"
+        if chart_path.exists() and chart_path.stat().st_size > 0:
+            sections.append(f'<figure><img src="{rel}" alt="{chart}" style="max-width:100%;height:auto;"/></figure>')
+        else:
+            sections.append(f'<p><strong>Missing chart:</strong> {rel}</p>')
+
+    benchmark_lines = []
+    for symbol in benchmarks:
+        benchmark_lines.append(
+            f"<li>{symbol} cumulative return: {_fmt_pct(summary.get(f'cumulative_return_{symbol}_pct'))}</li>"
+        )
+        benchmark_lines.append(
+            f"<li>Excess return vs {symbol}: {_fmt_pct(summary.get(f'excess_return_vs_{symbol}'))}</li>"
+        )
+
+    html = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>usa_stock_finder Performance Report</title>
+</head>
+<body>
+  <h1>usa_stock_finder Performance Report</h1>
+  <ul>
+    <li>Report period: {summary.get('start_date', 'N/A')} to {summary.get('end_date', 'N/A')} ({summary.get('num_days', 0)} snapshot days)</li>
+    <li>Strategy cumulative return: {_fmt_pct(summary.get('cumulative_return_pct'))}</li>
+    <li>Max drawdown: {_fmt_pct(summary.get('max_drawdown_pct'))}</li>
+    <li>Annualized volatility: {_fmt_pct(summary.get('annualized_volatility_pct'))}</li>
+    {''.join(benchmark_lines)}
+  </ul>
+  <h2>Charts</h2>
+  {''.join(sections)}
+  <h2>Caveat</h2>
+  <p>If external deposits/withdrawals occurred, simple equity-based returns may be distorted.</p>
+</body>
+</html>"""
+    (output_dir / "index.html").write_text(html, encoding="utf-8")
+
+
+def _copy_report_bundle(source_dir: Path, destination_dir: Path) -> None:
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    files = [
+        "index.html",
+        "performance_report.md",
+        "performance_summary.json",
+        "equity_curve.csv",
+        "benchmark_comparison.csv",
+    ]
+    for name in files:
+        src = source_dir / name
+        if src.exists():
+            shutil.copy2(src, destination_dir / name)
+    for chart in ["cumulative_return.png", "drawdown.png", "excess_return.png"]:
+        src = source_dir / "charts" / chart
+        dst = destination_dir / "charts" / chart
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.exists():
+            shutil.copy2(src, dst)
+
+
+def _publish_report_bundles(output_dir: Path, args: argparse.Namespace) -> None:
+    run_id = args.report_run_id or _generate_kst_run_id()
+    if args.publish_latest:
+        _copy_report_bundle(output_dir, output_dir / "latest")
+    if args.history:
+        _copy_report_bundle(output_dir, output_dir / "history" / run_id)
 
 
 def _clean_numeric(series: pd.Series) -> pd.Series:
@@ -246,8 +332,14 @@ def build_report(args: argparse.Namespace) -> None:
     if strategy.empty:
         strategy.to_csv(equity_curve_path, index=False)
         summary = {
+            "start_date": None,
+            "end_date": None,
+            "num_days": 0,
             "error": "No valid account snapshots found for the selected period.",
             "benchmarks": args.benchmarks,
+            "cumulative_return_pct": None,
+            "max_drawdown_pct": None,
+            "annualized_volatility_pct": None,
         }
         (output_dir / "performance_summary.json").write_text(
             json.dumps(summary, indent=2),
@@ -258,6 +350,8 @@ def build_report(args: argparse.Namespace) -> None:
             "# Performance Report\n\nNo valid snapshots found.\n",
             encoding="utf-8",
         )
+        _write_html_report(output_dir, summary, args.benchmarks)
+        _publish_report_bundles(output_dir, args)
         return
 
     start, end = strategy["run_date"].min(), strategy["run_date"].max()
@@ -297,6 +391,7 @@ def build_report(args: argparse.Namespace) -> None:
         if symbol not in df.columns:
             continue
         ret = cumulative_return_pct(df[symbol])
+        summary[f"cumulative_return_{symbol}_pct"] = ret
         benchmark_rows.append({"asset": symbol, "cumulative_return_pct": ret})
         strat_ret = summary["cumulative_return_pct"]
         summary[f"excess_return_vs_{symbol}"] = (
@@ -391,6 +486,8 @@ def build_report(args: argparse.Namespace) -> None:
         ]
     )
     (output_dir / "performance_report.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_html_report(output_dir, summary, args.benchmarks)
+    _publish_report_bundles(output_dir, args)
 
 
 def parse_args() -> argparse.Namespace:
@@ -403,6 +500,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
+    parser.add_argument("--publish-latest", action="store_true", default=False)
+    parser.add_argument("--history", action="store_true", default=False)
+    parser.add_argument("--report-run-id")
     return parser.parse_args()
 
 

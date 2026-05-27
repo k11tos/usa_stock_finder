@@ -51,6 +51,9 @@ def test_missing_empty_logs(tmp_path) -> None:
         output=str(out),
         start_date=None,
         end_date=None,
+        publish_latest=False,
+        history=False,
+        report_run_id=None,
     )
     build_report(args)
     summary = json.loads((out / "performance_summary.json").read_text(encoding="utf-8"))
@@ -176,6 +179,9 @@ def test_build_report_with_mocked_benchmarks(tmp_path, monkeypatch) -> None:
         output=str(out),
         start_date=None,
         end_date=None,
+        publish_latest=False,
+        history=False,
+        report_run_id=None,
     )
     build_report(args)
 
@@ -232,6 +238,9 @@ def test_build_report_with_no_benchmark_data(tmp_path, monkeypatch) -> None:
         output=str(out),
         start_date=None,
         end_date=None,
+        publish_latest=False,
+        history=False,
+        report_run_id=None,
     )
     build_report(args)
 
@@ -239,3 +248,60 @@ def test_build_report_with_no_benchmark_data(tmp_path, monkeypatch) -> None:
         chart_path = out / "charts" / chart_name
         assert chart_path.exists()
         assert chart_path.stat().st_size > 0
+
+
+def test_build_report_publish_latest_and_history(tmp_path, monkeypatch) -> None:
+    snapshots = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {"run_id": "20260101_160000", "run_date": "2026-01-01", "cash": 100, "market_value": 100, "total_equity": 200},
+            {"run_id": "20260102_160000", "run_date": "2026-01-02", "cash": 100, "market_value": 120, "total_equity": 220},
+        ]
+    ).to_csv(snapshots, index=False)
+
+    monkeypatch.setattr(
+        "tools.performance_report.fetch_benchmark_prices",
+        lambda *_args, **_kwargs: pd.DataFrame({"SPY": [100, 101], "IWM": [100, 100.5]}, index=pd.to_datetime(["2026-01-01", "2026-01-02"])),
+    )
+
+    out = tmp_path / "perf_publish"
+    args = argparse.Namespace(
+        snapshots=str(snapshots),
+        trades=str(tmp_path / "trades.csv"),
+        benchmarks=["SPY", "IWM"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+        publish_latest=True,
+        history=True,
+        report_run_id="20260527_120000",
+    )
+    build_report(args)
+
+    assert (out / "index.html").exists()
+    assert 'charts/cumulative_return.png' in (out / "index.html").read_text(encoding="utf-8")
+    assert (out / "latest" / "index.html").exists()
+    assert (out / "history" / "20260527_120000" / "index.html").exists()
+
+
+def test_empty_snapshot_generates_safe_html(tmp_path) -> None:
+    out = tmp_path / "empty_html"
+    args = argparse.Namespace(
+        snapshots=str(tmp_path / "missing.csv"),
+        trades=str(tmp_path / "trades.csv"),
+        benchmarks=["SPY", "IWM"],
+        output=str(out),
+        start_date=None,
+        end_date=None,
+        publish_latest=True,
+        history=True,
+        report_run_id="20260527_130000",
+    )
+
+    build_report(args)
+
+    html = (out / "index.html").read_text(encoding="utf-8")
+    assert "No valid account snapshots" not in html
+    assert "Missing chart:" in html
+    assert (out / "latest" / "index.html").exists()
+    assert (out / "history" / "20260527_130000" / "index.html").exists()
