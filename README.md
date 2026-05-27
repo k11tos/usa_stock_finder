@@ -405,3 +405,24 @@ python tools/performance_report.py \
 주의:
 - 외부 입출금이 있었던 경우 단순 equity 기반 수익률은 왜곡될 수 있습니다.
 - 향후 cash-flow 로그를 추가하면 정확도를 개선할 수 있습니다.
+
+## 🧾 Dry-run Special Review (Explanation-only)
+
+가격 기반 필터(`event_quarantine`, `pinned_price`)로 이미 제외된 소수 심볼에 대해,
+사후 설명/수동 확인용 리뷰 패킷을 생성하는 도우미입니다.
+
+```bash
+python tools/dry_run_special_review.py --symbol-reason GAPX:event_quarantine EWCZ:pinned_price
+```
+
+JSON 출력:
+
+```bash
+python tools/dry_run_special_review.py --symbol-reason GAPX:event_quarantine --json
+```
+
+원칙:
+- 이 도구는 **dry-run/report 전용**이며 매수/매도 결정에 연결되지 않습니다.
+- 트레이딩 의사결정은 기존처럼 **결정론적 가격 기반 로직**만 사용합니다.
+- 뉴스 API 키(`NEWS_API_KEY`)가 없어도 동작하며, 이 경우 가격 기반 리뷰만 출력합니다.
+- 유료 API/시크릿은 이 도구에 필수로 요구되지 않습니다.
