@@ -297,6 +297,30 @@ pytest --cov=. --cov-report=html
 - **Mark Minervini**: 트레이딩 원칙 및 전략
 - **Buff Dormeier**: AVSL 방법론
 
+
+### Optional auto refresh after daily run
+
+`main.py` can optionally refresh the live performance report **after** it appends trade signals/account snapshots and saves `data/data.json`.
+This step is failure-tolerant: report generation errors are logged as warnings and will not stop the daily signal run.
+
+Environment variables:
+
+- `PERFORMANCE_REPORT_ENABLED` (default: `false`)
+- `PERFORMANCE_REPORT_OUTPUT_DIR` (default: `outputs/performance`)
+- `PERFORMANCE_REPORT_BENCHMARKS` (default: `SPY,IWM`)
+- `PERFORMANCE_REPORT_PUBLISH_LATEST` (default: `true`)
+- `PERFORMANCE_REPORT_HISTORY` (default: `false`)
+
+`.env` example:
+
+```env
+PERFORMANCE_REPORT_ENABLED=true
+PERFORMANCE_REPORT_OUTPUT_DIR=outputs/performance
+PERFORMANCE_REPORT_BENCHMARKS=SPY,IWM
+PERFORMANCE_REPORT_PUBLISH_LATEST=true
+PERFORMANCE_REPORT_HISTORY=true
+```
+
 ## ⚠️ 주의사항
 
 - 실제 거래 전에 충분한 백테스팅과 검증을 수행하세요
