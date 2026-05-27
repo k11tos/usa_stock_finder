@@ -29,7 +29,7 @@ def run_performance_report_safely() -> bool:
     """Run performance report generation with failure isolation.
 
     Returns:
-        bool: True when report generation was attempted, False when skipped.
+        bool: True when report generation succeeds, False when skipped or failed.
     """
     enabled = _env_bool("PERFORMANCE_REPORT_ENABLED", False)
     if not enabled:
@@ -64,5 +64,6 @@ def run_performance_report_safely() -> bool:
         )
     except Exception as exc:  # pragma: no cover - defensive safety wrapper
         logger.warning("Performance report generation failed (continuing main flow): %s", str(exc))
+        return False
 
     return True

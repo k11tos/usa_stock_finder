@@ -9,7 +9,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from telegram_utils import send_telegram_message
+from telegram_utils import build_performance_summary_message, send_telegram_message
 
 
 class TestTelegramUtils(unittest.TestCase):
@@ -167,6 +167,54 @@ class TestTelegramUtils(unittest.TestCase):
         import inspect
 
         self.assertTrue(inspect.iscoroutinefunction(send_telegram_message))
+
+    def test_build_performance_summary_message_full_summary(self):
+        summary = {
+            "start_date": "2026-05-26",
+            "end_date": "2026-08-26",
+            "cumulative_return_pct": 7.2,
+            "cumulative_return_SPY_pct": 4.1,
+            "cumulative_return_IWM_pct": 3.3,
+            "excess_return_vs_SPY": 3.1,
+            "excess_return_vs_IWM": 3.9,
+            "max_drawdown_pct": -6.8,
+        }
+        message = build_performance_summary_message(summary, "http://breadpig:8091/latest/")
+        self.assertIn("기간: 2026-05-26 ~ 2026-08-26", message)
+        self.assertIn("전략: +7.20%", message)
+        self.assertIn("SPY: +4.10%", message)
+        self.assertIn("IWM: +3.30%", message)
+        self.assertIn("vs SPY: +3.10p", message)
+        self.assertIn("vs IWM: +3.90p", message)
+        self.assertIn("전략: -6.80%", message)
+        self.assertIn("http://breadpig:8091/latest/", message)
+
+    def test_build_performance_summary_message_missing_benchmarks(self):
+        summary = {
+            "start_date": "2026-05-26",
+            "end_date": "2026-08-26",
+            "cumulative_return_pct": 7.2,
+            "excess_return_vs_SPY": None,
+            "excess_return_vs_IWM": None,
+            "max_drawdown_pct": -6.8,
+        }
+        message = build_performance_summary_message(summary, None)
+        self.assertNotIn("\nSPY:", message)
+        self.assertNotIn("\nIWM:", message)
+        self.assertNotIn("초과수익:", message)
+
+    def test_build_performance_summary_message_non_spy_iwm_benchmark(self):
+        summary = {
+            "start_date": "2026-05-26",
+            "end_date": "2026-08-26",
+            "cumulative_return_pct": 7.2,
+            "cumulative_return_QQQ_pct": 5.0,
+            "excess_return_vs_QQQ": 2.2,
+            "max_drawdown_pct": -6.8,
+        }
+        message = build_performance_summary_message(summary, "http://example/latest/")
+        self.assertIn("QQQ: +5.00%", message)
+        self.assertIn("vs QQQ: +2.20p", message)
 
 
 if __name__ == "__main__":
