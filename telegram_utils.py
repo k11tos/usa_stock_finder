@@ -36,22 +36,27 @@ def build_performance_summary_message(summary: dict, report_url: str | None) -> 
         f"전략: {_format_pct(summary.get('cumulative_return_pct'))}",
     ]
 
-    if summary.get("cumulative_return_SPY_pct") is not None:
-        lines.append(f"SPY: {_format_pct(summary.get('cumulative_return_SPY_pct'))}")
-    if summary.get("cumulative_return_IWM_pct") is not None:
-        lines.append(f"IWM: {_format_pct(summary.get('cumulative_return_IWM_pct'))}")
+    benchmark_symbols = []
+    for key in summary.keys():
+        if key.startswith("cumulative_return_") and key.endswith("_pct") and key != "cumulative_return_pct":
+            benchmark_symbols.append(key[len("cumulative_return_") : -len("_pct")])
+    benchmark_symbols = sorted(set(benchmark_symbols))
 
-    lines.extend(
-        [
-            "",
-            "초과수익:",
-            f"vs SPY: {_format_pct(summary.get('excess_return_vs_SPY'), 'p')}",
-            f"vs IWM: {_format_pct(summary.get('excess_return_vs_IWM'), 'p')}",
-            "",
-            "MDD:",
-            f"전략: {_format_pct(summary.get('max_drawdown_pct'))}",
-        ]
-    )
+    for symbol in benchmark_symbols:
+        benchmark_value = summary.get(f"cumulative_return_{symbol}_pct")
+        if benchmark_value is not None:
+            lines.append(f"{symbol}: {_format_pct(benchmark_value)}")
+
+    excess_lines = []
+    for symbol in benchmark_symbols:
+        excess_key = f"excess_return_vs_{symbol}"
+        if excess_key in summary and summary.get(excess_key) is not None:
+            excess_lines.append(f"vs {symbol}: {_format_pct(summary.get(excess_key), 'p')}")
+
+    if excess_lines:
+        lines.extend(["", "초과수익:", *excess_lines])
+
+    lines.extend(["", "MDD:", f"전략: {_format_pct(summary.get('max_drawdown_pct'))}"])
 
     if report_url:
         lines.extend(["", "상세:", report_url])

@@ -1915,11 +1915,16 @@ def main() -> None:
     )
 
 
-def _send_performance_report_telegram_if_enabled(report_attempted: bool) -> None:
+def _send_performance_report_telegram_if_enabled(report_generated: bool) -> None:
     if os.getenv("PERFORMANCE_REPORT_TELEGRAM_ENABLED", "false").strip().lower() != "true":
         return
-    if not report_attempted:
-        logger.info("Performance Telegram notification skipped because report generation was not attempted.")
+    if not report_generated:
+        logger.info("Performance Telegram notification skipped because report generation did not succeed.")
+        return
+
+    report_url = os.getenv("PERFORMANCE_REPORT_URL", "").strip()
+    if not report_url:
+        logger.warning("Performance Telegram notification skipped: PERFORMANCE_REPORT_URL is not configured.")
         return
 
     summary_path = os.path.join(
@@ -1941,7 +1946,7 @@ def _send_performance_report_telegram_if_enabled(report_attempted: bool) -> None
         logger.warning("Performance Telegram notification skipped: missing Telegram credentials.")
         return
 
-    message = build_performance_summary_message(summary, os.getenv("PERFORMANCE_REPORT_URL"))
+    message = build_performance_summary_message(summary, report_url)
     try:
         asyncio.run(send_telegram_message(bot_token=bot_token, chat_id=chat_id, message=message))
     except Exception as exc:  # pragma: no cover - defensive runtime protection

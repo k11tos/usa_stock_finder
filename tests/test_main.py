@@ -1594,9 +1594,9 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             },
             clear=False,
         ), patch("performance_report_runner.build_report") as mock_build_report:
-            attempted = run_performance_report_safely()
+            succeeded = run_performance_report_safely()
 
-        self.assertTrue(attempted)
+        self.assertTrue(succeeded)
         mock_build_report.assert_called_once()
 
     def test_performance_report_runner_swallows_builder_exceptions(self):
@@ -1610,9 +1610,9 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         ), patch("performance_report_runner.build_report", side_effect=RuntimeError("boom")), patch(
             "performance_report_runner.logger.warning"
         ) as mock_warning:
-            attempted = run_performance_report_safely()
+            succeeded = run_performance_report_safely()
 
-        self.assertTrue(attempted)
+        self.assertFalse(succeeded)
         mock_warning.assert_called_once()
 
     def test_performance_report_runner_skips_when_disabled(self):
@@ -1624,13 +1624,13 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             {"PERFORMANCE_REPORT_ENABLED": "false"},
             clear=False,
         ), patch("performance_report_runner.build_report") as mock_build_report:
-            attempted = run_performance_report_safely()
+            succeeded = run_performance_report_safely()
 
-        self.assertFalse(attempted)
+        self.assertFalse(succeeded)
         mock_build_report.assert_not_called()
 
-    def test_performance_telegram_sends_without_url(self):
-        """Performance Telegram should still send when URL is not configured."""
+    def test_performance_telegram_skips_without_url(self):
+        """Performance Telegram should skip when URL is not configured."""
         summary_payload = {
             "start_date": "2026-05-26",
             "end_date": "2026-08-26",
@@ -1646,14 +1646,11 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
                 "PERFORMANCE_REPORT_TELEGRAM_ENABLED": "true",
             },
             clear=False,
-        ), patch("main.open", mock_open(read_data=json.dumps(summary_payload))), patch(
-            "main.EnvironmentConfig.get", side_effect=["token", "chat"]
-        ), patch("main.send_telegram_message") as mock_send:
+        ), patch("main.logger.warning") as mock_warning, patch("main.send_telegram_message") as mock_send:
             main_module._send_performance_report_telegram_if_enabled(True)  # pylint: disable=protected-access
 
-        self.assertTrue(mock_send.called)
-        sent_message = mock_send.call_args.kwargs["message"]
-        self.assertNotIn("상세:", sent_message)
+        mock_send.assert_not_called()
+        self.assertTrue(mock_warning.called)
 
     def test_performance_telegram_skips_when_summary_missing(self):
         """Missing summary JSON should be logged and skipped without failure."""
@@ -1671,6 +1668,29 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
 
         mock_send.assert_not_called()
         self.assertTrue(mock_warning.called)
+
+    def test_performance_telegram_skips_when_report_not_generated_even_if_summary_exists(self):
+        """Report generation failure should prevent stale-summary telegram notifications."""
+        summary_payload = {
+            "start_date": "2026-05-26",
+            "end_date": "2026-08-26",
+            "cumulative_return_pct": 7.2,
+            "max_drawdown_pct": -6.8,
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "PERFORMANCE_REPORT_OUTPUT_DIR": "outputs/performance",
+                "PERFORMANCE_REPORT_TELEGRAM_ENABLED": "true",
+                "PERFORMANCE_REPORT_URL": "http://breadpig:8091/latest/",
+            },
+            clear=False,
+        ), patch("main.open", mock_open(read_data=json.dumps(summary_payload))), patch(
+            "main.send_telegram_message"
+        ) as mock_send:
+            main_module._send_performance_report_telegram_if_enabled(False)  # pylint: disable=protected-access
+
+        mock_send.assert_not_called()
 
 
 if __name__ == "__main__":

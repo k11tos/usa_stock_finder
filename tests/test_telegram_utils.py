@@ -201,8 +201,20 @@ class TestTelegramUtils(unittest.TestCase):
         message = build_performance_summary_message(summary, None)
         self.assertNotIn("\nSPY:", message)
         self.assertNotIn("\nIWM:", message)
-        self.assertIn("vs SPY: N/A", message)
-        self.assertIn("vs IWM: N/A", message)
+        self.assertNotIn("초과수익:", message)
+
+    def test_build_performance_summary_message_non_spy_iwm_benchmark(self):
+        summary = {
+            "start_date": "2026-05-26",
+            "end_date": "2026-08-26",
+            "cumulative_return_pct": 7.2,
+            "cumulative_return_QQQ_pct": 5.0,
+            "excess_return_vs_QQQ": 2.2,
+            "max_drawdown_pct": -6.8,
+        }
+        message = build_performance_summary_message(summary, "http://example/latest/")
+        self.assertIn("QQQ: +5.00%", message)
+        self.assertIn("vs QQQ: +2.20p", message)
 
 
 if __name__ == "__main__":
