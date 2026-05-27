@@ -166,16 +166,28 @@ def _calculate_modified_dietz_return_pct(
     if start <= 0:
         return None
 
-    flow_map = daily_cash_flows.set_index("date")["external_flow"] if not daily_cash_flows.empty else pd.Series(dtype=float)
-    total_days = max((strategy_df["run_date"].iloc[-1] - strategy_df["run_date"].iloc[0]).days, 1)
+    flow_series = (
+        daily_cash_flows.set_index("date")["external_flow"]
+        if not daily_cash_flows.empty
+        else pd.Series(dtype=float)
+    )
+    if flow_series.empty:
+        return float(((end - start) / start) * 100.0)
+    flow_series.index = pd.to_datetime(flow_series.index, errors="coerce").normalize()
+    flow_series = flow_series[flow_series.index.notna()]
+
+    start_date = pd.Timestamp(strategy_df["run_date"].iloc[0]).normalize()
+    end_date = pd.Timestamp(strategy_df["run_date"].iloc[-1]).normalize()
+    period_flows = flow_series[(flow_series.index >= start_date) & (flow_series.index <= end_date)]
+    if period_flows.empty:
+        return float(((end - start) / start) * 100.0)
+    total_days = max((end_date - start_date).days, 1)
 
     weighted_flows = 0.0
     net_flows = 0.0
-    for _, row in strategy_df.iterrows():
-        day_flow = float(flow_map.get(row["run_date"], 0.0))
-        if day_flow == 0.0:
-            continue
-        days_from_start = (row["run_date"] - strategy_df["run_date"].iloc[0]).days
+    for flow_date, flow_amount in period_flows.items():
+        day_flow = float(flow_amount)
+        days_from_start = (pd.Timestamp(flow_date).normalize() - start_date).days
         weight = (total_days - days_from_start) / total_days
         weighted_flows += day_flow * weight
         net_flows += day_flow

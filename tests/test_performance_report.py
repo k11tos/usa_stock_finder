@@ -364,7 +364,7 @@ def test_empty_snapshot_generates_safe_html(tmp_path) -> None:
     assert (out / "history" / "20260527_130000" / "index.html").exists()
 
 
-def test_no_cash_flow_file_keeps_simple_behavior(tmp_path) -> None:
+def test_no_cash_flow_file_keeps_simple_behavior() -> None:
     strategy = pd.DataFrame(
         {
             "run_date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
@@ -408,6 +408,25 @@ def test_withdrawal_handling_increases_adjusted_return() -> None:
     adjusted_return = _calculate_modified_dietz_return_pct(strategy, cash_flows)
     assert simple_return == pytest.approx(-10.0)
     assert adjusted_return == pytest.approx(10.0)
+
+
+def test_cash_flow_between_snapshot_dates_is_included() -> None:
+    strategy = pd.DataFrame(
+        {
+            "run_date": pd.to_datetime(["2026-01-01", "2026-01-03"]),
+            "strategy_equity": [1000.0, 1550.0],
+        }
+    )
+    cash_flows = pd.DataFrame(
+        {"date": pd.to_datetime(["2026-01-02"]), "external_flow": [500.0]}
+    )
+
+    simple_return = cumulative_return_pct(strategy["strategy_equity"])
+    adjusted_return = _calculate_modified_dietz_return_pct(strategy, cash_flows)
+
+    assert simple_return == pytest.approx(55.0)
+    assert adjusted_return == pytest.approx(4.0)
+    assert adjusted_return != pytest.approx(simple_return)
 
 
 def test_invalid_cash_flow_rows_are_reported_safely(tmp_path, monkeypatch) -> None:
