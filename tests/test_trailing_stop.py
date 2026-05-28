@@ -100,6 +100,21 @@ class TestTrailingStop(unittest.TestCase):
         # Non-positive close should not mutate last_update
         self.assertEqual(state["NVDA"]["last_update"], "2026-03-27")
 
+    def test_update_highest_close_preserves_activated_flag(self):
+        state = {
+            "BVS": {
+                "highest_close": 120.0,
+                "last_update": "2026-03-27",
+                "activated": True,
+            }
+        }
+        today = date(2026, 3, 28)
+
+        result = update_highest_close(state, "BVS", 118.0, today)
+
+        self.assertEqual(result, 120.0)
+        self.assertTrue(state["BVS"]["activated"])
+
 
 if __name__ == "__main__":
     unittest.main()

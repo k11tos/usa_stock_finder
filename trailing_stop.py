@@ -109,6 +109,8 @@ def update_highest_close(
         "highest_close": new_high,
         "last_update": today.isoformat(),
     }
+    if "activated" in entry:
+        state[symbol]["activated"] = bool(entry.get("activated", False))
 
     if new_high > prev_high:
         logger.debug(

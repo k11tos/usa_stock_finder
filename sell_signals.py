@@ -240,9 +240,32 @@ def evaluate_sell_decisions(
         # Tier 3: ATR 기반 TRAILING STOP (수익 보호용)
         if StrategyConfig.TRAILING_ENABLED and avg_price > 0 and current_price > 0:
             profit_pct = (current_price - avg_price) / avg_price
+            state_entry = trailing_state.get(symbol, {})
+            is_activated = bool(state_entry.get("activated", False))
 
-            # 최소 수익률 기준 이상인 경우에만 트레일링 적용
-            if profit_pct >= StrategyConfig.TRAILING_MIN_PROFIT_PCT:
+            if not is_activated and profit_pct >= StrategyConfig.TRAILING_MIN_PROFIT_PCT:
+                logger.debug(
+                    "%s: TRAILING 신규 활성화 - profit_pct=%.4f (%.2f%%) >= TRAILING_MIN_PROFIT_PCT=%.4f (%.2f%%)",
+                    symbol,
+                    profit_pct,
+                    profit_pct * 100,
+                    StrategyConfig.TRAILING_MIN_PROFIT_PCT,
+                    StrategyConfig.TRAILING_MIN_PROFIT_PCT * 100,
+                )
+                is_activated = True
+            elif is_activated:
+                logger.debug("%s: TRAILING 이미 활성화됨 - 현재 수익률과 무관하게 체크 유지", symbol)
+            else:
+                logger.debug(
+                    "%s: TRAILING 비활성 상태 - profit_pct=%.4f (%.2f%%) < TRAILING_MIN_PROFIT_PCT=%.4f (%.2f%%)",
+                    symbol,
+                    profit_pct,
+                    profit_pct * 100,
+                    StrategyConfig.TRAILING_MIN_PROFIT_PCT,
+                    StrategyConfig.TRAILING_MIN_PROFIT_PCT * 100,
+                )
+
+            if is_activated:
                 today = date.today()
 
                 # 트레일링에 사용할 "종가" 개념: 여기서는 current_price를 사용
@@ -255,6 +278,8 @@ def evaluate_sell_decisions(
                     close_for_trailing,
                     today,
                 )
+                trailing_state.setdefault(symbol, {})
+                trailing_state[symbol]["activated"] = True
                 trailing_state_modified = True
 
                 # ATR 계산
@@ -307,15 +332,6 @@ def evaluate_sell_decisions(
                             symbol,
                             highest_close,
                         )
-            else:
-                logger.debug(
-                    "%s: TRAILING 체크 스킵 - profit_pct=%.4f (%.2f%%) < TRAILING_MIN_PROFIT_PCT=%.4f (%.2f%%)",
-                    symbol,
-                    profit_pct,
-                    profit_pct * 100,
-                    StrategyConfig.TRAILING_MIN_PROFIT_PCT,
-                    StrategyConfig.TRAILING_MIN_PROFIT_PCT * 100,
-                )
         else:
             if not StrategyConfig.TRAILING_ENABLED:
                 logger.debug("%s: TRAILING 체크 스킵 - TRAILING_ENABLED=False", symbol)

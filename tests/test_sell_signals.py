@@ -734,6 +734,109 @@ class TestSellSignals(unittest.TestCase):
     @patch("sell_signals.record_stop_loss_event")
     @patch("sell_signals.update_highest_close")
     @patch("sell_signals.load_trailing_state")
+    def test_trailing_activates_first_time_at_threshold(
+        self,
+        mock_load_trailing_state,
+        mock_update_highest_close,
+        mock_record_stop_loss_event,
+        mock_save_trailing_state,
+    ):
+        symbol = "BVS"
+        mock_load_trailing_state.return_value = {}
+        mock_update_highest_close.return_value = 111.0
+        self.mock_finder.current_price = {symbol: 111.0}
+        self.mock_finder.get_atr.return_value = 1.0
+
+        with patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", True), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", 0.10), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", 5.0), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", 14):
+            decisions = evaluate_sell_decisions(
+                finder=self.mock_finder,
+                holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 111.0}],
+                selected_buy=[symbol],
+                selected_not_sell=[],
+                avsl_signals={symbol: False},
+            )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+        self.assertTrue(mock_load_trailing_state.return_value[symbol]["activated"])
+        mock_update_highest_close.assert_called_once()
+        mock_save_trailing_state.assert_called_once_with(mock_load_trailing_state.return_value)
+        mock_record_stop_loss_event.assert_not_called()
+
+    @patch("sell_signals.save_trailing_state")
+    @patch("sell_signals.record_stop_loss_event")
+    @patch("sell_signals.update_highest_close")
+    @patch("sell_signals.load_trailing_state")
+    def test_trailing_stays_active_below_threshold_when_previously_activated(
+        self,
+        mock_load_trailing_state,
+        mock_update_highest_close,
+        mock_record_stop_loss_event,
+        mock_save_trailing_state,
+    ):
+        symbol = "BVS"
+        trailing_state = {symbol: {"highest_close": 120.0, "last_update": "2026-05-27", "activated": True}}
+        mock_load_trailing_state.return_value = trailing_state
+        mock_update_highest_close.return_value = 120.0
+        self.mock_finder.current_price = {symbol: 108.0}
+        self.mock_finder.get_atr.return_value = 2.0
+
+        with patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", True), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", 0.10), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", 20.0), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", 14):
+            decisions = evaluate_sell_decisions(
+                finder=self.mock_finder,
+                holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 108.0}],
+                selected_buy=[symbol],
+                selected_not_sell=[],
+                avsl_signals={symbol: False},
+            )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+        mock_update_highest_close.assert_called_once_with(trailing_state, symbol, 108.0, date.today())
+        self.mock_finder.get_atr.assert_called_once_with(symbol, 14)
+        mock_record_stop_loss_event.assert_not_called()
+        mock_save_trailing_state.assert_called_once_with(trailing_state)
+
+    @patch("sell_signals.save_trailing_state")
+    @patch("sell_signals.record_stop_loss_event")
+    @patch("sell_signals.update_highest_close")
+    @patch("sell_signals.load_trailing_state")
+    def test_trailing_old_state_without_activated_is_backward_compatible(
+        self,
+        mock_load_trailing_state,
+        mock_update_highest_close,
+        mock_record_stop_loss_event,
+        mock_save_trailing_state,
+    ):
+        symbol = "BVS"
+        trailing_state = {symbol: {"highest_close": 120.0, "last_update": "2026-05-27"}}
+        mock_load_trailing_state.return_value = trailing_state
+        self.mock_finder.current_price = {symbol: 108.0}
+
+        with patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", True), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", 0.10):
+            decisions = evaluate_sell_decisions(
+                finder=self.mock_finder,
+                holdings=[{"symbol": symbol, "quantity": 10.0, "avg_price": 100.0, "current_price": 108.0}],
+                selected_buy=[symbol],
+                selected_not_sell=[],
+                avsl_signals={symbol: False},
+            )
+
+        self.assertEqual(decisions[symbol].reason, SellReason.NONE)
+        mock_update_highest_close.assert_not_called()
+        self.assertNotIn("activated", trailing_state[symbol])
+        mock_save_trailing_state.assert_not_called()
+        mock_record_stop_loss_event.assert_not_called()
+
+    @patch("sell_signals.save_trailing_state")
+    @patch("sell_signals.record_stop_loss_event")
+    @patch("sell_signals.update_highest_close")
+    @patch("sell_signals.load_trailing_state")
     def test_trailing_stop_not_triggered_with_non_positive_atr(
         self,
         mock_load_trailing_state,
