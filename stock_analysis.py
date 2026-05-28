@@ -3,7 +3,7 @@ stock_analysis.py
 
 This module provides functionality for analyzing US stock market data using technical indicators.
 It includes methods for calculating moving averages, price-volume correlations, trend analysis,
-and AVSL (Average Volume Support Level) sell signal detection to identify potential trading opportunities.
+and legacy/approximate AVSL (Average Volume Support Level) sell signal detection to identify potential trading opportunities.
 
 Dependencies:
     - yfinance: Yahoo Finance API client for fetching stock data
@@ -706,7 +706,12 @@ class UsaStockFinder:
         self, symbol: str, fast_period: int | None = None, slow_period: int | None = None
     ) -> pd.DataFrame | None:
         """
-        Calculate VPC, VPR, VM, and VPCI components for Buff Dormeier AVSL.
+        Calculate VPC, VPR, VM, and VPCI components for the legacy/approximate AVSL.
+
+        This helper is part of the existing VPCI-inspired approximation. It is
+        intentionally kept under its historical function name for backward
+        compatibility and should not be confused with Buff Dormeier's exact
+        original AVSL formula.
 
         VPC (Volume Price Component): Difference between price-based average and volume-weighted average
         VPR (Volume Price Ratio): Ratio of fast to slow price moving averages
@@ -792,9 +797,14 @@ class UsaStockFinder:
         slow_period: int | None = None,
     ) -> pd.Series | None:
         """
-        Calculate Buff Dormeier AVSL (Anti-Volume Stop Loss) series.
+        Calculate the legacy/approximate AVSL (Anti-Volume Stop Loss) series.
 
-        AVSL is a dynamic trailing stop based on:
+        This is the current live sell-signal implementation. It approximates an
+        AVSL-style dynamic stop with VPCI and Bollinger-band concepts, but it is
+        not Buff Dormeier's exact original formula. Keep the public function
+        name stable until the original AVSL can be added separately in shadow mode.
+
+        The legacy/approximate AVSL is a dynamic trailing stop based on:
         1. VPCI (Volume Price Component Indicator) to determine adaptive length
         2. Price component (low price adjusted by VPC/VPR)
         3. Bollinger Band lower band using standard deviation
@@ -819,7 +829,7 @@ class UsaStockFinder:
             slow_period = AVSLConfig.SLOW_PERIOD
 
         try:
-            # Calculate VPCI components
+            # Calculate VPCI components for the legacy/approximate AVSL.
             vpci_df = self.calculate_vpci_components(symbol, fast_period, slow_period)
             if vpci_df is None:
                 return None
@@ -843,7 +853,7 @@ class UsaStockFinder:
             adjustment = 1.0 + (vpc * 0.1)  # Scale VPC adjustment
             price_component = low * adjustment
 
-            # Calculate AVSL using adaptive length
+            # Calculate legacy/approximate AVSL using adaptive length.
             # For simplicity, use a rolling window based on average VPCI over the period
             avg_vpci = vpci.rolling(window=bars).mean()
             # Convert VPCI to length (scaled appropriately)
@@ -861,7 +871,7 @@ class UsaStockFinder:
             # Calculate standard deviation of price component
             price_component_std = price_component.rolling(window=recent_length).std()
 
-            # AVSL = Price Component MA - (StdDev × Multiplier)
+            # Legacy/approximate AVSL = Price Component MA - (StdDev × Multiplier)
             # This creates the lower Bollinger Band
             avsl = price_component_ma - (price_component_std * stddev_mult)
 
@@ -876,7 +886,10 @@ class UsaStockFinder:
 
     def get_latest_avsl(self, symbol: str) -> float | None:
         """
-        Get the most recent AVSL (Anti-Volume Stop Loss) value for a symbol.
+        Get the most recent legacy/approximate AVSL value for a symbol.
+
+        This returns the value used by current sell signals and does not
+        represent Buff Dormeier's exact original AVSL formula.
 
         Args:
             symbol (str): Stock symbol to analyze
@@ -910,23 +923,25 @@ class UsaStockFinder:
         use_buff_avsl: bool = True,
     ) -> Dict[str, bool]:
         """
-        Check for AVSL (Anti-Volume Stop Loss) sell signals based on Buff Dormeier's method.
+        Check for AVSL (Anti-Volume Stop Loss) sell signals.
 
         When use_buff_avsl=True (default):
-        - Uses Buff Dormeier AVSL calculation (VPCI + Bollinger Band based dynamic stop)
+        - Uses the legacy/approximate AVSL calculation (VPCI + Bollinger Band based dynamic stop)
         - Sell signal occurs when current price (close or low) falls below the AVSL line
         - This indicates support level break and potential trend reversal
+        - Historical parameter name is kept for backward compatibility; this is
+          not Buff Dormeier's exact original AVSL formula
 
-        When use_buff_avsl=False (legacy mode):
+        When use_buff_avsl=False (older threshold fallback):
         - Uses simple volume/price decline threshold method
         - Kept for backward compatibility
 
         Args:
-            period_days (int | None): Legacy parameter - not used in Buff AVSL mode
-            volume_decline_threshold (float | None): Legacy parameter - not used in Buff AVSL mode
-            price_decline_threshold (float | None): Legacy parameter - not used in Buff AVSL mode
-            recent_days (int | None): Legacy parameter - not used in Buff AVSL mode
-            use_buff_avsl (bool): If True, use Buff Dormeier AVSL method (default: True)
+            period_days (int | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
+            volume_decline_threshold (float | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
+            price_decline_threshold (float | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
+            recent_days (int | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
+            use_buff_avsl (bool): Historical name; if True, use the current legacy/approximate AVSL (default: True)
 
         Returns:
             Dict[str, bool]: True if AVSL sell signal is detected (current price < AVSL stop loss)
@@ -998,7 +1013,7 @@ class UsaStockFinder:
 
             return result
 
-        # Buff Dormeier AVSL mode (default)
+        # Legacy/approximate VPCI AVSL mode (default). Keep this path unchanged for trading behavior.
         for symbol in self.symbols:
             try:
                 # Get latest AVSL stop loss level
@@ -1029,7 +1044,7 @@ class UsaStockFinder:
                 result[symbol] = bool(is_stop_hit)
 
                 logger.debug(
-                    "%s: Buff AVSL signal evaluation\n"
+                    "%s: Legacy approximate AVSL signal evaluation\n"
                     "  Current price: %.2f\n"
                     "  AVSL stop loss: %.2f\n"
                     "  Price below AVSL: %s\n"
@@ -1043,6 +1058,6 @@ class UsaStockFinder:
 
             except (IndexError, KeyError, AttributeError, ValueError) as e:
                 result[symbol] = False
-                logger.debug("Error checking Buff AVSL signal for %s: %s", symbol, str(e))
+                logger.debug("Error checking legacy approximate AVSL signal for %s: %s", symbol, str(e))
 
         return result

@@ -178,15 +178,27 @@ class InvestmentConfig:
 
 
 class AVSLConfig:
-    """AVSL (Average Volume Support Level) sell signal parameters based on Buff Dormeier's method."""
+    """Legacy/approximate AVSL sell signal configuration.
 
-    # Legacy parameters (kept for backward compatibility)
+    The active live sell signal still uses the historical VPCI/dynamic-length
+    approximation. It is inspired by Buff Dormeier's AVSL, but it is not the
+    exact original formula. Keep this mode explicit so a future original AVSL
+    can be added separately without changing current trading decisions.
+    """
+
+    # Metadata only: documents the active implementation used by current sell signals.
+    # Do not treat this as a runtime switch; it intentionally preserves existing behavior.
+    IMPLEMENTATION_MODE = "legacy_approximate"
+    ORIGINAL_BUFF_DORMEIER_ENABLED = False
+
+    # Older threshold fallback parameters (kept for backward compatibility).
     PERIOD_DAYS = int(os.getenv("AVSL_PERIOD_DAYS", "50"))
     VOLUME_DECLINE_THRESHOLD = float(os.getenv("AVSL_VOLUME_DECLINE_THRESHOLD", "0.5"))  # 50% below average
     PRICE_DECLINE_THRESHOLD = float(os.getenv("AVSL_PRICE_DECLINE_THRESHOLD", "0.03"))  # 3% decline
     RECENT_DAYS = int(os.getenv("AVSL_RECENT_DAYS", "5"))
 
-    # Buff Dormeier AVSL parameters
+    # Legacy/approximate VPCI AVSL parameters. These names are kept for backward compatibility.
+    # They do not represent a verified implementation of Buff Dormeier's original AVSL formula.
     BARS = int(os.getenv("AVSL_BARS", "26"))  # 기본 기간 (일반적으로 26 또는 50)
     STDDEV_MULT = float(os.getenv("AVSL_STDDEV_MULT", "2.0"))  # 표준편차 배수 (볼린저 밴드)
     MIN_LENGTH = int(os.getenv("AVSL_MIN_LENGTH", "3"))  # VPCI 기반 Length 최소값
@@ -282,6 +294,8 @@ def get_config() -> dict[str, Any]:
             "proportional_percentage": InvestmentConfig.PROPORTIONAL_PERCENTAGE,
         },
         "avsl": {
+            "implementation_mode": AVSLConfig.IMPLEMENTATION_MODE,
+            "original_buff_dormeier_enabled": AVSLConfig.ORIGINAL_BUFF_DORMEIER_ENABLED,
             "period_days": AVSLConfig.PERIOD_DAYS,
             "volume_decline_threshold": AVSLConfig.VOLUME_DECLINE_THRESHOLD,
             "price_decline_threshold": AVSLConfig.PRICE_DECLINE_THRESHOLD,

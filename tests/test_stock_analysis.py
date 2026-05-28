@@ -474,8 +474,8 @@ class TestUsaStockFinder(unittest.TestCase):
                 self.assertIsInstance(latest_avsl, (float, np.floating))
                 self.assertGreater(latest_avsl, 0)
 
-    def test_check_avsl_sell_signal_buff_mode(self):
-        """check check_avsl_sell_signal in Buff AVSL mode (default)"""
+    def test_check_avsl_sell_signal_legacy_approximate_mode(self):
+        """check check_avsl_sell_signal in legacy/approximate AVSL mode (default)"""
         result = self.finder.check_avsl_sell_signal(use_buff_avsl=True)
         self.assertIsInstance(result, dict)
         for symbol in self.symbols:
