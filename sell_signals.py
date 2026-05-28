@@ -242,6 +242,31 @@ def evaluate_sell_decisions(
             profit_pct = (current_price - avg_price) / avg_price
             state_entry = trailing_state.get(symbol, {})
             is_activated = bool(state_entry.get("activated", False))
+            activation_threshold_price = avg_price * (1 + StrategyConfig.TRAILING_MIN_PROFIT_PCT)
+
+            # Backward-compatible migration for legacy state entries without "activated"
+            if "activated" not in state_entry:
+                legacy_highest_close = state_entry.get("highest_close")
+                try:
+                    legacy_highest_close_value = float(legacy_highest_close)
+                except (TypeError, ValueError):
+                    legacy_highest_close_value = 0.0
+
+                if legacy_highest_close_value > 0 and legacy_highest_close_value >= activation_threshold_price:
+                    is_activated = True
+                    trailing_state.setdefault(symbol, {})
+                    trailing_state[symbol]["activated"] = True
+                    trailing_state_modified = True
+                    logger.debug(
+                        "%s: TRAILING 레거시 상태 마이그레이션 - activated=True 추론 "
+                        "(avg_price=%.4f, highest_close=%.4f, activation_threshold_price=%.4f, profit_pct=%.4f (%.2f%%))",
+                        symbol,
+                        avg_price,
+                        legacy_highest_close_value,
+                        activation_threshold_price,
+                        profit_pct,
+                        profit_pct * 100,
+                    )
 
             if not is_activated and profit_pct >= StrategyConfig.TRAILING_MIN_PROFIT_PCT:
                 logger.debug(
