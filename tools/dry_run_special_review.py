@@ -10,7 +10,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+from pathlib import Path
 from typing import Any
+
+# Allow direct script execution from repository root:
+# `python tools/dry_run_special_review.py ...`
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from stock_analysis import UsaStockFinder
 
@@ -31,7 +39,8 @@ def _parse_symbol_reason(items: list[str]) -> list[tuple[str, str]]:
             raise ValueError(f"Invalid symbol entry: '{item}'")
         if reason not in REASONS:
             raise ValueError(
-                f"Invalid reason '{reason}' for {symbol}. Allowed: {', '.join(sorted(REASONS))}"
+                f"Invalid reason '{reason}' for {symbol}. "
+                f"Allowed: {', '.join(sorted(REASONS))}"
             )
         parsed.append((symbol, reason))
     return parsed
@@ -54,7 +63,10 @@ def build_review_packet(finder: UsaStockFinder, symbol: str, reason: str) -> dic
         "price_based_reason": reason,
         "key_metrics": metrics,
         "external_review_placeholder": _external_review_placeholder(symbol),
-        "decision_policy_note": "Explanation-only dry-run. Trading decisions remain price-based and deterministic.",
+        "decision_policy_note": (
+            "Explanation-only dry-run. Trading decisions remain "
+            "price-based and deterministic."
+        ),
     }
 
 
@@ -79,18 +91,24 @@ def render_review_packets(packets: list[dict[str, Any]]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate dry-run review packets for flagged symbols.")
+    parser = argparse.ArgumentParser(
+        description="Generate dry-run review packets for flagged symbols."
+    )
     parser.add_argument(
         "--symbol-reason",
         nargs="+",
         required=True,
-        help="Entries like 'AAPL:event_quarantine' or 'EWCZ:pinned_price'. If omitted reason, defaults to event_quarantine.",
+        help=(
+            "Entries like 'AAPL:event_quarantine' or 'EWCZ:pinned_price'. "
+            "If omitted reason, defaults to event_quarantine."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of markdown.")
     args = parser.parse_args()
 
     symbol_reasons = _parse_symbol_reason(args.symbol_reason)
-    finder = UsaStockFinder()
+    symbols = [symbol for symbol, _reason in symbol_reasons]
+    finder = UsaStockFinder(symbols)
     packets = [build_review_packet(finder, symbol, reason) for symbol, reason in symbol_reasons]
 
     if args.json:
