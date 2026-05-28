@@ -31,6 +31,7 @@ def load_trailing_state() -> Dict[str, Dict[str, Any]]:
             Each value contains:
             - "highest_close": Highest close price reached
             - "last_update": ISO format date string of last update
+            - "activated": Whether ATR trailing has been activated for the symbol
     """
     if not os.path.exists(TRAILING_STATE_PATH):
         logger.debug("Trailing state file does not exist: %s", TRAILING_STATE_PATH)
@@ -106,6 +107,7 @@ def update_highest_close(
     new_high = max(prev_high, close_price) if prev_high > 0 else close_price
 
     state[symbol] = {
+        **entry,
         "highest_close": new_high,
         "last_update": today.isoformat(),
     }

@@ -861,6 +861,121 @@ class TestSellSignals(unittest.TestCase):
         self.assertEqual(mock_record_stop_loss_event.call_count, 1)
 
 
+class TestTrailingActivationPersistence(unittest.TestCase):
+    """Regression tests for persistent ATR trailing activation state."""
+
+    def setUp(self):
+        self.symbol = "BVS"
+        self.quantity = 10.0
+        self.avg_price = 100.0
+        self.finder = MagicMock()
+        self.finder.current_price = {}
+        self.finder.get_atr.return_value = 100.0
+        self.finder.is_special_situation_price_pinned.return_value = False
+
+    def _evaluate(self, current_price: float, trailing_state: dict):
+        self.finder.current_price = {self.symbol: current_price}
+        holdings = [
+            {
+                "symbol": self.symbol,
+                "quantity": self.quantity,
+                "avg_price": self.avg_price,
+                "current_price": current_price,
+            }
+        ]
+
+        with patch("sell_signals.load_trailing_state", return_value=trailing_state), \
+             patch("sell_signals.save_trailing_state") as mock_save_trailing_state, \
+             patch("sell_signals.record_stop_loss_event") as mock_record_stop_loss_event, \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", True), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", 0.10), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", 5.0), \
+             patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", 14):
+            decisions = evaluate_sell_decisions(
+                finder=self.finder,
+                holdings=holdings,
+                selected_buy=[self.symbol],
+                selected_not_sell=[],
+                avsl_signals={self.symbol: False},
+            )
+
+        return decisions, mock_save_trailing_state, mock_record_stop_loss_event
+
+    def test_trailing_not_activated_below_min_profit(self):
+        """Case A: below activation profit should not check trailing stop."""
+        trailing_state = {}
+        decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(105.0, trailing_state)
+
+        self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)
+        self.assertEqual(trailing_state, {})
+        self.finder.get_atr.assert_not_called()
+        mock_record_stop_loss_event.assert_not_called()
+        mock_save_trailing_state.assert_not_called()
+
+    def test_trailing_first_activation_sets_state_and_highest_close(self):
+        """Case B: reaching min profit activates trailing and updates highest close."""
+        trailing_state = {}
+        decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(111.0, trailing_state)
+
+        self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)
+        self.assertTrue(trailing_state[self.symbol]["activated"])
+        self.assertEqual(trailing_state[self.symbol]["highest_close"], 111.0)
+        self.finder.get_atr.assert_called_once_with(self.symbol, 14)
+        mock_record_stop_loss_event.assert_not_called()
+        mock_save_trailing_state.assert_called_once_with(trailing_state)
+
+    def test_trailing_stays_active_after_profit_falls_below_threshold(self):
+        """Case C: already-active trailing is checked even below activation profit."""
+        trailing_state = {
+            self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27", "activated": True}
+        }
+        decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(108.0, trailing_state)
+
+        self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)
+        self.assertTrue(trailing_state[self.symbol]["activated"])
+        self.assertEqual(trailing_state[self.symbol]["highest_close"], 120.0)
+        self.finder.get_atr.assert_called_once_with(self.symbol, 14)
+        mock_record_stop_loss_event.assert_not_called()
+        mock_save_trailing_state.assert_called_once_with(trailing_state)
+
+    def test_trailing_sell_after_activation_clears_state(self):
+        """Case D: already-active trailing can sell below the trailing stop and clears state."""
+        trailing_state = {
+            self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27", "activated": True}
+        }
+        self.finder.get_atr.return_value = 2.0
+        decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(108.0, trailing_state)
+
+        self.assertEqual(decisions[self.symbol].reason, SellReason.TRAILING)
+        self.assertEqual(decisions[self.symbol].quantity, self.quantity)
+        self.assertNotIn(self.symbol, trailing_state)
+        mock_record_stop_loss_event.assert_called_once()
+        mock_save_trailing_state.assert_called_once_with({})
+
+    def test_old_state_without_activation_stays_inactive_below_threshold(self):
+        """Case E: old state without activated is treated as inactive below threshold."""
+        trailing_state = {self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27"}}
+        decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(108.0, trailing_state)
+
+        self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)
+        self.assertNotIn("activated", trailing_state[self.symbol])
+        self.finder.get_atr.assert_not_called()
+        mock_record_stop_loss_event.assert_not_called()
+        mock_save_trailing_state.assert_not_called()
+
+    def test_old_state_without_activation_upgrades_above_threshold(self):
+        """Case E: old state without activated is upgraded when profit reaches threshold."""
+        trailing_state = {self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27"}}
+        decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(111.0, trailing_state)
+
+        self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)
+        self.assertTrue(trailing_state[self.symbol]["activated"])
+        self.assertEqual(trailing_state[self.symbol]["highest_close"], 120.0)
+        self.finder.get_atr.assert_called_once_with(self.symbol, 14)
+        mock_record_stop_loss_event.assert_not_called()
+        mock_save_trailing_state.assert_called_once_with(trailing_state)
+
+
 class TestSellDecisionPriorityRegression(unittest.TestCase):
     """Focused regression tests for sell decision priority and TREND behavior."""
 
