@@ -126,6 +126,19 @@ class TestImportTimeConfigParsing(unittest.TestCase):
 
         self.assertFalse(temp_config.StrategyConfig.TRAILING_ENABLED)
 
+    def test_avsl_monitor_telegram_enabled_defaults_false(self):
+        with patch.dict(os.environ, {}, clear=True):
+            temp_config = self._load_reloaded_temp_module()
+
+        self.assertFalse(temp_config.AVSLConfig.MONITOR_TELEGRAM_ENABLED)
+        self.assertFalse(temp_config.get_config()["avsl"]["monitor_telegram_enabled"])
+
+    def test_avsl_monitor_telegram_enabled_parses_true(self):
+        with patch.dict(os.environ, {"AVSL_MONITOR_TELEGRAM_ENABLED": "True"}, clear=True):
+            temp_config = self._load_reloaded_temp_module()
+
+        self.assertTrue(temp_config.AVSLConfig.MONITOR_TELEGRAM_ENABLED)
+
     def test_representative_numeric_defaults(self):
         with patch.dict(os.environ, {}, clear=True):
             temp_config = self._load_reloaded_temp_module()

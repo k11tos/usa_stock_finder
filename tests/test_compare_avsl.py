@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 from tools.compare_avsl import (
     AVSLComparisonRow,
+    build_telegram_monitor_summary,
     classify_avsl_status,
     compare_symbols,
     render_markdown_summary,
@@ -151,3 +152,60 @@ def test_summarize_status_counts_includes_zero_categories() -> None:
         "ORIGINAL_ONLY_SELL": 1,
         "INSUFFICIENT_DATA": 1,
     }
+
+
+def test_build_telegram_monitor_summary_empty_results() -> None:
+    message = build_telegram_monitor_summary([], Path("outputs/avsl_monitor/latest/report.md"))
+
+    assert "[AVSL Monitor]" in message
+    assert "MONITORING ONLY" in message
+    assert "not used for trading decisions" in message
+    assert "BOTH_HOLD=0" in message
+    assert "BOTH_SELL=0" in message
+    assert "LEGACY_ONLY_SELL=0" in message
+    assert "ORIGINAL_ONLY_SELL=0" in message
+    assert "INSUFFICIENT_DATA=0" in message
+    assert "LEGACY_ONLY_SELL: (none)" in message
+    assert "ORIGINAL_ONLY_SELL: (none)" in message
+    assert "Artifact: outputs/avsl_monitor/latest/report.md" in message
+
+
+def test_build_telegram_monitor_summary_difference_categories_only_listed() -> None:
+    rows = [
+        AVSLComparisonRow("HOLD", 100.0, 90.0, 95.0, False, False, 5.0, 5.0, "BOTH_HOLD"),
+        AVSLComparisonRow("SELL", 80.0, 90.0, 95.0, True, True, 5.0, 5.0, "BOTH_SELL"),
+        AVSLComparisonRow("LEG", 92.0, 95.0, 90.0, True, False, -5.0, -5.0, "LEGACY_ONLY_SELL"),
+        AVSLComparisonRow("ORG", 92.0, 90.0, 95.0, False, True, 5.0, 5.0, "ORIGINAL_ONLY_SELL"),
+        AVSLComparisonRow("MISS", None, None, None, None, None, None, None, "INSUFFICIENT_DATA"),
+    ]
+
+    message = build_telegram_monitor_summary(rows)
+
+    assert "BOTH_HOLD=1" in message
+    assert "BOTH_SELL=1" in message
+    assert "LEGACY_ONLY_SELL=1" in message
+    assert "ORIGINAL_ONLY_SELL=1" in message
+    assert "INSUFFICIENT_DATA=1" in message
+    assert "LEGACY_ONLY_SELL: LEG" in message
+    assert "ORIGINAL_ONLY_SELL: ORG" in message
+    assert "BOTH_HOLD: HOLD" not in message
+    assert "BOTH_SELL: SELL" not in message
+    assert "INSUFFICIENT_DATA: MISS" not in message
+
+
+def test_build_telegram_monitor_summary_truncates_difference_symbols() -> None:
+    rows = [
+        AVSLComparisonRow(f"L{i}", 92.0, 95.0, 90.0, True, False, -5.0, -5.0, "LEGACY_ONLY_SELL")
+        for i in range(1, 6)
+    ]
+    rows.extend(
+        AVSLComparisonRow(f"O{i}", 92.0, 90.0, 95.0, False, True, 5.0, 5.0, "ORIGINAL_ONLY_SELL")
+        for i in range(1, 5)
+    )
+
+    message = build_telegram_monitor_summary(rows, max_symbols_per_list=3)
+
+    assert "LEGACY_ONLY_SELL: L1, L2, L3, +2 more" in message
+    assert "ORIGINAL_ONLY_SELL: O1, O2, O3, +1 more" in message
+    assert "L4" not in message
+    assert "O4" not in message

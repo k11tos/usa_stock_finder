@@ -62,7 +62,12 @@ from live_performance_logger import (
 
 from performance_report_runner import run_performance_report_safely
 from tools.compare_avsl import compare_symbols as compare_avsl_symbols
-from tools.compare_avsl import summarize_status_counts, unique_symbols, write_monitor_outputs
+from tools.compare_avsl import (
+    build_telegram_monitor_summary,
+    summarize_status_counts,
+    unique_symbols,
+    write_monitor_outputs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1715,6 +1720,16 @@ def _is_avsl_monitor_enabled() -> bool:
     return os.getenv("AVSL_MONITOR_ENABLED", str(AVSLConfig.MONITOR_ENABLED)).strip().lower() == "true"
 
 
+def _is_avsl_monitor_telegram_enabled() -> bool:
+    """Return whether the optional AVSL monitor Telegram summary is enabled."""
+    return (
+        os.getenv("AVSL_MONITOR_TELEGRAM_ENABLED", str(AVSLConfig.MONITOR_TELEGRAM_ENABLED))
+        .strip()
+        .lower()
+        == "true"
+    )
+
+
 def _build_avsl_monitor_symbols(
     current_holdings: Iterable[str],
     buy_items: Iterable[str],
@@ -1752,10 +1767,31 @@ def _run_avsl_monitor_safely(
             counts["INSUFFICIENT_DATA"],
             paths["latest_csv"].parent,
         )
+        if _is_avsl_monitor_telegram_enabled():
+            _send_avsl_monitor_telegram_summary(
+                rows, paths.get("latest_markdown") or paths.get("latest_csv")
+            )
         return True
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("AVSL monitor failed and daily run will continue: %s", str(exc))
         return False
+
+
+def _send_avsl_monitor_telegram_summary(
+    rows: Iterable[Any], artifact_path: Path | str | None = None
+) -> None:
+    """Send the optional compact AVSL monitor Telegram summary."""
+    bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
+    chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        logger.warning("AVSL monitor Telegram summary skipped: missing Telegram credentials.")
+        return
+
+    message = build_telegram_monitor_summary(rows, artifact_path)
+    try:
+        asyncio.run(send_telegram_message(bot_token=bot_token, chat_id=chat_id, message=message))
+    except Exception as exc:  # pragma: no cover - defensive runtime protection
+        logger.warning("AVSL monitor Telegram summary failed: %s", str(exc))
 
 
 def _log_execution_summary(

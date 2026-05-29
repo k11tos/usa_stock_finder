@@ -1825,6 +1825,36 @@ class TestAVSLPostRunMonitor(unittest.TestCase):
         mock_warning.assert_called_once()
         self.assertIn("AVSL monitor failed", mock_warning.call_args.args[0])
 
+    def test_avsl_monitor_telegram_disabled_does_not_send_message(self):
+        from tools.compare_avsl import AVSLComparisonRow
+
+        monitor_rows = [
+            AVSLComparisonRow("AAPL", 100.0, 90.0, 95.0, False, False, 5.0, 5.0, "BOTH_HOLD"),
+        ]
+
+        finder = MagicMock()
+        with patch.dict(
+            "os.environ",
+            {"AVSL_MONITOR_ENABLED": "true", "AVSL_MONITOR_TELEGRAM_ENABLED": "false"},
+            clear=False,
+        ), patch("main.compare_avsl_symbols", return_value=monitor_rows), patch(
+            "main.write_monitor_outputs",
+            return_value={
+                "latest_csv": Path("outputs/avsl_monitor/latest/report.csv"),
+                "latest_markdown": Path("outputs/avsl_monitor/latest/report.md"),
+            },
+        ), patch("main.send_telegram_message") as mock_send:
+            result = main_module._run_avsl_monitor_safely(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings=["AAPL"],
+                buy_items=[],
+                not_sell_items=[],
+                run_date="2026-05-29",
+            )
+
+        self.assertTrue(result)
+        mock_send.assert_not_called()
+
     def test_avsl_monitor_includes_holdings_and_selected_symbols_and_logs_summary(self):
         from tools.compare_avsl import AVSLComparisonRow
 
