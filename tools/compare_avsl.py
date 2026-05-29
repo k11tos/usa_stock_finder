@@ -236,6 +236,12 @@ def compare_symbols(finder: Any, symbols: Iterable[str]) -> list[AVSLComparisonR
     return [compare_symbol(finder, symbol) for symbol in unique_symbols(symbols)]
 
 
+def summarize_status_counts(rows: Iterable[AVSLComparisonRow]) -> dict[str, int]:
+    """Return stable summary counts for all AVSL monitor status categories."""
+    counts = Counter(row.status for row in rows)
+    return {status: counts.get(status, 0) for status in STATUS_CATEGORIES}
+
+
 def _format_csv_value(value: Any) -> str:
     if value is None:
         return ""
@@ -265,7 +271,7 @@ def write_csv(
 
 def render_markdown_summary(rows: list[AVSLComparisonRow], csv_path: Path | None = None) -> str:
     """Render a compact markdown summary with counts and symbol lists by status."""
-    counts = Counter(row.status for row in rows)
+    counts = summarize_status_counts(rows)
     symbols_by_status: dict[str, list[str]] = defaultdict(list)
     for row in rows:
         symbols_by_status[row.status].append(row.symbol)
@@ -310,6 +316,47 @@ def write_markdown_summary(
     markdown_path = output_dir / f"{run_date:%Y%m%d}_avsl_comparison.md"
     markdown_path.write_text(render_markdown_summary(rows, csv_path), encoding="utf-8")
     return markdown_path
+
+
+def coerce_run_date(run_date: str | dt.date | None = None) -> dt.date:
+    """Coerce live-run metadata dates into a date for AVSL artifact names."""
+    if run_date is None:
+        return dt.datetime.now(dt.UTC).date()
+    if isinstance(run_date, dt.date):
+        return run_date
+    return dt.date.fromisoformat(run_date)
+
+
+def write_monitor_outputs(
+    rows: list[AVSLComparisonRow],
+    base_output_dir: Path = DEFAULT_OUTPUT_DIR,
+    run_date: str | dt.date | None = None,
+    *,
+    write_history: bool = True,
+) -> dict[str, Path]:
+    """Write latest and optional history artifacts for the post-run AVSL monitor.
+
+    The latest path is always published under ``outputs/avsl_monitor/latest/`` by
+    default.  Historical copies are written under
+    ``outputs/avsl_monitor/history/<run_date>/`` when enabled.
+    """
+    artifact_date = coerce_run_date(run_date)
+    paths: dict[str, Path] = {}
+
+    latest_dir = base_output_dir / "latest"
+    latest_csv = write_csv(rows, latest_dir, artifact_date)
+    latest_markdown = write_markdown_summary(rows, latest_dir, latest_csv, artifact_date)
+    paths["latest_csv"] = latest_csv
+    paths["latest_markdown"] = latest_markdown
+
+    if write_history:
+        history_dir = base_output_dir / "history" / artifact_date.isoformat()
+        history_csv = write_csv(rows, history_dir, artifact_date)
+        history_markdown = write_markdown_summary(rows, history_dir, history_csv, artifact_date)
+        paths["history_csv"] = history_csv
+        paths["history_markdown"] = history_markdown
+
+    return paths
 
 
 def parse_args() -> argparse.Namespace:

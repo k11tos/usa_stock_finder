@@ -9,6 +9,7 @@ import unittest
 import json
 from contextlib import ExitStack
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open
 
 import pandas as pd
@@ -1785,3 +1786,73 @@ class TestBuyFunnelFormatting(unittest.TestCase):
         }
         result = build_buy_funnel_lines(stage_counts)
         self.assertIn("매수 제외: AA, BB, CC, DD, EE 외 1개", result)
+
+
+class TestAVSLPostRunMonitor(unittest.TestCase):
+    """Tests for optional post-run AVSL monitoring orchestration."""
+
+    def test_avsl_monitor_disabled_preserves_existing_behavior(self):
+        finder = MagicMock()
+        with patch.dict("os.environ", {"AVSL_MONITOR_ENABLED": "false"}, clear=False), patch(
+            "main.compare_avsl_symbols"
+        ) as mock_compare, patch("main.write_monitor_outputs") as mock_write:
+            result = main_module._run_avsl_monitor_safely(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings=["AAPL"],
+                buy_items=["MSFT"],
+                not_sell_items=["NVDA"],
+                run_date="2026-05-29",
+            )
+
+        self.assertFalse(result)
+        mock_compare.assert_not_called()
+        mock_write.assert_not_called()
+
+    def test_avsl_monitor_errors_warn_and_do_not_fail_run(self):
+        finder = MagicMock()
+        with patch.dict("os.environ", {"AVSL_MONITOR_ENABLED": "true"}, clear=False), patch(
+            "main.compare_avsl_symbols", side_effect=RuntimeError("monitor boom")
+        ), patch("main.logger.warning") as mock_warning:
+            result = main_module._run_avsl_monitor_safely(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings=["AAPL"],
+                buy_items=[],
+                not_sell_items=[],
+                run_date="2026-05-29",
+            )
+
+        self.assertFalse(result)
+        mock_warning.assert_called_once()
+        self.assertIn("AVSL monitor failed", mock_warning.call_args.args[0])
+
+    def test_avsl_monitor_includes_holdings_and_selected_symbols_and_logs_summary(self):
+        from tools.compare_avsl import AVSLComparisonRow
+
+        monitor_rows = [
+            AVSLComparisonRow("AAPL", 100.0, 90.0, 95.0, False, False, 5.0, 5.0, "BOTH_HOLD"),
+            AVSLComparisonRow("MSFT", 80.0, 90.0, 95.0, True, True, 5.0, 5.0, "BOTH_SELL"),
+            AVSLComparisonRow("NVDA", 92.0, 95.0, 90.0, True, False, -5.0, -5.0, "LEGACY_ONLY_SELL"),
+            AVSLComparisonRow("TSLA", 92.0, 90.0, 95.0, False, True, 5.0, 5.0, "ORIGINAL_ONLY_SELL"),
+            AVSLComparisonRow("BAD", None, None, None, None, None, None, None, "INSUFFICIENT_DATA"),
+        ]
+
+        finder = MagicMock()
+        with patch.dict("os.environ", {"AVSL_MONITOR_ENABLED": "true"}, clear=False), patch(
+            "main.compare_avsl_symbols", return_value=monitor_rows
+        ) as mock_compare, patch(
+            "main.write_monitor_outputs",
+            return_value={"latest_csv": Path("outputs/avsl_monitor/latest/report.csv")},
+        ), patch("main.logger.info") as mock_info:
+            result = main_module._run_avsl_monitor_safely(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings=["AAPL", "BAD"],
+                buy_items=["MSFT", "AAPL"],
+                not_sell_items=["NVDA", "TSLA"],
+                run_date="2026-05-29",
+            )
+
+        self.assertTrue(result)
+        mock_compare.assert_called_once_with(finder, ["AAPL", "BAD", "MSFT", "NVDA", "TSLA"])
+        summary_call = mock_info.call_args
+        self.assertIn("AVSL_MONITOR_SUMMARY", summary_call.args[0])
+        self.assertEqual(summary_call.args[1:7], (5, 1, 1, 1, 1, 1))

@@ -106,3 +106,48 @@ def test_write_csv_and_markdown_include_monitoring_notice(tmp_path: Path) -> Non
     assert "MONITORING ONLY" in markdown
     assert "not used for trading decisions" in markdown
     assert "BOTH_HOLD: 1" in markdown
+
+
+def test_write_monitor_outputs_creates_latest_and_history_dirs(tmp_path: Path) -> None:
+    rows = [
+        AVSLComparisonRow(
+            symbol="AAPL",
+            current_close=100.0,
+            legacy_avsl=90.0,
+            original_avsl=95.0,
+            legacy_sell_signal=False,
+            original_sell_signal=False,
+            difference_amount=5.0,
+            difference_percentage=5.555555,
+            status="BOTH_HOLD",
+        )
+    ]
+
+    from tools.compare_avsl import write_monitor_outputs
+
+    paths = write_monitor_outputs(rows, tmp_path, "2026-05-29")
+
+    assert paths["latest_csv"].parent == tmp_path / "latest"
+    assert paths["latest_markdown"].exists()
+    assert paths["history_csv"].parent == tmp_path / "history" / "2026-05-29"
+    assert paths["history_markdown"].exists()
+
+
+def test_summarize_status_counts_includes_zero_categories() -> None:
+    from tools.compare_avsl import summarize_status_counts
+
+    rows = [
+        AVSLComparisonRow("HOLD", 100.0, 90.0, 95.0, False, False, 5.0, 5.0, "BOTH_HOLD"),
+        AVSLComparisonRow("SELL", 80.0, 90.0, 95.0, True, True, 5.0, 5.0, "BOTH_SELL"),
+        AVSLComparisonRow("LEG", 92.0, 95.0, 90.0, True, False, -5.0, -5.0, "LEGACY_ONLY_SELL"),
+        AVSLComparisonRow("ORG", 92.0, 90.0, 95.0, False, True, 5.0, 5.0, "ORIGINAL_ONLY_SELL"),
+        AVSLComparisonRow("MISS", None, None, None, None, None, None, None, "INSUFFICIENT_DATA"),
+    ]
+
+    assert summarize_status_counts(rows) == {
+        "BOTH_HOLD": 1,
+        "BOTH_SELL": 1,
+        "LEGACY_ONLY_SELL": 1,
+        "ORIGINAL_ONLY_SELL": 1,
+        "INSUFFICIENT_DATA": 1,
+    }
