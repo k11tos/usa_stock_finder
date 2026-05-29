@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from tools.compare_avsl import (
+    AVSLComparisonRow,
+    classify_avsl_status,
+    compare_symbols,
+    render_markdown_summary,
+    write_csv,
+)
+
+
+def test_classify_avsl_status_categories() -> None:
+    assert classify_avsl_status(100.0, 90.0, 95.0) == ("BOTH_HOLD", False, False)
+    assert classify_avsl_status(80.0, 90.0, 95.0) == ("BOTH_SELL", True, True)
+    assert classify_avsl_status(92.0, 95.0, 90.0) == ("LEGACY_ONLY_SELL", True, False)
+    assert classify_avsl_status(92.0, 90.0, 95.0) == ("ORIGINAL_ONLY_SELL", False, True)
+
+
+def test_classify_avsl_status_missing_values_are_insufficient_data() -> None:
+    assert classify_avsl_status(None, 90.0, 95.0) == ("INSUFFICIENT_DATA", None, None)
+    assert classify_avsl_status(100.0, None, 95.0) == ("INSUFFICIENT_DATA", None, None)
+    assert classify_avsl_status(100.0, 90.0, None) == ("INSUFFICIENT_DATA", None, None)
+    assert classify_avsl_status(100.0, 0.0, 95.0) == ("INSUFFICIENT_DATA", None, None)
+
+
+def test_compare_symbols_handles_missing_legacy_or_original_values() -> None:
+    finder = MagicMock()
+    finder.current_price = {"NOLEGACY": 100.0, "NOORIG": 100.0}
+    finder.get_latest_avsl.side_effect = lambda symbol: None if symbol == "NOLEGACY" else 90.0
+    finder.calculate_original_avsl_report.side_effect = lambda symbol: None
+
+    rows = compare_symbols(finder, ["NOLEGACY", "NOORIG"])
+
+    assert [row.status for row in rows] == ["INSUFFICIENT_DATA", "INSUFFICIENT_DATA"]
+    assert rows[0].legacy_sell_signal is None
+    assert rows[1].original_sell_signal is None
+
+
+def test_compare_symbols_continues_after_symbol_failure() -> None:
+    finder = MagicMock()
+    finder.current_price = {"BAD": 100.0, "GOOD": 100.0}
+
+    def get_latest_avsl(symbol: str) -> float:
+        if symbol == "BAD":
+            raise RuntimeError("legacy failed")
+        return 90.0
+
+    original_report = MagicMock()
+    original_report.empty = False
+    original_report.__contains__.side_effect = lambda item: item == "original_avsl"
+    original_report.__getitem__.return_value.dropna.return_value.empty = False
+    original_report.__getitem__.return_value.dropna.return_value.iloc.__getitem__.return_value = 95.0
+    finder.get_latest_avsl.side_effect = get_latest_avsl
+    finder.calculate_original_avsl_report.return_value = original_report
+
+    rows = compare_symbols(finder, ["BAD", "GOOD"])
+
+    assert rows[0].status == "INSUFFICIENT_DATA"
+    assert "legacy failed" in rows[0].error
+    assert rows[1].status == "BOTH_HOLD"
+
+
+def test_compare_helper_does_not_call_order_or_sell_execution_logic() -> None:
+    finder = MagicMock()
+    finder.current_price = {"SAFE": 100.0}
+    finder.get_latest_avsl.return_value = 90.0
+    finder.calculate_original_avsl_report.return_value = None
+    forbidden_order_placement = MagicMock(side_effect=AssertionError("order placement called"))
+    forbidden_sell_execution = MagicMock(side_effect=AssertionError("sell execution called"))
+    finder.place_order = forbidden_order_placement
+    finder.execute_sell = forbidden_sell_execution
+
+    rows = compare_symbols(finder, ["SAFE"])
+
+    assert rows[0].status == "INSUFFICIENT_DATA"
+    forbidden_order_placement.assert_not_called()
+    forbidden_sell_execution.assert_not_called()
+    finder.get_latest_avsl.assert_called_once_with("SAFE")
+    finder.calculate_original_avsl_report.assert_called_once_with("SAFE")
+
+
+def test_write_csv_and_markdown_include_monitoring_notice(tmp_path: Path) -> None:
+    rows = [
+        AVSLComparisonRow(
+            symbol="AAPL",
+            current_close=100.0,
+            legacy_avsl=90.0,
+            original_avsl=95.0,
+            legacy_sell_signal=False,
+            original_sell_signal=False,
+            difference_amount=5.0,
+            difference_percentage=5.555555,
+            status="BOTH_HOLD",
+        )
+    ]
+
+    csv_path = write_csv(rows, tmp_path)
+    markdown = render_markdown_summary(rows, csv_path)
+
+    csv_text = csv_path.read_text(encoding="utf-8")
+    assert "symbol,current_close,legacy_avsl,original_avsl" in csv_text
+    assert "AAPL,100.000000,90.000000,95.000000" in csv_text
+    assert "MONITORING ONLY" in markdown
+    assert "not used for trading decisions" in markdown
+    assert "BOTH_HOLD: 1" in markdown
