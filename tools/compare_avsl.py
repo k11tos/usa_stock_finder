@@ -55,8 +55,11 @@ CSV_COLUMNS = (
 
 
 @dataclass(frozen=True)
-class AVSLComparisonRow:
-    """Single-symbol AVSL comparison row for CSV/markdown rendering."""
+class AVSLComparisonRow:  # pylint: disable=too-many-instance-attributes
+    """Single-symbol AVSL comparison row for CSV/markdown rendering.
+
+    The ten fields intentionally mirror the stable CSV/report schema.
+    """
 
     symbol: str
     current_close: float | None
