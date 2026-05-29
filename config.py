@@ -194,6 +194,9 @@ class AVSLConfig:
     # Optional post-run diagnostic monitor. Disabled by default so daily trading
     # execution and notifications remain unchanged unless explicitly enabled.
     MONITOR_ENABLED = os.getenv("AVSL_MONITOR_ENABLED", "False").lower() == "true"
+    MONITOR_TELEGRAM_ENABLED = (
+        os.getenv("AVSL_MONITOR_TELEGRAM_ENABLED", "False").lower() == "true"
+    )
 
     # Older threshold fallback parameters (kept for backward compatibility).
     PERIOD_DAYS = int(os.getenv("AVSL_PERIOD_DAYS", "50"))
@@ -318,6 +321,7 @@ def get_config() -> dict[str, Any]:
             "implementation_mode": AVSLConfig.IMPLEMENTATION_MODE,
             "original_buff_dormeier_enabled": AVSLConfig.ORIGINAL_BUFF_DORMEIER_ENABLED,
             "monitor_enabled": AVSLConfig.MONITOR_ENABLED,
+            "monitor_telegram_enabled": AVSLConfig.MONITOR_TELEGRAM_ENABLED,
             "period_days": AVSLConfig.PERIOD_DAYS,
             "volume_decline_threshold": AVSLConfig.VOLUME_DECLINE_THRESHOLD,
             "price_decline_threshold": AVSLConfig.PRICE_DECLINE_THRESHOLD,

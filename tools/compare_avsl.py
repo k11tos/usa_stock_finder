@@ -242,6 +242,65 @@ def summarize_status_counts(rows: Iterable[AVSLComparisonRow]) -> dict[str, int]
     return {status: counts.get(status, 0) for status in STATUS_CATEGORIES}
 
 
+def _format_limited_symbols(symbols: Iterable[str], max_symbols: int) -> str:
+    """Return a compact comma-separated symbol list with overflow count."""
+    normalized_symbols = unique_symbols(symbols)
+    if not normalized_symbols:
+        return "(none)"
+    visible_count = max(0, int(max_symbols))
+    visible_symbols = normalized_symbols[:visible_count]
+    remaining_count = len(normalized_symbols) - len(visible_symbols)
+    compact = ", ".join(visible_symbols)
+    if remaining_count > 0:
+        suffix = f"+{remaining_count} more"
+        return f"{compact}, {suffix}" if compact else suffix
+    return compact
+
+
+def build_telegram_monitor_summary(
+    rows: Iterable[AVSLComparisonRow],
+    artifact_path: Path | str | None = None,
+    *,
+    max_symbols_per_list: int = 8,
+) -> str:
+    """Build a compact Telegram-safe AVSL monitoring summary.
+
+    The summary is intentionally monitoring-only: it reports counts for all
+    comparison categories but only includes symbol lists for the two difference
+    categories to avoid Telegram bloat.
+    """
+    row_list = list(rows)
+    counts = summarize_status_counts(row_list)
+    symbols_by_status: dict[str, list[str]] = defaultdict(list)
+    for row in row_list:
+        symbols_by_status[row.status].append(row.symbol)
+
+    lines = [
+        "[AVSL Monitor]",
+        "MONITORING ONLY - not used for trading decisions.",
+        (
+            "Counts: "
+            f"BOTH_HOLD={counts['BOTH_HOLD']} | "
+            f"BOTH_SELL={counts['BOTH_SELL']} | "
+            f"LEGACY_ONLY_SELL={counts['LEGACY_ONLY_SELL']} | "
+            f"ORIGINAL_ONLY_SELL={counts['ORIGINAL_ONLY_SELL']} | "
+            f"INSUFFICIENT_DATA={counts['INSUFFICIENT_DATA']}"
+        ),
+        (
+            "LEGACY_ONLY_SELL: "
+            f"{_format_limited_symbols(symbols_by_status['LEGACY_ONLY_SELL'], max_symbols_per_list)}"
+        ),
+        (
+            "ORIGINAL_ONLY_SELL: "
+            f"{_format_limited_symbols(symbols_by_status['ORIGINAL_ONLY_SELL'], max_symbols_per_list)}"
+        ),
+    ]
+    if artifact_path is not None:
+        lines.append(f"Artifact: {artifact_path}")
+
+    return "\n".join(lines)
+
+
 def _format_csv_value(value: Any) -> str:
     if value is None:
         return ""

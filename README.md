@@ -319,10 +319,12 @@ The monitor includes current holdings first and also checks final buy / not-sell
 Environment variables:
 
 - `AVSL_MONITOR_ENABLED` (default: `False`)
+- `AVSL_MONITOR_TELEGRAM_ENABLED` (default: `False`) - sends a compact monitoring-only Telegram summary when the monitor is also enabled
 - `AVSL_MONITOR_OUTPUT_DIR` (default: `outputs/avsl_monitor`)
 
 ```env
 AVSL_MONITOR_ENABLED=true
+AVSL_MONITOR_TELEGRAM_ENABLED=false
 AVSL_MONITOR_OUTPUT_DIR=outputs/avsl_monitor
 ```
 
