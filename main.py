@@ -33,6 +33,8 @@ import logging
 import os.path
 import json
 import re
+from collections.abc import Iterable
+from pathlib import Path
 from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -41,7 +43,7 @@ from dotenv import load_dotenv
 import pandas as pd
 import yfinance as yf
 
-from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
+from config import AVSLConfig, ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
 from file_utils import load_json, read_csv_first_column, save_json
 from logging_setup import setup_logging
 from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
@@ -59,6 +61,8 @@ from live_performance_logger import (
 )
 
 from performance_report_runner import run_performance_report_safely
+from tools.compare_avsl import compare_symbols as compare_avsl_symbols
+from tools.compare_avsl import summarize_status_counts, unique_symbols, write_monitor_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -1706,6 +1710,54 @@ def _load_previous_tracked_items(file_path: str = "data/data.json") -> list[str]
     return []
 
 
+def _is_avsl_monitor_enabled() -> bool:
+    """Return whether the optional post-run AVSL monitor is enabled."""
+    return os.getenv("AVSL_MONITOR_ENABLED", str(AVSLConfig.MONITOR_ENABLED)).strip().lower() == "true"
+
+
+def _build_avsl_monitor_symbols(
+    current_holdings: Iterable[str],
+    buy_items: Iterable[str],
+    not_sell_items: Iterable[str],
+) -> list[str]:
+    """Build a compact AVSL monitor universe with holdings included first."""
+    return unique_symbols([*current_holdings, *buy_items, *not_sell_items])
+
+
+def _run_avsl_monitor_safely(
+    finder: UsaStockFinder,
+    current_holdings: list[str],
+    buy_items: list[str],
+    not_sell_items: list[str],
+    run_date: str,
+) -> bool:
+    """Run optional AVSL monitoring after trading decisions without affecting execution."""
+    if not _is_avsl_monitor_enabled():
+        return False
+
+    try:
+        symbols = _build_avsl_monitor_symbols(current_holdings, buy_items, not_sell_items)
+        rows = compare_avsl_symbols(finder, symbols)
+        output_dir = Path(os.getenv("AVSL_MONITOR_OUTPUT_DIR", "outputs/avsl_monitor"))
+        paths = write_monitor_outputs(rows, output_dir, run_date)
+        counts = summarize_status_counts(rows)
+        logger.info(
+            "AVSL_MONITOR_SUMMARY total=%d BOTH_HOLD=%d BOTH_SELL=%d "
+            "LEGACY_ONLY_SELL=%d ORIGINAL_ONLY_SELL=%d INSUFFICIENT_DATA=%d latest_dir=%s",
+            len(rows),
+            counts["BOTH_HOLD"],
+            counts["BOTH_SELL"],
+            counts["LEGACY_ONLY_SELL"],
+            counts["ORIGINAL_ONLY_SELL"],
+            counts["INSUFFICIENT_DATA"],
+            paths["latest_csv"].parent,
+        )
+        return True
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("AVSL monitor failed and daily run will continue: %s", str(exc))
+        return False
+
+
 def _log_execution_summary(
     prev_items: list[str],
     buy_items: list[str],
@@ -1903,6 +1955,13 @@ def main() -> None:
     save_json(final_items, "data/data.json")
     report_attempted = run_performance_report_safely()
     _send_performance_report_telegram_if_enabled(report_attempted)
+    _run_avsl_monitor_safely(
+        finder=finder,
+        current_holdings=us_stock_holdings,
+        buy_items=buy_items,
+        not_sell_items=not_sell_items,
+        run_date=run_date,
+    )
     _log_execution_summary(
         prev_items=us_stock_holdings,
         buy_items=buy_items,
