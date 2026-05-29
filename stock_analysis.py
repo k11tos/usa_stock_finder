@@ -22,7 +22,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from config import AVSLConfig, DataQualityConfig, StrategyConfig
+from config import AVSLConfig, DataQualityConfig, OriginalAVSLConfig, StrategyConfig
+from original_avsl import calculate_original_avsl
 
 logger = logging.getLogger(__name__)
 
@@ -913,6 +914,37 @@ class UsaStockFinder:
 
         except (IndexError, KeyError, AttributeError, ValueError) as e:
             logger.debug("Error getting latest AVSL for %s: %s", symbol, str(e))
+            return None
+
+    def calculate_original_avsl_report(self, symbol: str) -> pd.DataFrame | None:
+        """Return shadow-only original Buff Dormeier AVSL diagnostics for monitoring.
+
+        This helper uses already-loaded ``self.stock_data`` only. It is not used
+        by ``check_avsl_sell_signal()`` and therefore cannot change current live
+        trading behavior.
+        """
+        if not OriginalAVSLConfig.ENABLED:
+            return None
+
+        try:
+            if any(
+                symbol not in self.stock_data[column] or self.stock_data[column][symbol].empty
+                for column in ("High", "Low", "Close", "Volume")
+            ):
+                return None
+
+            ohlcv = pd.DataFrame(
+                {
+                    "High": self.stock_data["High"][symbol],
+                    "Low": self.stock_data["Low"][symbol],
+                    "Close": self.stock_data["Close"][symbol],
+                    "Volume": self.stock_data["Volume"][symbol],
+                }
+            )
+            return calculate_original_avsl(ohlcv)
+
+        except (IndexError, KeyError, AttributeError, ValueError) as e:
+            logger.debug("Error calculating original AVSL report for %s: %s", symbol, str(e))
             return None
 
     def check_avsl_sell_signal(
