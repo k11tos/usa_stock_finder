@@ -208,6 +208,23 @@ class AVSLConfig:
     TIMEFRAME = os.getenv("AVSL_TIMEFRAME", "1d")  # 타임프레임 (1d, 1wk, 1mo)
 
 
+class OriginalAVSLConfig:
+    """Shadow-only original Buff Dormeier AVSL monitoring configuration.
+
+    These settings belong to the separate original AVSL calculation path and
+    are not consumed by live buy/sell decision logic.  The default enables the
+    calculation for reporting/comparison while preserving the legacy
+    ``check_avsl_sell_signal()`` behavior.
+    """
+
+    ENABLED = os.getenv("ORIGINAL_AVSL_ENABLED", "True").lower() == "true"
+    FAST_PERIOD = int(os.getenv("ORIGINAL_AVSL_FAST_PERIOD", "5"))
+    SLOW_PERIOD = int(os.getenv("ORIGINAL_AVSL_SLOW_PERIOD", "20"))
+    MIN_LENGTH = int(os.getenv("ORIGINAL_AVSL_MIN_LENGTH", "3"))
+    MAX_LENGTH = int(os.getenv("ORIGINAL_AVSL_MAX_LENGTH", "50"))
+    STDDEV_MULT = float(os.getenv("ORIGINAL_AVSL_STDDEV_MULT", "2.0"))
+
+
 class DataQualityConfig:
     """Data quality and validation parameters."""
 
@@ -307,6 +324,15 @@ def get_config() -> dict[str, Any]:
             "fast_period": AVSLConfig.FAST_PERIOD,
             "slow_period": AVSLConfig.SLOW_PERIOD,
             "timeframe": AVSLConfig.TIMEFRAME,
+        },
+        "original_avsl": {
+            "enabled": OriginalAVSLConfig.ENABLED,
+            "fast_period": OriginalAVSLConfig.FAST_PERIOD,
+            "slow_period": OriginalAVSLConfig.SLOW_PERIOD,
+            "min_length": OriginalAVSLConfig.MIN_LENGTH,
+            "max_length": OriginalAVSLConfig.MAX_LENGTH,
+            "stddev_mult": OriginalAVSLConfig.STDDEV_MULT,
+            "trading_decisions_enabled": False,
         },
         "data_quality": {
             "min_data_points_ma_50": DataQualityConfig.MIN_DATA_POINTS_MA_50,
