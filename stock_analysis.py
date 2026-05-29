@@ -3,7 +3,8 @@ stock_analysis.py
 
 This module provides functionality for analyzing US stock market data using technical indicators.
 It includes methods for calculating moving averages, price-volume correlations, trend analysis,
-and legacy/approximate AVSL (Average Volume Support Level) sell signal detection to identify potential trading opportunities.
+and legacy/approximate AVSL (Average Volume Support Level) sell signal detection to identify potential
+trading opportunities.
 
 Dependencies:
     - yfinance: Yahoo Finance API client for fetching stock data
@@ -937,11 +938,16 @@ class UsaStockFinder:
         - Kept for backward compatibility
 
         Args:
-            period_days (int | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
-            volume_decline_threshold (float | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
-            price_decline_threshold (float | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
-            recent_days (int | None): Older threshold fallback parameter; not used in legacy/approximate AVSL mode
-            use_buff_avsl (bool): Historical name; if True, use the current legacy/approximate AVSL (default: True)
+            period_days (int | None): Older threshold fallback parameter; not used in legacy/approximate
+                AVSL mode
+            volume_decline_threshold (float | None): Older threshold fallback parameter; not used in
+                legacy/approximate AVSL mode
+            price_decline_threshold (float | None): Older threshold fallback parameter; not used in
+                legacy/approximate AVSL mode
+            recent_days (int | None): Older threshold fallback parameter; not used in legacy/approximate
+                AVSL mode
+            use_buff_avsl (bool): Historical name; if True, use the current legacy/approximate AVSL
+                (default: True)
 
         Returns:
             Dict[str, bool]: True if AVSL sell signal is detected (current price < AVSL stop loss)
