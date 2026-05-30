@@ -11,6 +11,31 @@ import pandas as pd
 from stock_analysis import UsaStockFinder
 
 
+def _deterministic_ohlcv(periods: int = 100, symbol: str = "TEST") -> pd.DataFrame:
+    """Build stable positive OHLCV data with enough history for AVSL tests."""
+    index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+    trend = np.linspace(25.0, 35.0, periods)
+    wave = np.sin(np.linspace(0.0, 8.0, periods)) * 0.5
+    close = trend + wave
+    high = close + 1.0
+    low = close - 1.0
+    volume = (
+        np.linspace(1000.0, 1800.0, periods)
+        + np.cos(np.linspace(0.0, 6.0, periods)) * 50.0
+    )
+    data = pd.DataFrame(
+        {
+            ("High", symbol): high,
+            ("Low", symbol): low,
+            ("Close", symbol): close,
+            ("Volume", symbol): volume,
+        },
+        index=index,
+    )
+    data.columns = pd.MultiIndex.from_tuples(data.columns)
+    return data
+
+
 class TestUsaStockFinder(unittest.TestCase):
     """Test UsaStockFinder class"""
 
@@ -473,6 +498,55 @@ class TestUsaStockFinder(unittest.TestCase):
             if latest_avsl is not None:
                 self.assertIsInstance(latest_avsl, (float, np.floating))
                 self.assertGreater(latest_avsl, 0)
+
+    def test_calculate_avsl_series_returns_valid_values_for_normal_ohlcv(self):
+        """legacy AVSL should return positive values when enough OHLCV data exists"""
+        with patch("yfinance.download") as mock_download:
+            mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="AVSL")
+            finder = UsaStockFinder(["AVSL"])
+
+        avsl_series = finder.calculate_avsl_series("AVSL")
+
+        self.assertIsNotNone(avsl_series)
+        self.assertIsInstance(avsl_series, pd.Series)
+        valid_values = avsl_series.dropna()
+        self.assertFalse(valid_values.empty)
+        self.assertTrue(np.isfinite(valid_values.to_numpy()).all())
+        self.assertTrue((valid_values > 0).all())
+
+    def test_get_latest_avsl_returns_positive_float_for_sufficient_data(self):
+        """latest legacy AVSL should be available for a normal synthetic dataset"""
+        with patch("yfinance.download") as mock_download:
+            mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="AVSL")
+            finder = UsaStockFinder(["AVSL"])
+
+        latest_avsl = finder.get_latest_avsl("AVSL")
+
+        self.assertIsInstance(latest_avsl, float)
+        self.assertGreater(latest_avsl, 0.0)
+
+    def test_calculate_avsl_series_handles_early_non_finite_vpci_lengths(self):
+        """early NaN/inf VPCI values should not make integer length conversion fail"""
+        symbol = "AAPL"
+        index = self.finder.stock_data.index
+        vpci = pd.Series(np.linspace(0.05, 0.15, len(index)), index=index)
+        vpci.iloc[:5] = [np.nan, np.inf, -np.inf, np.nan, 0.05]
+        vpci_df = pd.DataFrame(
+            {
+                "VPC": pd.Series(0.05, index=index),
+                "VPR": pd.Series(1.0, index=index),
+                "VM": pd.Series(1.0, index=index),
+                "VPCI": vpci,
+            }
+        )
+
+        with patch.object(self.finder, "calculate_vpci_components", return_value=vpci_df):
+            avsl_series = self.finder.calculate_avsl_series(symbol)
+
+        self.assertIsNotNone(avsl_series)
+        valid_values = avsl_series.dropna()
+        self.assertFalse(valid_values.empty)
+        self.assertTrue(np.isfinite(valid_values.to_numpy()).all())
 
     def test_check_avsl_sell_signal_legacy_approximate_mode(self):
         """check check_avsl_sell_signal in legacy/approximate AVSL mode (default)"""
