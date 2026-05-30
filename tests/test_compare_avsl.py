@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pandas as pd
+
 from tools.compare_avsl import (
     AVSLComparisonRow,
     build_telegram_monitor_summary,
@@ -81,6 +83,26 @@ def test_compare_helper_does_not_call_order_or_sell_execution_logic() -> None:
     forbidden_sell_execution.assert_not_called()
     finder.get_latest_avsl.assert_called_once_with("SAFE")
     finder.calculate_original_avsl_report.assert_called_once_with("SAFE")
+
+
+def test_compare_symbols_classifies_when_all_avsl_values_are_available() -> None:
+    finder = MagicMock()
+    finder.current_price = {"SAFE": 100.0, "LEG": 92.0}
+    finder.get_latest_avsl.side_effect = lambda symbol: 90.0 if symbol == "SAFE" else 95.0
+
+    def original_report(symbol: str) -> pd.DataFrame:
+        latest_original = 95.0 if symbol == "SAFE" else 90.0
+        return pd.DataFrame({"original_avsl": [latest_original]})
+
+    finder.calculate_original_avsl_report.side_effect = original_report
+
+    rows = compare_symbols(finder, ["SAFE", "LEG"])
+
+    assert [row.status for row in rows] == ["BOTH_HOLD", "LEGACY_ONLY_SELL"]
+    assert rows[0].legacy_sell_signal is False
+    assert rows[0].original_sell_signal is False
+    assert rows[1].legacy_sell_signal is True
+    assert rows[1].original_sell_signal is False
 
 
 def test_write_csv_and_markdown_include_monitoring_notice(tmp_path: Path) -> None:

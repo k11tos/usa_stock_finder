@@ -834,9 +834,23 @@ class UsaStockFinder:
             # Calculate VPCI components for the legacy/approximate AVSL.
             vpci_df = self.calculate_vpci_components(symbol, fast_period, slow_period)
             if vpci_df is None:
+                logger.debug(
+                    "%s: AVSL calculation failed - VPCI calculation failed or insufficient OHLCV data",
+                    symbol,
+                )
                 return None
 
-            if symbol not in self.stock_data["Low"] or self.stock_data["Low"][symbol].empty or len(vpci_df) < bars:
+            if (
+                symbol not in self.stock_data["Low"]
+                or self.stock_data["Low"][symbol].empty
+                or len(vpci_df) < bars
+            ):
+                logger.debug(
+                    "%s: AVSL calculation failed - insufficient Low/VPCI data (rows=%d, required=%d)",
+                    symbol,
+                    len(vpci_df),
+                    bars,
+                )
                 return None
 
             low = self.stock_data["Low"][symbol]
@@ -856,14 +870,23 @@ class UsaStockFinder:
             price_component = low * adjustment
 
             # Calculate legacy/approximate AVSL using adaptive length.
-            # For simplicity, use a rolling window based on average VPCI over the period
-            avg_vpci = vpci.rolling(window=bars).mean()
-            # Convert VPCI to length (scaled appropriately)
-            # VPCI values are typically small, so we scale them
-            dynamic_length = (length_base + avg_vpci * 10).clip(lower=length_base, upper=length_max).round().astype(int)
+            # For simplicity, use a rolling window based on average VPCI over the period.
+            # Rolling calculations naturally produce early NaN values; sanitize them before
+            # converting to integer lengths so sufficient later data is not discarded.
+            avg_vpci = (
+                vpci.replace([np.inf, -np.inf], np.nan)
+                .rolling(window=bars, min_periods=1)
+                .mean()
+            )
+            # Convert VPCI to length (scaled appropriately). VPCI values are typically small,
+            # so we scale them while falling back to the base length for non-finite values.
+            dynamic_length = (
+                length_base + avg_vpci.replace([np.inf, -np.inf], np.nan).fillna(0.0) * 10
+            )
+            dynamic_length = dynamic_length.clip(lower=length_base, upper=length_max).round().astype(int)
 
-            # Calculate moving average of price component with adaptive length
-            # Use a simplified approach: use the most recent dynamic_length value
+            # Calculate moving average of price component with adaptive length.
+            # Use a simplified approach: use the most recent dynamic_length value.
             recent_length = int(dynamic_length.iloc[-1]) if not dynamic_length.empty else length_base
             recent_length = max(length_base, min(recent_length, length_max))
 
@@ -874,11 +897,52 @@ class UsaStockFinder:
             price_component_std = price_component.rolling(window=recent_length).std()
 
             # Legacy/approximate AVSL = Price Component MA - (StdDev × Multiplier)
-            # This creates the lower Bollinger Band
-            avsl = price_component_ma - (price_component_std * stddev_mult)
+            # This creates the lower Bollinger Band. Keep the raw series separate so the
+            # latest row cannot be treated as valid solely because it was forward-filled.
+            raw_avsl = (price_component_ma - (price_component_std * stddev_mult)).replace(
+                [np.inf, -np.inf], np.nan
+            )
 
-            # Fill NaN values with forward fill (use previous valid AVSL)
-            avsl = avsl.ffill()
+            close = self.stock_data["Close"][symbol]
+            volume = self.stock_data["Volume"][symbol]
+            latest_inputs = {
+                "Low": low.iloc[-1],
+                "Close": close.iloc[-1],
+                "Volume": volume.iloc[-1],
+                "VPC": vpc.iloc[-1],
+                "VPCI": vpci.iloc[-1],
+                "price_component": price_component.iloc[-1],
+                "raw_avsl": raw_avsl.iloc[-1],
+            }
+            invalid_latest_inputs = []
+            for name, value in latest_inputs.items():
+                try:
+                    is_finite = bool(np.isfinite(float(value)))
+                except (TypeError, ValueError):
+                    is_finite = False
+                if not is_finite:
+                    invalid_latest_inputs.append(name)
+            if invalid_latest_inputs:
+                logger.debug(
+                    "%s: AVSL calculation failed - latest inputs are non-finite before forward-fill: %s",
+                    symbol,
+                    ", ".join(invalid_latest_inputs),
+                )
+                return None
+
+            # Fill historical warm-up NaN values with forward fill (use previous valid AVSL).
+            # The latest raw AVSL was validated above, so this cannot create a stale latest value.
+            avsl = raw_avsl.ffill()
+
+            if avsl.dropna().empty:
+                logger.debug(
+                    "%s: AVSL calculation failed - no valid AVSL values after calculation "
+                    "(rows=%d, recent_length=%d)",
+                    symbol,
+                    len(avsl),
+                    recent_length,
+                )
+                return None
 
             return avsl
 
