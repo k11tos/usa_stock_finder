@@ -897,11 +897,42 @@ class UsaStockFinder:
             price_component_std = price_component.rolling(window=recent_length).std()
 
             # Legacy/approximate AVSL = Price Component MA - (StdDev × Multiplier)
-            # This creates the lower Bollinger Band
-            avsl = price_component_ma - (price_component_std * stddev_mult)
+            # This creates the lower Bollinger Band. Keep the raw series separate so the
+            # latest row cannot be treated as valid solely because it was forward-filled.
+            raw_avsl = (price_component_ma - (price_component_std * stddev_mult)).replace(
+                [np.inf, -np.inf], np.nan
+            )
 
-            # Fill NaN values with forward fill (use previous valid AVSL)
-            avsl = avsl.replace([np.inf, -np.inf], np.nan).ffill()
+            close = self.stock_data["Close"][symbol]
+            volume = self.stock_data["Volume"][symbol]
+            latest_inputs = {
+                "Low": low.iloc[-1],
+                "Close": close.iloc[-1],
+                "Volume": volume.iloc[-1],
+                "VPC": vpc.iloc[-1],
+                "VPCI": vpci.iloc[-1],
+                "price_component": price_component.iloc[-1],
+                "raw_avsl": raw_avsl.iloc[-1],
+            }
+            invalid_latest_inputs = []
+            for name, value in latest_inputs.items():
+                try:
+                    is_finite = bool(np.isfinite(float(value)))
+                except (TypeError, ValueError):
+                    is_finite = False
+                if not is_finite:
+                    invalid_latest_inputs.append(name)
+            if invalid_latest_inputs:
+                logger.debug(
+                    "%s: AVSL calculation failed - latest inputs are non-finite before forward-fill: %s",
+                    symbol,
+                    ", ".join(invalid_latest_inputs),
+                )
+                return None
+
+            # Fill historical warm-up NaN values with forward fill (use previous valid AVSL).
+            # The latest raw AVSL was validated above, so this cannot create a stale latest value.
+            avsl = raw_avsl.ffill()
 
             if avsl.dropna().empty:
                 logger.debug(

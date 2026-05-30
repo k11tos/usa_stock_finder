@@ -548,6 +548,50 @@ class TestUsaStockFinder(unittest.TestCase):
         self.assertFalse(valid_values.empty)
         self.assertTrue(np.isfinite(valid_values.to_numpy()).all())
 
+    def test_get_latest_avsl_rejects_stale_forward_fill_when_latest_vpci_invalid(self):
+        """latest invalid VPCI should not return a previous day's forward-filled AVSL"""
+        with patch("yfinance.download") as mock_download:
+            mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="STALE")
+            finder = UsaStockFinder(["STALE"])
+
+        index = finder.stock_data.index
+        vpci_df = pd.DataFrame(
+            {
+                "VPC": pd.Series(0.05, index=index),
+                "VPR": pd.Series(1.0, index=index),
+                "VM": pd.Series(1.0, index=index),
+                "VPCI": pd.Series(0.10, index=index),
+            }
+        )
+        vpci_df.loc[index[-1], "VPCI"] = np.nan
+
+        with patch.object(finder, "calculate_vpci_components", return_value=vpci_df):
+            latest_avsl = finder.get_latest_avsl("STALE")
+
+        self.assertIsNone(latest_avsl)
+
+    def test_check_avsl_sell_signal_false_when_latest_avsl_rejected(self):
+        """legacy sell signal should not compare current close to stale latest AVSL"""
+        with patch("yfinance.download") as mock_download:
+            mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="STALE")
+            finder = UsaStockFinder(["STALE"])
+
+        index = finder.stock_data.index
+        vpci_df = pd.DataFrame(
+            {
+                "VPC": pd.Series(0.05, index=index),
+                "VPR": pd.Series(1.0, index=index),
+                "VM": pd.Series(1.0, index=index),
+                "VPCI": pd.Series(0.10, index=index),
+            }
+        )
+        vpci_df.loc[index[-1], "VPCI"] = np.inf
+
+        with patch.object(finder, "calculate_vpci_components", return_value=vpci_df):
+            result = finder.check_avsl_sell_signal(use_buff_avsl=True)
+
+        self.assertEqual(result, {"STALE": False})
+
     def test_check_avsl_sell_signal_legacy_approximate_mode(self):
         """check check_avsl_sell_signal in legacy/approximate AVSL mode (default)"""
         result = self.finder.check_avsl_sell_signal(use_buff_avsl=True)
