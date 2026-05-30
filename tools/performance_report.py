@@ -263,6 +263,52 @@ def load_strategy_equity_curve(
     return daily[["run_date", "strategy_equity"]].sort_values("run_date").reset_index(drop=True)
 
 
+def _coerce_price_series(value: pd.Series | pd.DataFrame, symbol: str) -> pd.Series:
+    if isinstance(value, pd.DataFrame):
+        if value.empty:
+            return pd.Series(dtype=float, name=symbol)
+        if value.shape[1] == 1:
+            series = value.iloc[:, 0]
+        else:
+            non_empty = value.dropna(axis=1, how="all")
+            if non_empty.empty:
+                return pd.Series(dtype=float, name=symbol)
+            series = non_empty.iloc[:, 0]
+    else:
+        series = value
+
+    series = pd.to_numeric(series, errors="coerce").dropna()
+    series.name = symbol
+    return series
+
+
+def _extract_benchmark_price_series(data: pd.DataFrame, symbol: str) -> pd.Series:
+    if data.empty:
+        return pd.Series(dtype=float, name=symbol)
+
+    price_fields = ("Adj Close", "Close")
+    if isinstance(data.columns, pd.MultiIndex):
+        for field in price_fields:
+            symbol_columns = [
+                column
+                for column in data.columns
+                if field in column and symbol in column
+            ]
+            if symbol_columns:
+                return _coerce_price_series(data.loc[:, symbol_columns], symbol)
+
+            field_columns = [column for column in data.columns if field in column]
+            if len(field_columns) == 1:
+                return _coerce_price_series(data.loc[:, field_columns], symbol)
+        return pd.Series(dtype=float, name=symbol)
+
+    for field in price_fields:
+        if field in data.columns:
+            return _coerce_price_series(data.loc[:, [field]], symbol)
+
+    return pd.Series(dtype=float, name=symbol)
+
+
 def fetch_benchmark_prices(symbols: list[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     prices = pd.DataFrame()
     for symbol in symbols:
@@ -273,10 +319,9 @@ def fetch_benchmark_prices(symbols: list[str], start: pd.Timestamp, end: pd.Time
             progress=False,
             auto_adjust=False,
         )
-        if data.empty:
+        benchmark_series = _extract_benchmark_price_series(data, symbol)
+        if benchmark_series.empty:
             continue
-        col = "Adj Close" if "Adj Close" in data.columns else "Close"
-        benchmark_series = data[col].rename(symbol)
         benchmark_series.index = pd.to_datetime(benchmark_series.index).normalize()
         prices = (
             prices.join(benchmark_series, how="outer")
