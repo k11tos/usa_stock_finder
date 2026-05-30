@@ -6,6 +6,7 @@ import pytest
 
 from tools.performance_report import (
     _calculate_modified_dietz_return_pct,
+    _extract_benchmark_price_series,
     align_benchmarks_to_strategy_dates,
     build_report,
     build_chart_data,
@@ -41,6 +42,73 @@ def test_benchmark_normalization() -> None:
     normalized = normalize_series(series)
     assert normalized.iloc[0] == 1.0
     assert normalized.iloc[1] == 1.1
+
+
+def test_extract_benchmark_price_series_prefers_single_level_adj_close() -> None:
+    idx = pd.date_range("2026-01-01", periods=3)
+    data = pd.DataFrame(
+        {"Close": [99.0, 100.0, 101.0], "Adj Close": [98.0, 99.0, 100.0]},
+        index=idx,
+    )
+
+    result = _extract_benchmark_price_series(data, "SPY")
+
+    assert result.name == "SPY"
+    assert result.tolist() == [98.0, 99.0, 100.0]
+
+
+def test_extract_benchmark_price_series_uses_single_level_close_fallback() -> None:
+    idx = pd.date_range("2026-01-01", periods=3)
+    data = pd.DataFrame(
+        {"Open": [95.0, 96.0, 97.0], "Close": [99.0, 100.0, 101.0]},
+        index=idx,
+    )
+
+    result = _extract_benchmark_price_series(data, "SPY")
+
+    assert result.name == "SPY"
+    assert result.tolist() == [99.0, 100.0, 101.0]
+
+
+def test_extract_benchmark_price_series_handles_one_column_dataframe_selection() -> None:
+    idx = pd.date_range("2026-01-01", periods=3)
+    data = pd.DataFrame({"Adj Close": ["98.0", "99.0", None]}, index=idx)
+
+    result = _extract_benchmark_price_series(data, "SPY")
+
+    assert result.name == "SPY"
+    assert result.tolist() == [98.0, 99.0]
+
+
+def test_extract_benchmark_price_series_handles_multiindex_yfinance_output() -> None:
+    idx = pd.date_range("2026-01-01", periods=3)
+    columns = pd.MultiIndex.from_tuples(
+        [("Adj Close", "SPY"), ("Close", "SPY"), ("Adj Close", "IWM")],
+        names=["Price", "Ticker"],
+    )
+    data = pd.DataFrame(
+        [[98.0, 99.0, 50.0], [99.0, 100.0, 51.0], [100.0, 101.0, 52.0]],
+        index=idx,
+        columns=columns,
+    )
+
+    result = _extract_benchmark_price_series(data, "SPY")
+
+    assert result.name == "SPY"
+    assert result.tolist() == [98.0, 99.0, 100.0]
+
+
+def test_extract_benchmark_price_series_missing_close_returns_empty() -> None:
+    idx = pd.date_range("2026-01-01", periods=3)
+    data = pd.DataFrame(
+        {"Open": [95.0, 96.0, 97.0], "High": [100.0, 101.0, 102.0]},
+        index=idx,
+    )
+
+    result = _extract_benchmark_price_series(data, "SPY")
+
+    assert result.name == "SPY"
+    assert result.empty
 
 
 def test_missing_empty_logs(tmp_path) -> None:
