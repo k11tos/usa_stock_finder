@@ -35,8 +35,17 @@ ACCOUNT_SNAPSHOT_HEADERS = [
     "profit_loss",
     "profit_loss_rate",
     "exchange",
+    # Legacy columns retained as USD aliases for existing report readers.
     "cash",
     "total_equity",
+    # Explicit post-migration columns.
+    "cash_usd",
+    "market_value_usd",
+    "total_equity_usd",
+    "cash_krw",
+    "broker_total_asset_krw",
+    "exchange_rate_krw_per_usd",
+    "broker_raw_total_balance",
 ]
 
 
@@ -133,10 +142,29 @@ def build_account_snapshot_rows(
 ) -> list[dict[str, Any]]:
     holdings = holdings_detail or []
     balance = account_balance or {}
-    cash = float(balance.get("available_cash", 0.0) or 0.0)
-    total_equity = float(balance.get("total_balance", 0.0) or 0.0)
+    cash_usd = float(balance.get("available_cash_usd", balance.get("available_cash", 0.0)) or 0.0)
+    total_equity_usd = float(balance.get("total_equity_usd", balance.get("total_balance", cash_usd)) or 0.0)
+    account_market_value_usd = float(balance.get("holdings_market_value_usd", 0.0) or 0.0)
+    cash_krw = float(balance.get("currency_cash_krw", 0.0) or 0.0)
+    broker_total_asset_krw = float(balance.get("broker_total_asset_krw", 0.0) or 0.0)
+    exchange_rate = float(balance.get("exchange_rate_krw_per_usd", 0.0) or 0.0)
+    broker_raw_total_balance = float(balance.get("broker_raw_output2_frcr_evlu_amt2", 0.0) or 0.0)
 
     rows: list[dict[str, Any]] = []
+
+    def base_row(market_value_usd: float) -> dict[str, Any]:
+        return {
+            "cash": cash_usd,
+            "total_equity": total_equity_usd,
+            "cash_usd": cash_usd,
+            "market_value_usd": market_value_usd,
+            "total_equity_usd": total_equity_usd,
+            "cash_krw": cash_krw,
+            "broker_total_asset_krw": broker_total_asset_krw,
+            "exchange_rate_krw_per_usd": exchange_rate,
+            "broker_raw_total_balance": broker_raw_total_balance,
+        }
+
     if not holdings:
         return [
             {
@@ -150,12 +178,12 @@ def build_account_snapshot_rows(
                 "profit_loss": 0.0,
                 "profit_loss_rate": 0.0,
                 "exchange": "",
-                "cash": cash,
-                "total_equity": total_equity,
+                **base_row(account_market_value_usd),
             }
         ]
 
     for holding in holdings:
+        market_value_usd = float(holding.get("evaluation_amount", 0.0) or 0.0)
         rows.append(
             {
                 "run_id": run_id,
@@ -164,16 +192,14 @@ def build_account_snapshot_rows(
                 "quantity": float(holding.get("quantity", 0.0) or 0.0),
                 "avg_price": float(holding.get("avg_price", 0.0) or 0.0),
                 "current_price": float(holding.get("current_price", 0.0) or 0.0),
-                "market_value": float(holding.get("evaluation_amount", 0.0) or 0.0),
+                "market_value": market_value_usd,
                 "profit_loss": float(holding.get("profit_loss", 0.0) or 0.0),
                 "profit_loss_rate": float(holding.get("profit_loss_rate", 0.0) or 0.0),
                 "exchange": holding.get("exchange", ""),
-                "cash": cash,
-                "total_equity": total_equity,
+                **base_row(market_value_usd),
             }
         )
     return rows
-
 
 def append_trade_signals(rows: list[dict[str, Any]], output_dir: str = "data/live") -> None:
     _append_rows(Path(output_dir) / "trade_signals.csv", TRADE_SIGNAL_HEADERS, rows)
