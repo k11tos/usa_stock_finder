@@ -253,13 +253,11 @@ def _compute_run_equity_with_warning(run_rows: pd.DataFrame) -> tuple[float, lis
         ratio_to_computed = legacy_total / computed_usd if computed_usd > 0 else None
         ratio_to_cash_looks_like_fx = (
             ratio_to_cash is not None
-            and ratio_to_cash >= 1200
-            and ratio_to_cash <= 1700
+            and 1200 <= ratio_to_cash <= 1700
         )
         ratio_to_computed_looks_like_fx = (
             ratio_to_computed is not None
-            and ratio_to_computed >= 1200
-            and ratio_to_computed <= 1700
+            and 1200 <= ratio_to_computed <= 1700
         )
         looks_like_krw_cash = (
             ratio_to_cash_looks_like_fx

@@ -204,7 +204,7 @@ def fetch_account_balance() -> dict[str, Any] | None:
                         quantity = _to_float(row.get("cblc_qty13", row.get("hldg_qty", row.get("quantity", 0))))
                         current_price = _to_float(row.get("ovrs_now_pric1", row.get("prpr", row.get("evlu_pric", 0))))
                         evaluation_amount = _to_float(row.get("frcr_evlu_amt2", row.get("evlu_amt", 0)))
-                        if evaluation_amount <= 0 and quantity > 0 and current_price > 0:
+                        if evaluation_amount <= 0 < quantity and current_price > 0:
                             evaluation_amount = quantity * current_price
                         key = (symbol, quantity, current_price, evaluation_amount)
                         if symbol and key not in seen_holdings:
@@ -299,7 +299,7 @@ def fetch_account_balance() -> dict[str, Any] | None:
                     holding.get("ovrs_now_pric1", holding.get("prpr", holding.get("evlu_pric", 0)))
                 )
                 evaluation_amount = _to_float(holding.get("frcr_evlu_amt2", holding.get("evlu_amt", 0)))
-                if evaluation_amount <= 0 and quantity > 0 and current_price > 0:
+                if evaluation_amount <= 0 < quantity and current_price > 0:
                     evaluation_amount = quantity * current_price
                 holdings_market_value_usd += evaluation_amount
 
