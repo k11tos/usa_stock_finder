@@ -219,7 +219,12 @@ def fetch_account_balance() -> dict[str, Any] | None:
                 if isinstance(output2, list):
                     for idx, account_info in enumerate(output2):
                         if not isinstance(account_info, dict):
-                            logger.warning("%s exchange output2[%d] is not a dict: %s", exchange, idx, type(account_info))
+                            logger.warning(
+                                "%s exchange output2[%d] is not a dict: %s",
+                                exchange,
+                                idx,
+                                type(account_info),
+                            )
                             continue
                         logger.info("%s exchange output2[%d] keys: %s", exchange, idx, list(account_info.keys()))
                         numeric_fields = _numeric_fields(account_info)
@@ -232,14 +237,21 @@ def fetch_account_balance() -> dict[str, Any] | None:
                             str(account_info.get("frcr_evlu_amt2", account_info.get("tot_evlu_amt", ""))),
                         )
                         if dedupe_key in currency_records:
-                            logger.info("%s exchange output2[%d] duplicate account-level currency record skipped", exchange, idx)
+                            logger.info(
+                                "%s exchange output2[%d] duplicate account-level currency record skipped",
+                                exchange,
+                                idx,
+                            )
                             continue
                         currency_records[dedupe_key] = account_info
 
                 output3 = balance.get("output3", []) or []
                 logger.info(
                     "%s exchange output3 exists: %s, type: %s, length: %s",
-                    exchange, output3 is not None, type(output3), len(output3) if isinstance(output3, (list, dict)) else "N/A",
+                    exchange,
+                    output3 is not None,
+                    type(output3),
+                    len(output3) if isinstance(output3, (list, dict)) else "N/A",
                 )
                 output3_iter = output3 if isinstance(output3, list) else [output3] if isinstance(output3, dict) else []
                 for idx, aggregate_info in enumerate(output3_iter):
@@ -283,7 +295,9 @@ def fetch_account_balance() -> dict[str, Any] | None:
             holdings_market_value_usd = 0.0
             for holding in holding_records:
                 quantity = _to_float(holding.get("cblc_qty13", holding.get("hldg_qty", holding.get("quantity", 0))))
-                current_price = _to_float(holding.get("ovrs_now_pric1", holding.get("prpr", holding.get("evlu_pric", 0))))
+                current_price = _to_float(
+                    holding.get("ovrs_now_pric1", holding.get("prpr", holding.get("evlu_pric", 0)))
+                )
                 evaluation_amount = _to_float(holding.get("frcr_evlu_amt2", holding.get("evlu_amt", 0)))
                 if evaluation_amount <= 0 and quantity > 0 and current_price > 0:
                     evaluation_amount = quantity * current_price

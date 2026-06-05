@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from csv import DictWriter
+from csv import DictReader, DictWriter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +53,45 @@ def generate_run_metadata(now: datetime | None = None) -> tuple[str, str]:
     """Generate deterministic run metadata in KST for one runtime execution."""
     current = now.astimezone(KST) if now else datetime.now(KST)
     return current.strftime("%Y%m%d_%H%M%S"), current.strftime("%Y-%m-%d")
+
+
+def _derive_migrated_account_snapshot_value(row: dict[str, Any], header: str) -> Any:
+    """Return a safe value for newly added account snapshot columns."""
+    if header == "cash_usd":
+        return row.get("cash", "")
+    if header == "market_value_usd":
+        return row.get("market_value", "")
+    if header == "total_equity_usd":
+        return ""
+    return ""
+
+
+def _migrate_account_snapshots_header(csv_path: Path) -> None:
+    """Rewrite an old account snapshot CSV with the current header, preserving rows."""
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        return
+
+    with csv_path.open("r", newline="", encoding="utf-8") as file_obj:
+        reader = DictReader(file_obj)
+        existing_headers = reader.fieldnames or []
+        if existing_headers == ACCOUNT_SNAPSHOT_HEADERS:
+            return
+
+        migrated_rows = []
+        for row in reader:
+            migrated_rows.append(
+                {
+                    header: row.get(header, _derive_migrated_account_snapshot_value(row, header))
+                    for header in ACCOUNT_SNAPSHOT_HEADERS
+                }
+            )
+
+    temp_path = csv_path.with_suffix(f"{csv_path.suffix}.tmp")
+    with temp_path.open("w", newline="", encoding="utf-8") as file_obj:
+        writer = DictWriter(file_obj, fieldnames=ACCOUNT_SNAPSHOT_HEADERS)
+        writer.writeheader()
+        writer.writerows(migrated_rows)
+    temp_path.replace(csv_path)
 
 
 def _append_rows(csv_path: Path, headers: list[str], rows: list[dict[str, Any]]) -> None:
@@ -142,8 +181,12 @@ def build_account_snapshot_rows(
 ) -> list[dict[str, Any]]:
     holdings = holdings_detail or []
     balance = account_balance or {}
-    cash_usd = float(balance.get("available_cash_usd", balance.get("available_cash", 0.0)) or 0.0)
-    total_equity_usd = float(balance.get("total_equity_usd", balance.get("total_balance", cash_usd)) or 0.0)
+    cash_usd = float(
+        balance.get("available_cash_usd", balance.get("available_cash", 0.0)) or 0.0
+    )
+    total_equity_usd = float(
+        balance.get("total_equity_usd", balance.get("total_balance", cash_usd)) or 0.0
+    )
     account_market_value_usd = float(balance.get("holdings_market_value_usd", 0.0) or 0.0)
     cash_krw = float(balance.get("currency_cash_krw", 0.0) or 0.0)
     broker_total_asset_krw = float(balance.get("broker_total_asset_krw", 0.0) or 0.0)
@@ -206,4 +249,6 @@ def append_trade_signals(rows: list[dict[str, Any]], output_dir: str = "data/liv
 
 
 def append_account_snapshots(rows: list[dict[str, Any]], output_dir: str = "data/live") -> None:
-    _append_rows(Path(output_dir) / "account_snapshots.csv", ACCOUNT_SNAPSHOT_HEADERS, rows)
+    csv_path = Path(output_dir) / "account_snapshots.csv"
+    _migrate_account_snapshots_header(csv_path)
+    _append_rows(csv_path, ACCOUNT_SNAPSHOT_HEADERS, rows)

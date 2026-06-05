@@ -251,10 +251,19 @@ def _compute_run_equity_with_warning(run_rows: pd.DataFrame) -> tuple[float, lis
     if legacy_total is not None:
         ratio_to_cash = legacy_total / cash_value if cash_value > 0 else None
         ratio_to_computed = legacy_total / computed_usd if computed_usd > 0 else None
-        looks_like_krw_cash = (
+        ratio_to_cash_looks_like_fx = (
             ratio_to_cash is not None
-            and 1200 <= ratio_to_cash <= 1700
-            and (ratio_to_computed is None or not (1200 <= ratio_to_computed <= 1700))
+            and ratio_to_cash >= 1200
+            and ratio_to_cash <= 1700
+        )
+        ratio_to_computed_looks_like_fx = (
+            ratio_to_computed is not None
+            and ratio_to_computed >= 1200
+            and ratio_to_computed <= 1700
+        )
+        looks_like_krw_cash = (
+            ratio_to_cash_looks_like_fx
+            and not ratio_to_computed_looks_like_fx
         )
         if looks_like_krw_cash and computed_usd > 0:
             warnings.append(
@@ -286,7 +295,12 @@ def load_strategy_equity_curve_with_warnings(
     if not snapshots_path.exists() or snapshots_path.stat().st_size == 0:
         return pd.DataFrame(columns=["run_date", "strategy_equity"]), []
 
-    df = pd.read_csv(snapshots_path)
+    try:
+        df = pd.read_csv(snapshots_path)
+    except pd.errors.ParserError as exc:
+        return pd.DataFrame(columns=["run_date", "strategy_equity"]), [
+            f"Malformed account snapshot CSV could not be parsed: {exc}"
+        ]
     if df.empty or "run_date" not in df.columns:
         return pd.DataFrame(columns=["run_date", "strategy_equity"]), []
 
@@ -704,7 +718,8 @@ def build_report(args: argparse.Namespace) -> None:
             "",
             "- New account snapshot columns use explicit USD/KRW names.",
             "- Legacy `cash`, `market_value`, and `total_equity` are retained as USD aliases for new rows.",
-            "- Old rows whose legacy `total_equity` looks like KRW-converted cash are ignored in favor of computed USD equity when possible.",
+            "- Old rows whose legacy `total_equity` looks like KRW-converted cash are ignored "
+            "in favor of computed USD equity when possible.",
             "",
             "## Caveat",
             "",

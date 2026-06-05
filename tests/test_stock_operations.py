@@ -180,7 +180,14 @@ class TestStockOperations(unittest.TestCase):
         mock_broker.fetch_present_balance.return_value = {
             "rt_cd": "0",
             "output1": [{"pdno": "AAPL-US", "cblc_qty13": "2", "ovrs_now_pric1": "150", "frcr_evlu_amt2": "300"}],
-            "output2": [{"crcy_cd": "USD", "frcr_dncl_amt_2": "1003.05", "frst_bltn_exrt": "1507.2", "frcr_evlu_amt2": "1511796"}],
+            "output2": [
+                {
+                    "crcy_cd": "USD",
+                    "frcr_dncl_amt_2": "1003.05",
+                    "frst_bltn_exrt": "1507.2",
+                    "frcr_evlu_amt2": "1511796",
+                }
+            ],
             "output3": [{"tot_asst_amt": "1511796"}],
         }
         mock_get_broker.return_value = mock_broker
@@ -199,7 +206,14 @@ class TestStockOperations(unittest.TestCase):
         mock_broker.fetch_present_balance.return_value = {
             "rt_cd": "0",
             "output1": [],
-            "output2": [{"crcy_cd": "USD", "frcr_dncl_amt_2": "1000", "frst_bltn_exrt": "1500", "frcr_evlu_amt2": "1500000"}],
+            "output2": [
+                {
+                    "crcy_cd": "USD",
+                    "frcr_dncl_amt_2": "1000",
+                    "frst_bltn_exrt": "1500",
+                    "frcr_evlu_amt2": "1500000",
+                }
+            ],
         }
         mock_get_broker.return_value = mock_broker
 
