@@ -173,6 +173,56 @@ class TestStockOperations(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    @patch("stock_operations._get_broker")
+    def test_fetch_account_balance_does_not_treat_krw_cash_conversion_as_usd_equity(self, mock_get_broker):
+        """frcr_evlu_amt2 in output2 is KRW-converted cash, not USD total equity."""
+        mock_broker = MagicMock()
+        mock_broker.fetch_present_balance.return_value = {
+            "rt_cd": "0",
+            "output1": [{"pdno": "AAPL-US", "cblc_qty13": "2", "ovrs_now_pric1": "150", "frcr_evlu_amt2": "300"}],
+            "output2": [
+                {
+                    "crcy_cd": "USD",
+                    "frcr_dncl_amt_2": "1003.05",
+                    "frst_bltn_exrt": "1507.2",
+                    "frcr_evlu_amt2": "1511796",
+                }
+            ],
+            "output3": [{"tot_asst_amt": "1511796"}],
+        }
+        mock_get_broker.return_value = mock_broker
+
+        result = fetch_account_balance()
+
+        self.assertEqual(result["available_cash_usd"], 1003.05)
+        self.assertAlmostEqual(result["broker_raw_output2_frcr_evlu_amt2"], 1511796.0)
+        self.assertAlmostEqual(result["total_equity_usd"], 1303.05)
+        self.assertAlmostEqual(result["total_balance"], 1303.05)
+
+    @patch("stock_operations._get_broker")
+    def test_fetch_account_balance_deduplicates_repeated_output2_cash(self, mock_get_broker):
+        """NASDAQ/NYSE calls can return the same account-level output2 row; do not double-count it."""
+        mock_broker = MagicMock()
+        mock_broker.fetch_present_balance.return_value = {
+            "rt_cd": "0",
+            "output1": [],
+            "output2": [
+                {
+                    "crcy_cd": "USD",
+                    "frcr_dncl_amt_2": "1000",
+                    "frst_bltn_exrt": "1500",
+                    "frcr_evlu_amt2": "1500000",
+                }
+            ],
+        }
+        mock_get_broker.return_value = mock_broker
+
+        result = fetch_account_balance()
+
+        self.assertEqual(result["available_cash_usd"], 1000.0)
+        self.assertEqual(result["currency_cash_krw"], 1500000.0)
+        self.assertEqual(result["total_equity_usd"], 1000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

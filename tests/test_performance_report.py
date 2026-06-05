@@ -432,7 +432,7 @@ def test_empty_snapshot_generates_safe_html(tmp_path) -> None:
     assert (out / "history" / "20260527_130000" / "index.html").exists()
 
 
-def test_no_cash_flow_file_keeps_simple_behavior() -> None:
+def test_no_cash_flow_file_returns_none() -> None:
     strategy = pd.DataFrame(
         {
             "run_date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
@@ -443,7 +443,7 @@ def test_no_cash_flow_file_keeps_simple_behavior() -> None:
         strategy,
         pd.DataFrame(columns=["date", "external_flow"]),
     )
-    assert adjusted == pytest.approx(10.0)
+    assert adjusted is None
 
 
 def test_deposit_reduces_return_distortion() -> None:
@@ -531,5 +531,110 @@ def test_invalid_cash_flow_rows_are_reported_safely(tmp_path, monkeypatch) -> No
     )
     build_report(args)
     summary = json.loads((out / "performance_summary.json").read_text(encoding="utf-8"))
-    assert summary["cash_flow_adjusted_return_pct"] == pytest.approx(5.0)
+    assert summary["cash_flow_adjusted_return_pct"] is None
     assert "Skipped 2 invalid cash-flow row(s)." in summary["cash_flow_warnings"]
+
+
+def test_prefers_explicit_total_equity_usd(tmp_path) -> None:
+    path = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 100,
+                "market_value": 50,
+                "total_equity": 999999,
+                "total_equity_usd": 150,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 100,
+                "market_value": 70,
+                "total_equity": 999999,
+                "total_equity_usd": 170,
+            },
+        ]
+    ).to_csv(path, index=False)
+
+    result = load_strategy_equity_curve(path)
+
+    assert result["strategy_equity"].tolist() == [150, 170]
+
+
+def test_avoids_misleading_legacy_krw_total_equity(tmp_path) -> None:
+    from tools.performance_report import load_strategy_equity_curve_with_warnings
+
+    path = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {
+                "run_id": "20260101_160000",
+                "run_date": "2026-01-01",
+                "cash": 1000,
+                "market_value": 5000,
+                "total_equity": 1500000,
+            },
+            {
+                "run_id": "20260102_160000",
+                "run_date": "2026-01-02",
+                "cash": 1000,
+                "market_value": 5200,
+                "total_equity": 1500000,
+            },
+        ]
+    ).to_csv(path, index=False)
+
+    result, warnings = load_strategy_equity_curve_with_warnings(path)
+
+    assert result["strategy_equity"].tolist() == [6000, 6200]
+    assert any("KRW-converted cash" in warning for warning in warnings)
+
+
+def test_missing_cash_flow_data_returns_none() -> None:
+    strategy = pd.DataFrame(
+        {"run_date": pd.to_datetime(["2026-01-01", "2026-01-02"]), "strategy_equity": [1000.0, 1100.0]}
+    )
+
+    assert _calculate_modified_dietz_return_pct(strategy, pd.DataFrame(columns=["date", "external_flow"])) is None
+
+
+def test_suspicious_daily_equity_jump_warning(tmp_path) -> None:
+    from tools.performance_report import load_strategy_equity_curve_with_warnings
+
+    path = tmp_path / "account_snapshots.csv"
+    pd.DataFrame(
+        [
+            {"run_id": "20260101_160000", "run_date": "2026-01-01", "total_equity_usd": 1000},
+            {"run_id": "20260102_160000", "run_date": "2026-01-02", "total_equity_usd": 1200},
+        ]
+    ).to_csv(path, index=False)
+
+    _result, warnings = load_strategy_equity_curve_with_warnings(path)
+
+    assert any(">= 10%" in warning for warning in warnings)
+
+
+def test_annualized_volatility_requires_30_snapshot_days() -> None:
+    from tools.performance_report import annualized_volatility_pct
+
+    assert annualized_volatility_pct(pd.Series([0.01] * 28)) is None
+    assert annualized_volatility_pct(pd.Series([0.01, -0.01] * 15)) is not None
+
+
+def test_malformed_snapshot_file_returns_warning(tmp_path) -> None:
+    from tools.performance_report import load_strategy_equity_curve_with_warnings
+
+    path = tmp_path / "account_snapshots.csv"
+    path.write_text(
+        "run_id,run_date,cash,total_equity\n"
+        "20260101_160000,2026-01-01,1000,1000\n"
+        "20260102_160000,2026-01-02,1000,1000,extra\n",
+        encoding="utf-8",
+    )
+
+    result, warnings = load_strategy_equity_curve_with_warnings(path)
+
+    assert result.empty
+    assert any("Malformed account snapshot CSV" in warning for warning in warnings)

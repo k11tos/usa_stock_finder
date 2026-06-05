@@ -25,7 +25,9 @@ VALID_CASH_FLOW_TYPES = {"deposit", "withdrawal", "dividend", "fee", "tax", "adj
 
 
 def _fmt_pct(value: float | None) -> str:
-    return "N/A" if value is None else f"{value:.2f}%"
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:.2f}%"
 
 
 def _generate_kst_run_id() -> str:
@@ -123,7 +125,9 @@ def _clean_numeric(series: pd.Series) -> pd.Series:
 def _load_cash_flows(cash_flows_path: str | Path) -> tuple[pd.DataFrame, list[str]]:
     path = Path(cash_flows_path)
     if not path.exists() or path.stat().st_size == 0:
-        return pd.DataFrame(columns=["date", "external_flow"]), []
+        return pd.DataFrame(columns=["date", "external_flow"]), [
+            "No valid external cash-flow data: cash-flow file is missing or empty."
+        ]
 
     raw = pd.read_csv(path)
     missing = REQUIRED_CASH_FLOW_COLUMNS - set(raw.columns)
@@ -172,7 +176,7 @@ def _calculate_modified_dietz_return_pct(
         else pd.Series(dtype=float)
     )
     if flow_series.empty:
-        return float(((end - start) / start) * 100.0)
+        return None
     flow_series.index = pd.to_datetime(flow_series.index, errors="coerce").normalize()
     flow_series = flow_series[flow_series.index.notna()]
 
@@ -180,7 +184,7 @@ def _calculate_modified_dietz_return_pct(
     end_date = pd.Timestamp(strategy_df["run_date"].iloc[-1]).normalize()
     period_flows = flow_series[(flow_series.index >= start_date) & (flow_series.index <= end_date)]
     if period_flows.empty:
-        return float(((end - start) / start) * 100.0)
+        return None
     total_days = max((end_date - start_date).days, 1)
 
     weighted_flows = 0.0
@@ -216,16 +220,118 @@ def _select_latest_run_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df.merge(latest, on=["run_date", "run_id"], how="inner")
 
 
-def _compute_run_equity(run_rows: pd.DataFrame) -> float:
-    total_equity = _clean_numeric(run_rows.get("total_equity", pd.Series(dtype=float)))
-    valid_total = total_equity[(total_equity > 0) & total_equity.notna()]
-    if not valid_total.empty:
-        return float(valid_total.iloc[0])
+def _first_positive(run_rows: pd.DataFrame, column: str) -> float | None:
+    if column not in run_rows.columns:
+        return None
+    values = _clean_numeric(run_rows[column])
+    valid = values[(values > 0) & values.notna()]
+    return float(valid.iloc[0]) if not valid.empty else None
 
-    cash_series = _clean_numeric(run_rows.get("cash", pd.Series(dtype=float))).dropna()
-    cash_value = float(cash_series.iloc[0]) if not cash_series.empty else 0.0
-    market_value = _clean_numeric(run_rows.get("market_value", pd.Series(dtype=float))).fillna(0.0)
-    return cash_value + float(market_value.sum())
+
+def _sum_numeric(run_rows: pd.DataFrame, column: str) -> float:
+    if column not in run_rows.columns:
+        return 0.0
+    return float(_clean_numeric(run_rows[column]).fillna(0.0).sum())
+
+
+def _compute_run_equity_with_warning(run_rows: pd.DataFrame) -> tuple[float, list[str]]:
+    warnings: list[str] = []
+    run_date = run_rows["run_date"].iloc[0] if "run_date" in run_rows.columns and not run_rows.empty else "unknown"
+
+    explicit_total = _first_positive(run_rows, "total_equity_usd")
+    if explicit_total is not None:
+        return explicit_total, warnings
+
+    cash_col = "cash_usd" if "cash_usd" in run_rows.columns else "cash"
+    market_col = "market_value_usd" if "market_value_usd" in run_rows.columns else "market_value"
+    cash_value = _first_positive(run_rows, cash_col) or 0.0
+    computed_usd = cash_value + _sum_numeric(run_rows, market_col)
+
+    legacy_total = _first_positive(run_rows, "total_equity")
+    if legacy_total is not None:
+        ratio_to_cash = legacy_total / cash_value if cash_value > 0 else None
+        ratio_to_computed = legacy_total / computed_usd if computed_usd > 0 else None
+        ratio_to_cash_looks_like_fx = (
+            ratio_to_cash is not None
+            and 1200 <= ratio_to_cash <= 1700
+        )
+        ratio_to_computed_looks_like_fx = (
+            ratio_to_computed is not None
+            and 1200 <= ratio_to_computed <= 1700
+        )
+        looks_like_krw_cash = (
+            ratio_to_cash_looks_like_fx
+            and not ratio_to_computed_looks_like_fx
+        )
+        if looks_like_krw_cash and computed_usd > 0:
+            warnings.append(
+                f"{run_date}: legacy total_equity likely represents KRW-converted cash, not USD account equity; "
+                "using cash + market_value instead."
+            )
+            return computed_usd, warnings
+        if computed_usd > 0 and abs(legacy_total - computed_usd) / computed_usd >= 0.5:
+            warnings.append(
+                f"{run_date}: legacy total_equity differs materially from cash + market_value; "
+                "using computed USD equity."
+            )
+            return computed_usd, warnings
+        return legacy_total, warnings
+
+    return computed_usd, warnings
+
+
+def _compute_run_equity(run_rows: pd.DataFrame) -> float:
+    return _compute_run_equity_with_warning(run_rows)[0]
+
+
+def load_strategy_equity_curve_with_warnings(
+    snapshots_path: str | Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[pd.DataFrame, list[str]]:
+    snapshots_path = Path(snapshots_path)
+    if not snapshots_path.exists() or snapshots_path.stat().st_size == 0:
+        return pd.DataFrame(columns=["run_date", "strategy_equity"]), []
+
+    try:
+        df = pd.read_csv(snapshots_path)
+    except pd.errors.ParserError as exc:
+        return pd.DataFrame(columns=["run_date", "strategy_equity"]), [
+            f"Malformed account snapshot CSV could not be parsed: {exc}"
+        ]
+    if df.empty or "run_date" not in df.columns:
+        return pd.DataFrame(columns=["run_date", "strategy_equity"]), []
+
+    df["run_date"] = pd.to_datetime(df["run_date"], errors="coerce").dt.normalize()
+    df = df.dropna(subset=["run_date"]).copy()
+    if df.empty:
+        return pd.DataFrame(columns=["run_date", "strategy_equity"]), []
+
+    if start_date:
+        df = df[df["run_date"] >= pd.to_datetime(start_date)]
+    if end_date:
+        df = df[df["run_date"] <= pd.to_datetime(end_date)]
+    if df.empty:
+        return pd.DataFrame(columns=["run_date", "strategy_equity"]), []
+
+    selected = _select_latest_run_rows(df)
+    rows: list[dict[str, object]] = []
+    warnings: list[str] = []
+    for run_date, group in selected.groupby("run_date", as_index=False):
+        equity, group_warnings = _compute_run_equity_with_warning(group)
+        rows.append({"run_date": run_date, "strategy_equity": equity})
+        warnings.extend(group_warnings)
+
+    daily = pd.DataFrame(rows)
+    daily = daily[["run_date", "strategy_equity"]].sort_values("run_date").reset_index(drop=True)
+    daily_returns = daily["strategy_equity"].pct_change().dropna()
+    for idx, daily_return in daily_returns.items():
+        if abs(float(daily_return)) >= 0.10:
+            warnings.append(
+                f"{daily.loc[idx, 'run_date'].strftime('%Y-%m-%d')}: daily equity change is "
+                f"{daily_return * 100:.2f}% (>= 10%); verify snapshots and external cash flows."
+            )
+    return daily, warnings
 
 
 def load_strategy_equity_curve(
@@ -233,34 +339,7 @@ def load_strategy_equity_curve(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> pd.DataFrame:
-    snapshots_path = Path(snapshots_path)
-    if not snapshots_path.exists() or snapshots_path.stat().st_size == 0:
-        return pd.DataFrame(columns=["run_date", "strategy_equity"])
-
-    df = pd.read_csv(snapshots_path)
-    if df.empty or "run_date" not in df.columns:
-        return pd.DataFrame(columns=["run_date", "strategy_equity"])
-
-    df["run_date"] = pd.to_datetime(df["run_date"], errors="coerce").dt.normalize()
-    df = df.dropna(subset=["run_date"]).copy()
-    if df.empty:
-        return pd.DataFrame(columns=["run_date", "strategy_equity"])
-
-    if start_date:
-        df = df[df["run_date"] >= pd.to_datetime(start_date)]
-    if end_date:
-        df = df[df["run_date"] <= pd.to_datetime(end_date)]
-    if df.empty:
-        return pd.DataFrame(columns=["run_date", "strategy_equity"])
-
-    selected = _select_latest_run_rows(df)
-    daily = (
-        selected.groupby("run_date", as_index=False)
-        .apply(lambda group: pd.Series({"strategy_equity": _compute_run_equity(group)}))
-        .reset_index(drop=True)
-    )
-
-    return daily[["run_date", "strategy_equity"]].sort_values("run_date").reset_index(drop=True)
+    return load_strategy_equity_curve_with_warnings(snapshots_path, start_date, end_date)[0]
 
 
 def _coerce_price_series(value: pd.Series | pd.DataFrame, symbol: str) -> pd.Series:
@@ -362,11 +441,12 @@ def cumulative_return_pct(series: pd.Series) -> float | None:
 
 def max_drawdown_pct(series: pd.Series) -> float | None:
     s = series.dropna()
-    if s.empty:
+    if s.empty or (s <= 0).all():
         return None
     rolling_peak = s.cummax()
-    drawdowns = (s - rolling_peak) / rolling_peak
-    return float(drawdowns.min() * 100.0)
+    drawdowns = (s - rolling_peak) / rolling_peak.replace(0, np.nan)
+    result = float(drawdowns.min() * 100.0)
+    return result if np.isfinite(result) else None
 
 
 def calculate_drawdown_series(series: pd.Series) -> pd.Series:
@@ -443,7 +523,7 @@ def write_performance_charts(chart_data: dict[str, pd.DataFrame], output_dir: Pa
 
 def annualized_volatility_pct(daily_returns: pd.Series) -> float | None:
     returns = daily_returns.dropna()
-    if len(returns) < 2:
+    if len(returns) < 29:  # 30 snapshot days produce 29 daily returns.
         return None
     return float(returns.std(ddof=1) * np.sqrt(252) * 100.0)
 
@@ -461,8 +541,11 @@ def build_report(args: argparse.Namespace) -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    strategy = load_strategy_equity_curve(args.snapshots, args.start_date, args.end_date)
+    strategy, equity_warnings = load_strategy_equity_curve_with_warnings(args.snapshots, args.start_date, args.end_date)
     cash_flows, cash_flow_warnings = _load_cash_flows(getattr(args, "cash_flows", DEFAULT_CASH_FLOWS))
+    data_quality_warnings = equity_warnings + cash_flow_warnings
+    if cash_flows.empty:
+        data_quality_warnings.append("Cash-flow-adjusted return is unavailable without valid external cash-flow data.")
     equity_curve_path = output_dir / "equity_curve.csv"
 
     if strategy.empty:
@@ -478,6 +561,7 @@ def build_report(args: argparse.Namespace) -> None:
             "annualized_volatility_pct": None,
             "cash_flow_adjusted_return_pct": None,
             "cash_flow_warnings": cash_flow_warnings,
+            "data_quality_warnings": data_quality_warnings,
         }
         (output_dir / "performance_summary.json").write_text(
             json.dumps(summary, indent=2),
@@ -524,6 +608,7 @@ def build_report(args: argparse.Namespace) -> None:
         ),
         "cash_flow_adjusted_return_pct": _calculate_modified_dietz_return_pct(strategy, cash_flows),
         "cash_flow_warnings": cash_flow_warnings,
+        "data_quality_warnings": data_quality_warnings,
     }
 
     benchmark_rows = []
@@ -582,13 +667,13 @@ def build_report(args: argparse.Namespace) -> None:
         ),
         (
             f"- Strategy max drawdown: {summary['max_drawdown_pct']:.2f}%"
-            if summary["max_drawdown_pct"] is not None
+            if summary["max_drawdown_pct"] is not None and not pd.isna(summary["max_drawdown_pct"])
             else "- Strategy max drawdown: N/A"
         ),
         (
             f"- Strategy annualized volatility: {summary['annualized_volatility_pct']:.2f}%"
             if summary["annualized_volatility_pct"] is not None
-            else "- Strategy annualized volatility: N/A"
+            else "- Strategy annualized volatility: N/A (< 30 snapshot days)"
         ),
         "",
         "## Benchmark Comparison",
@@ -622,10 +707,22 @@ def build_report(args: argparse.Namespace) -> None:
             "",
             f"- Best benchmark by cumulative return: {summary['best_benchmark']}",
             "",
+            "## Data Quality Warnings",
+            "",
+            *(f"- {warning}" for warning in data_quality_warnings),
+            "" if data_quality_warnings else "- None",
+            "",
+            "## Migration / Backward Compatibility Notes",
+            "",
+            "- New account snapshot columns use explicit USD/KRW names.",
+            "- Legacy `cash`, `market_value`, and `total_equity` are retained as USD aliases for new rows.",
+            "- Old rows whose legacy `total_equity` looks like KRW-converted cash are ignored "
+            "in favor of computed USD equity when possible.",
+            "",
             "## Caveat",
             "",
             "If external deposits/withdrawals occurred, simple equity-based returns may be distorted.",
-            "A future cash-flow log can improve accuracy.",
+            "A maintained cash-flow log improves accuracy.",
             "",
             "This report is for decision support only and does not place trades.",
         ]

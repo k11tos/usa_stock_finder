@@ -40,6 +40,25 @@ class APIError(Exception):
     """Custom exception for API-related errors."""
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    """Safely coerce KIS numeric string fields to floats."""
+    if value in (None, ""):
+        return default
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _numeric_fields(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        k: v
+        for k, v in row.items()
+        if isinstance(v, (int, float, str))
+        and str(v).replace(",", "").replace(".", "").replace("-", "").isdigit()
+    }
+
+
 def fetch_us_stock_holdings():
     """
     Fetches a list of stock tickers from the US stock account.
@@ -130,28 +149,16 @@ def _get_broker(exchange: str) -> mojito.KoreaInvestment:
     )
 
 
-def fetch_account_balance() -> dict[str, float] | None:
-    """
-    Fetches account balance and cash reserves from the stock account.
+def fetch_account_balance() -> dict[str, Any] | None:
+    """Fetch USD account cash/equity without mixing KIS KRW cash conversions into equity.
 
-    Retrieves available cash balance and other account balance information
-    from both NASDAQ and NYSE exchanges, then returns the combined balance.
+    KIS ``fetch_present_balance()`` returns three relevant sections:
+    - ``output1``: per-symbol holdings records (exchange-specific)
+    - ``output2``: currency/cash records (account-level; often repeated per exchange)
+    - ``output3``: broker aggregate records, when present
 
-    Returns:
-        dict[str, float] | None: Dictionary containing:
-            - "available_cash": Available cash balance - Summed value
-            - "total_balance": Total account balance - Summed value
-            - "buyable_cash": Buyable cash amount - Summed value
-            Returns None on failure
-
-    Raises:
-        APIError: Raised when all retry attempts fail
-
-    Note:
-        - Retries up to configured number of times
-        - Queries both NASDAQ and NYSE exchanges
-        - Combines balances from both exchanges (summed)
-        - Raises APIError on final failure instead of silently returning None
+    Legacy keys are preserved for callers, but ``total_balance`` now means USD
+    account equity: ``available_cash_usd + holdings_market_value_usd``.
     """
     logger.info("=" * 60)
     logger.info("fetch_account_balance() function started")
@@ -161,9 +168,10 @@ def fetch_account_balance() -> dict[str, float] | None:
     for attempt in range(APIConfig.MAX_RETRIES):
         try:
             logger.info("Fetching account balance attempt %d/%d", attempt + 1, APIConfig.MAX_RETRIES)
-            total_available_cash = 0.0
-            total_balance = 0.0
-            total_buyable_cash = 0.0
+            currency_records: dict[tuple[Any, ...], dict[str, Any]] = {}
+            output3_records: list[dict[str, Any]] = []
+            holding_records: list[dict[str, Any]] = []
+            seen_holdings: set[tuple[Any, ...]] = set()
 
             for exchange in exchanges:
                 logger.info("Fetching %s exchange", exchange)
@@ -171,197 +179,168 @@ def fetch_account_balance() -> dict[str, float] | None:
                 balance = broker.fetch_present_balance()
 
                 logger.info("%s exchange API call completed, rt_cd: %s", exchange, balance.get("rt_cd", "N/A"))
-
                 if balance["rt_cd"] != "0":
                     error_msg = balance.get("msg1", "Unknown error")
                     logger.error("%s exchange API error: %s", exchange, error_msg)
                     raise ValueError(f"API error for {exchange}: {error_msg}")
 
-                # Debug: Check API response structure (INFO level to always show)
                 logger.info("=" * 60)
                 logger.info("%s exchange API response keys: %s", exchange, list(balance.keys()))
                 logger.info(
                     "%s exchange API response rt_cd: %s, msg1: %s",
-                    exchange,
-                    balance.get("rt_cd"),
-                    balance.get("msg1", "N/A"),
+                    exchange, balance.get("rt_cd"), balance.get("msg1", "N/A"),
                 )
 
-                # output2 contains account balance information
-                # Common field names in Korean Investment API:
-                # - dnca_tot_amt: Total cash (available cash)
-                # - nxdy_excc_amt: Next day settlement amount
-                # - prvs_rcdl_excc_amt: Previous day settlement amount
-                # - cma_evlu_amt: CMA evaluation amount
-                # - bfdx_tot_amt: Previous day total amount
-                # - tot_evlu_amt: Total evaluation amount
-                # - ord_psbl_cash: Orderable cash
-                # - nrcvb_buy_amt: Unpaid buy amount
-                output2 = balance.get("output2", [])
+                output1 = balance.get("output1", []) or []
+                logger.info(
+                    "%s exchange output1 exists: %s, type: %s, length: %s",
+                    exchange, output1 is not None, type(output1), len(output1) if isinstance(output1, list) else "N/A",
+                )
+                if isinstance(output1, list):
+                    for row in output1:
+                        if not isinstance(row, dict):
+                            continue
+                        symbol = str(row.get("pdno", "")).replace("-US", "")
+                        quantity = _to_float(row.get("cblc_qty13", row.get("hldg_qty", row.get("quantity", 0))))
+                        current_price = _to_float(row.get("ovrs_now_pric1", row.get("prpr", row.get("evlu_pric", 0))))
+                        evaluation_amount = _to_float(row.get("frcr_evlu_amt2", row.get("evlu_amt", 0)))
+                        if evaluation_amount <= 0 < quantity and current_price > 0:
+                            evaluation_amount = quantity * current_price
+                        key = (symbol, quantity, current_price, evaluation_amount)
+                        if symbol and key not in seen_holdings:
+                            seen_holdings.add(key)
+                            holding_records.append(row)
+
+                output2 = balance.get("output2", []) or []
                 logger.info(
                     "%s exchange output2 exists: %s, type: %s, length: %s",
-                    exchange,
-                    output2 is not None,
-                    type(output2),
-                    len(output2) if isinstance(output2, (list, dict)) else "N/A",
+                    exchange, output2 is not None, type(output2), len(output2) if isinstance(output2, list) else "N/A",
                 )
-
-                if output2 and isinstance(output2, list) and len(output2) > 0:
-                    logger.info(
-                        "%s exchange output2[0] type: %s", exchange, type(output2[0]) if len(output2) > 0 else "N/A"
-                    )
-                    account_info = output2[0] if isinstance(output2[0], dict) else {}
-
-                    # Debug: Print all keys and values of account_info (INFO level)
-                    if isinstance(account_info, dict):
-                        logger.info(
-                            "%s exchange account_info all keys: %s",
-                            exchange,
-                            list(account_info.keys()),
-                        )
-                        # Print all fields and values (focus on numeric fields)
-                        numeric_fields = {
-                            k: v
-                            for k, v in account_info.items()
-                            if isinstance(v, (int, float, str)) and str(v).replace(".", "").replace("-", "").isdigit()
-                        }
-                        if numeric_fields:
-                            logger.info(
-                                "%s exchange account_info numeric fields: %s",
+                if isinstance(output2, list):
+                    for idx, account_info in enumerate(output2):
+                        if not isinstance(account_info, dict):
+                            logger.warning(
+                                "%s exchange output2[%d] is not a dict: %s",
                                 exchange,
-                                numeric_fields,
+                                idx,
+                                type(account_info),
                             )
-                        # Print all fields (first 10)
-                        logger.info(
-                            "%s exchange account_info all fields (first 10): %s",
-                            exchange,
-                            dict(list(account_info.items())[:10]),
+                            continue
+                        logger.info("%s exchange output2[%d] keys: %s", exchange, idx, list(account_info.keys()))
+                        numeric_fields = _numeric_fields(account_info)
+                        if numeric_fields:
+                            logger.info("%s exchange output2[%d] numeric fields: %s", exchange, idx, numeric_fields)
+                        dedupe_key = (
+                            account_info.get("crcy_cd", "USD"),
+                            str(account_info.get("frcr_dncl_amt_2", account_info.get("dnca_tot_amt", ""))),
+                            str(account_info.get("frst_bltn_exrt", "")),
+                            str(account_info.get("frcr_evlu_amt2", account_info.get("tot_evlu_amt", ""))),
                         )
-                    else:
-                        logger.warning("%s exchange account_info is not a dict: %s", exchange, type(account_info))
+                        if dedupe_key in currency_records:
+                            logger.info(
+                                "%s exchange output2[%d] duplicate account-level currency record skipped",
+                                exchange,
+                                idx,
+                            )
+                            continue
+                        currency_records[dedupe_key] = account_info
 
-                    # Try different possible field names for available cash
-                    # Using actual API response field names
-                    available_cash = 0.0
-                    for field in [
-                        "frcr_dncl_amt_2",  # Foreign currency available cash (actual field)
-                        "dnca_tot_amt",  # General available cash
-                        "dnca_tot_amt_2",
-                        "dnca_tot_amt_1",
-                        "cash",
-                    ]:
-                        value = account_info.get(field, 0) or 0
-                        if value:
-                            try:
-                                available_cash = float(value)
-                                logger.info(
-                                    "%s exchange: Available cash value found in field '%s': %.2f",
-                                    exchange,
-                                    field,
-                                    available_cash,
-                                )
-                                break
-                            except (ValueError, TypeError):
-                                continue
+                output3 = balance.get("output3", []) or []
+                logger.info(
+                    "%s exchange output3 exists: %s, type: %s, length: %s",
+                    exchange,
+                    output3 is not None,
+                    type(output3),
+                    len(output3) if isinstance(output3, (list, dict)) else "N/A",
+                )
+                output3_iter = output3 if isinstance(output3, list) else [output3] if isinstance(output3, dict) else []
+                for idx, aggregate_info in enumerate(output3_iter):
+                    if not isinstance(aggregate_info, dict):
+                        logger.warning("%s exchange output3[%d] is not a dict: %s", exchange, idx, type(aggregate_info))
+                        continue
+                    logger.info("%s exchange output3[%d] keys: %s", exchange, idx, list(aggregate_info.keys()))
+                    numeric_fields = _numeric_fields(aggregate_info)
+                    if numeric_fields:
+                        logger.info("%s exchange output3[%d] numeric fields: %s", exchange, idx, numeric_fields)
+                    output3_records.append(aggregate_info)
 
-                    # Total balance (evaluation amount)
-                    exchange_balance = 0.0
-                    for field in [
-                        "frcr_evlu_amt2",  # Foreign currency evaluation amount (actual field)
-                        "tot_evlu_amt",  # General total evaluation amount
-                        "bfdx_tot_amt",
-                        "evlu_amt",
-                        "total_amt",
-                    ]:
-                        value = account_info.get(field, 0) or 0
-                        if value:
-                            try:
-                                exchange_balance = float(value)
-                                logger.info(
-                                    "%s exchange: Total balance value found in field '%s': %.2f",
-                                    exchange,
-                                    field,
-                                    exchange_balance,
-                                )
-                                break
-                            except (ValueError, TypeError):
-                                continue
+            available_cash_usd = 0.0
+            buyable_cash_usd = 0.0
+            currency_cash_krw = 0.0
+            exchange_rate_krw_per_usd = 0.0
+            broker_raw_output2_frcr_evlu_amt2 = 0.0
 
-                    # Buyable cash amount
-                    buyable_cash = 0.0
-                    for field in [
-                        "nxdy_frcr_drwg_psbl_amt",  # Next day foreign currency withdrawable amount (actual field)
-                        "frcr_drwg_psbl_amt_1",  # Foreign currency withdrawable amount (actual field)
-                        "nxdy_excc_amt",  # Next day settlement amount
-                        "prvs_rcdl_excc_amt",  # Previous day settlement amount
-                        "ord_psbl_cash",  # Orderable cash
-                        "buyable_cash",
-                    ]:
-                        value = account_info.get(field, 0) or 0
-                        if value:
-                            try:
-                                buyable_cash = float(value)
-                                logger.info(
-                                    "%s exchange: Buyable cash value found in field '%s': %.2f",
-                                    exchange,
-                                    field,
-                                    buyable_cash,
-                                )
-                                break
-                            except (ValueError, TypeError):
-                                continue
-
-                    # Use available cash if buyable cash is not available
-                    if buyable_cash == 0.0:
-                        buyable_cash = available_cash
-
-                    # Sum balances from both exchanges
-                    total_available_cash += available_cash
-                    total_balance += exchange_balance  # Modified: Accumulated sum
-                    total_buyable_cash += buyable_cash
-
-                    logger.info(
-                        "%s exchange: Available cash=%.2f, Total balance=%.2f, Buyable cash=%.2f",
-                        exchange,
-                        available_cash,
-                        exchange_balance,
-                        buyable_cash,
+            for record in currency_records.values():
+                crcy_cd = str(record.get("crcy_cd", "USD") or "USD").upper()
+                cash_usd = _to_float(record.get("frcr_dncl_amt_2", record.get("dnca_tot_amt", 0)))
+                buyable_usd = _to_float(
+                    record.get(
+                        "nxdy_frcr_drwg_psbl_amt",
+                        record.get("frcr_drwg_psbl_amt_1", record.get("ord_psbl_cash", cash_usd)),
                     )
+                )
+                converted_krw = _to_float(record.get("frcr_evlu_amt2", 0))
+                exchange_rate = _to_float(record.get("frst_bltn_exrt", 0))
+                if crcy_cd == "USD":
+                    available_cash_usd += cash_usd
+                    buyable_cash_usd += buyable_usd if buyable_usd > 0 else cash_usd
+                    currency_cash_krw += converted_krw
+                    broker_raw_output2_frcr_evlu_amt2 += converted_krw
+                    if exchange_rate > 0 and exchange_rate_krw_per_usd == 0.0:
+                        exchange_rate_krw_per_usd = exchange_rate
                 else:
-                    logger.warning("%s exchange: output2 is empty or invalid", exchange)
-                    logger.info("%s exchange: balance structure - output2 type: %s", exchange, type(output2))
-                    if output2:
-                        logger.info("%s exchange: output2 value: %s", exchange, str(output2)[:200])
-                    # Check other possible keys when output2 is not available
-                    other_keys = [
-                        k for k in balance.keys() if k not in ["rt_cd", "msg1", "msg_cd", "output1", "output2"]
-                    ]
-                    if other_keys:
-                        logger.info("%s exchange: balance other keys: %s", exchange, other_keys)
+                    currency_cash_krw += converted_krw
+                    broker_raw_output2_frcr_evlu_amt2 += converted_krw
 
-            # Return combined balance from both exchanges
-            # Return normal response even if balance is 0 (0 is a valid value)
+            holdings_market_value_usd = 0.0
+            for holding in holding_records:
+                quantity = _to_float(holding.get("cblc_qty13", holding.get("hldg_qty", holding.get("quantity", 0))))
+                current_price = _to_float(
+                    holding.get("ovrs_now_pric1", holding.get("prpr", holding.get("evlu_pric", 0)))
+                )
+                evaluation_amount = _to_float(holding.get("frcr_evlu_amt2", holding.get("evlu_amt", 0)))
+                if evaluation_amount <= 0 < quantity and current_price > 0:
+                    evaluation_amount = quantity * current_price
+                holdings_market_value_usd += evaluation_amount
+
+            broker_total_asset_krw = 0.0
+            broker_foreign_evaluation_total_krw = 0.0
+            for record in output3_records:
+                if broker_total_asset_krw == 0.0:
+                    for field in ("tot_asst_amt", "total_asset", "tot_evlu_amt", "asst_icdc_amt"):
+                        broker_total_asset_krw = _to_float(record.get(field, 0))
+                        if broker_total_asset_krw > 0:
+                            break
+                if broker_foreign_evaluation_total_krw == 0.0:
+                    for field in ("frcr_evlu_tota", "frcr_evlu_amt", "ovrs_tot_pfls", "tot_evlu_pfls_amt"):
+                        broker_foreign_evaluation_total_krw = _to_float(record.get(field, 0))
+                        if broker_foreign_evaluation_total_krw > 0:
+                            break
+
+            total_equity_usd = available_cash_usd + holdings_market_value_usd
             result = {
-                "available_cash": total_available_cash,
-                "total_balance": total_balance if total_balance > 0 else total_available_cash,
-                "buyable_cash": total_buyable_cash if total_buyable_cash > 0 else total_available_cash,
+                "available_cash_usd": available_cash_usd,
+                "buyable_cash_usd": buyable_cash_usd if buyable_cash_usd > 0 else available_cash_usd,
+                "currency_cash_krw": currency_cash_krw,
+                "exchange_rate_krw_per_usd": exchange_rate_krw_per_usd,
+                "holdings_market_value_usd": holdings_market_value_usd,
+                "total_equity_usd": total_equity_usd,
+                "broker_total_asset_krw": broker_total_asset_krw,
+                "broker_foreign_evaluation_total_krw": broker_foreign_evaluation_total_krw,
+                "broker_raw_output2_frcr_evlu_amt2": broker_raw_output2_frcr_evlu_amt2,
+                "broker_raw_output3": output3_records,
+                # Backward-compatible USD aliases.
+                "available_cash": available_cash_usd,
+                "buyable_cash": buyable_cash_usd if buyable_cash_usd > 0 else available_cash_usd,
+                "total_balance": total_equity_usd,
             }
 
-            if total_available_cash > 0 or total_balance > 0:
-                logger.info(
-                    "Account balance fetched successfully: Available cash=%.2f, Total balance=%.2f, Buyable cash=%.2f",
-                    result["available_cash"],
-                    result["total_balance"],
-                    result["buyable_cash"],
-                )
-            else:
-                logger.warning(
-                    "Account balance is 0: Available cash=%.2f, Total balance=%.2f, Buyable cash=%.2f",
-                    result["available_cash"],
-                    result["total_balance"],
-                    result["buyable_cash"],
-                )
-
+            logger.info(
+                "Account balance fetched successfully: cash_usd=%.2f, holdings_market_value_usd=%.2f, "
+                "total_equity_usd=%.2f, cash_krw=%.2f, output2_frcr_evlu_amt2=%.2f",
+                available_cash_usd, holdings_market_value_usd, total_equity_usd,
+                currency_cash_krw, broker_raw_output2_frcr_evlu_amt2,
+            )
             return result
 
         except (ValueError, KeyError, TypeError) as e:
@@ -369,14 +348,9 @@ def fetch_account_balance() -> dict[str, float] | None:
             logger.error("=" * 60)
             logger.error(
                 "Error occurred while fetching account balance (attempt %d/%d): %s",
-                attempt + 1,
-                APIConfig.MAX_RETRIES,
-                str(e),
+                attempt + 1, APIConfig.MAX_RETRIES, str(e),
             )
             logger.error("Error type: %s", type(e).__name__)
-            import traceback
-
-            logger.error("Detailed error:\n%s", traceback.format_exc())
             if os.path.exists("token.dat"):
                 logger.info("Removing token.dat file")
                 os.remove("token.dat")
@@ -386,16 +360,13 @@ def fetch_account_balance() -> dict[str, float] | None:
             logger.error("Unexpected error occurred (attempt %d/%d): %s", attempt + 1, APIConfig.MAX_RETRIES, str(e))
             logger.error("Error type: %s", type(e).__name__)
             import traceback
-
             logger.error("Detailed error:\n%s", traceback.format_exc())
 
-    # All retries failed - raise exception instead of returning None
     error_msg = f"Failed to fetch account balance after {APIConfig.MAX_RETRIES} attempts"
     if last_error:
         error_msg += f": {last_error}"
     logger.error(error_msg)
     raise APIError(error_msg)
-
 
 def fetch_holdings_detail() -> list[dict[str, Any]] | None:
     """

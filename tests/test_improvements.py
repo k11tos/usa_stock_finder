@@ -116,10 +116,10 @@ class TestAccountBalanceSummation:
 
         result = fetch_account_balance()
 
-        # 두 거래소의 잔액이 합산되어야 함
+        # Distinct account-level cash records are summed, but KRW/legacy total fields are not used as USD equity.
         assert result is not None
         assert result["available_cash"] == 3000.0  # 1000 + 2000
-        assert result["total_balance"] == 11000.0  # 5000 + 6000
+        assert result["total_balance"] == 3000.0  # USD cash + no holdings
         assert result["buyable_cash"] == 3000.0  # 1000 + 2000
 
 
