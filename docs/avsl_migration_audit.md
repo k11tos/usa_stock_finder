@@ -10,42 +10,42 @@ Date: 2026-06-30
 - At the time of this audit, the live AVSL sell signal was still the legacy/approximate VPCI/Bollinger-like implementation.
 - At the time of this audit, the original AVSL path existed separately as monitoring-only.
 - The latest 2026-06-30 comparison artifact showed the same sell/hold signal for the observed 21 symbols (`BOTH_HOLD: 21`, no sell divergences, no insufficient data, no errors), but the AVSL values were not identical: the max absolute difference percentage was about 5.62% and the mean absolute difference percentage was about 1.67%.
-- Therefore, the safe statement is: **Current sell/hold signals matched for the observed 21 symbols.** Do not claim that the legacy and original AVSL values are identical.
+- Therefore, the safe statement is: **Observed sell/hold signals matched for the 21 symbols reviewed on 2026-06-30.** Do not claim that the legacy and original AVSL values are identical.
 
-## 1. Current live AVSL call path
+## 1. Pre-migration live AVSL call path
 
-Live sell decision flow:
+Pre-migration live sell decision flow:
 
 1. `main.py` calls `finder.check_avsl_sell_signal()` while evaluating sell candidates.
 2. The returned `avsl_signals` map is passed to `evaluate_sell_decisions(...)`.
 3. `sell_signals.evaluate_sell_decisions(...)` checks the AVSL tier after stop loss, special-situation take profit, and trailing stop, and creates an `AVSL` sell decision when the map contains `True` for the holding.
 
-Current signal provider:
+Pre-migration signal provider:
 
-- `UsaStockFinder.check_avsl_sell_signal()` is the live function that returns `{symbol: bool}` AVSL signals.
-- Its default path is `use_buff_avsl=True`, despite the historical parameter name.
-- In that default path, it calls `get_latest_avsl(symbol)` and compares latest close with the returned AVSL stop using strict `current_price < latest_avsl`.
+- At the time of the audit, `UsaStockFinder.check_avsl_sell_signal()` was the live function that returns `{symbol: bool}` AVSL signals.
+- Its default path was `use_buff_avsl=True`, despite the historical parameter name.
+- In that pre-migration default path, it called `get_latest_avsl(symbol)` and compared latest close with the returned AVSL stop using strict `current_price < latest_avsl`.
 
-Current implementation used by live signals:
+Pre-migration implementation used by live signals:
 
-- `get_latest_avsl(symbol)` calls `calculate_avsl_series(symbol)`.
+- At the time of the audit, `get_latest_avsl(symbol)` called `calculate_avsl_series(symbol)`.
 - `calculate_avsl_series(...)` was then documented as the live sell-signal implementation and as a legacy/approximate AVSL with VPCI and Bollinger-band concepts, not the exact original Buff Dormeier formula.
-- The older threshold fallback remains reachable only if `check_avsl_sell_signal(use_buff_avsl=False)` is called; the live call in `main.py` does not pass that flag and therefore uses the default legacy/approximate VPCI AVSL path.
+- At the time of the audit, the older threshold fallback was reachable only if `check_avsl_sell_signal(use_buff_avsl=False)` was called; the live call in `main.py` did not pass that flag and therefore used the default legacy/approximate VPCI AVSL path.
 
-## 2. Current original AVSL call path
+## 2. Pre-migration original AVSL call path
 
-Imports and exposure:
+Pre-migration imports and exposure:
 
 - `stock_analysis.py` imports `calculate_original_avsl` from `original_avsl.py`.
 - `original_avsl.py` exposes `calculate_original_avsl(...)`, which returns a monitoring DataFrame containing `VPC`, `VPR`, `VM`, `VPCI`, `dynamic_length`, `price_component`, and `original_avsl`.
 - `UsaStockFinder.calculate_original_avsl_report(symbol)` is the finder-level wrapper. It builds an OHLCV DataFrame from already-loaded `self.stock_data` and calls `calculate_original_avsl(ohlcv)`.
 
-Live trading impact:
+Pre-migration live trading impact:
 
 - The original AVSL module then described itself as a separate monitoring path pending explicit live wiring.
 - `calculate_original_avsl(...)` then said its result was for monitoring/comparison only and did not call network APIs.
-- `calculate_original_avsl_report(...)` also states it is not used by `check_avsl_sell_signal()` and therefore cannot change current live trading behavior.
-- The only current runtime consumer found is the comparison monitor, which reads original AVSL values for diagnostics.
+- At the time of the audit, `calculate_original_avsl_report(...)` also stated it was not used by `check_avsl_sell_signal()` and therefore could not change then-current live trading behavior.
+- The only runtime consumer found at the time of the audit was the comparison monitor, which read original AVSL values for diagnostics.
 
 ## 3. Monitor artifacts and notifications
 
@@ -53,7 +53,7 @@ Invocation:
 
 - `main.py` imports AVSL monitor helpers from `tools.compare_avsl`.
 - After final items are saved and the performance report path runs, `main.py` invokes `_run_avsl_monitor_safely(...)`.
-- `_run_avsl_monitor_safely(...)` exits immediately unless the monitor is enabled, builds the monitor symbol universe from current holdings plus buy/not-sell symbols, runs `compare_avsl_symbols(finder, symbols)`, writes monitor outputs, and logs summary counts.
+- `_run_avsl_monitor_safely(...)` exits immediately unless the monitor is enabled, builds the monitor symbol universe from then-current holdings plus buy/not-sell symbols, runs `compare_avsl_symbols(finder, symbols)`, writes monitor outputs, and logs summary counts.
 
 Monitor implementation and artifacts:
 
@@ -68,7 +68,7 @@ Configuration and environment variables:
 - `AVSL_MONITOR_OUTPUT_DIR` controls artifact root; default is `outputs/avsl_monitor`.
 - `ORIGINAL_AVSL_ENABLED` controls whether `calculate_original_avsl_report(...)` returns original AVSL diagnostics; default is `True` through `OriginalAVSLConfig.ENABLED`.
 - Original AVSL calculation parameters are `ORIGINAL_AVSL_FAST_PERIOD`, `ORIGINAL_AVSL_SLOW_PERIOD`, `ORIGINAL_AVSL_MIN_LENGTH`, `ORIGINAL_AVSL_MAX_LENGTH`, and `ORIGINAL_AVSL_STDDEV_MULT`.
-- Legacy/approximate live AVSL parameters remain `AVSL_BARS`, `AVSL_STDDEV_MULT`, `AVSL_MIN_LENGTH`, `AVSL_MAX_LENGTH`, `AVSL_FAST_PERIOD`, `AVSL_SLOW_PERIOD`, and `AVSL_TIMEFRAME`; older threshold fallback vars are still present but not used by the default live path.
+- At the time of the audit, legacy/approximate live AVSL parameters were `AVSL_BARS`, `AVSL_STDDEV_MULT`, `AVSL_MIN_LENGTH`, `AVSL_MAX_LENGTH`, `AVSL_FAST_PERIOD`, `AVSL_SLOW_PERIOD`, and `AVSL_TIMEFRAME`; older threshold fallback vars were present but not used by the then-default live path.
 
 Telegram path:
 
@@ -87,9 +87,9 @@ Telegram path:
 - **Monitor removal loses observability.** Removing the comparison monitor in the same migration should be paired with tests and logs that make the new single live AVSL path auditable.
 - **Keep the implementation price/OHLCV based.** Do not introduce nondeterministic, broker-state, order-history, sentiment, or external-news inputs into AVSL sell decisions.
 
-## 5. Concrete file-level migration checklist for the next PR
+## 5. Historical file-level migration checklist for the promotion PR
 
-Live sell path changes:
+Live sell path changes planned at the time of the audit:
 
 - `stock_analysis.py`
   - Update `UsaStockFinder.check_avsl_sell_signal()` so the default live AVSL signal uses `calculate_original_avsl_report(...)` or a direct original-AVSL helper and still returns `{symbol: bool}`.
@@ -105,7 +105,7 @@ Live sell path changes:
   - Keep the call to `finder.check_avsl_sell_signal()` if its contract remains unchanged.
   - Remove imports and invocation for the AVSL comparison monitor once the monitor is intentionally retired.
 
-Monitor/config cleanup:
+Monitor/config cleanup planned at the time of the audit:
 
 - `tools/compare_avsl.py`
   - Remove the legacy-vs-original comparison CLI/monitor when no longer needed, or replace it with a one-path original AVSL diagnostic if operational visibility is still desired.
@@ -118,7 +118,7 @@ Monitor/config cleanup:
 - `docs/original_avsl_migration_plan.md`
   - Mark the monitoring plan as superseded or update it to a post-migration validation note.
 
-Tests to add/update:
+Tests planned at the time of the audit:
 
 - Update `tests/test_original_avsl.py` so it verifies `check_avsl_sell_signal()` uses original AVSL for live decisions after migration.
 - Add a regression test for a close-to-stop / SHIP-like case where original AVSL is tighter than legacy AVSL and should trigger an earlier sell after migration.
