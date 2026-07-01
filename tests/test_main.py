@@ -7,6 +7,7 @@ It tests the main functions for stock analysis and selection.
 
 import unittest
 import json
+import tempfile
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
@@ -1791,6 +1792,75 @@ class TestBuyFunnelFormatting(unittest.TestCase):
 class TestAVSLPostRunMonitor(unittest.TestCase):
     """Tests for optional post-run AVSL monitoring orchestration."""
 
+    def test_avsl_monitor_telegram_enabled_defaults_false(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(
+                main_module._is_avsl_monitor_telegram_enabled()  # pylint: disable=protected-access
+            )
+
+    def test_avsl_monitor_telegram_unset_does_not_send_message(self):
+        from tools.compare_avsl import AVSLComparisonRow
+
+        monitor_rows = [
+            AVSLComparisonRow("AAPL", 100.0, 90.0, 95.0, False, False, 5.0, 5.0, "BOTH_HOLD"),
+        ]
+
+        finder = MagicMock()
+        with patch.dict("os.environ", {"AVSL_MONITOR_ENABLED": "true"}, clear=True), patch(
+            "main.compare_avsl_symbols", return_value=monitor_rows
+        ), patch(
+            "main.write_monitor_outputs",
+            return_value={
+                "latest_csv": Path("outputs/avsl_monitor/latest/report.csv"),
+                "latest_markdown": Path("outputs/avsl_monitor/latest/report.md"),
+            },
+        ), patch("main.send_telegram_message") as mock_send:
+            result = main_module._run_avsl_monitor_safely(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings=["AAPL"],
+                buy_items=[],
+                not_sell_items=[],
+                run_date="2026-05-29",
+            )
+
+        self.assertTrue(result)
+        mock_send.assert_not_called()
+
+    def test_avsl_monitor_enabled_writes_local_artifacts_when_telegram_unset(self):
+        from tools.compare_avsl import AVSLComparisonRow
+
+        monitor_rows = [
+            AVSLComparisonRow("AAPL", 100.0, 90.0, 95.0, False, False, 5.0, 5.0, "BOTH_HOLD"),
+        ]
+
+        finder = MagicMock()
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.dict(
+            "os.environ",
+            {"AVSL_MONITOR_ENABLED": "true", "AVSL_MONITOR_OUTPUT_DIR": tmp_dir},
+            clear=True,
+        ), patch("main.compare_avsl_symbols", return_value=monitor_rows), patch(
+            "main.send_telegram_message"
+        ) as mock_send:
+            result = main_module._run_avsl_monitor_safely(  # pylint: disable=protected-access
+                finder=finder,
+                current_holdings=["AAPL"],
+                buy_items=[],
+                not_sell_items=[],
+                run_date="2026-05-29",
+            )
+
+            latest_csv = Path(tmp_dir) / "latest" / "20260529_avsl_comparison.csv"
+            latest_markdown = Path(tmp_dir) / "latest" / "20260529_avsl_comparison.md"
+            history_csv = Path(tmp_dir) / "history" / "2026-05-29" / "20260529_avsl_comparison.csv"
+            history_markdown = Path(tmp_dir) / "history" / "2026-05-29" / "20260529_avsl_comparison.md"
+            self.assertTrue(result)
+            self.assertTrue(latest_csv.exists())
+            self.assertTrue(latest_markdown.exists())
+            self.assertTrue(history_csv.exists())
+            self.assertTrue(history_markdown.exists())
+            self.assertIn("MONITORING ONLY", latest_markdown.read_text(encoding="utf-8"))
+            mock_send.assert_not_called()
+
     def test_avsl_monitor_disabled_preserves_existing_behavior(self):
         finder = MagicMock()
         with patch.dict("os.environ", {"AVSL_MONITOR_ENABLED": "false"}, clear=False), patch(
@@ -1883,6 +1953,7 @@ class TestAVSLPostRunMonitor(unittest.TestCase):
 
         self.assertTrue(result)
         mock_compare.assert_called_once_with(finder, ["AAPL", "BAD", "MSFT", "NVDA", "TSLA"])
-        summary_call = mock_info.call_args
-        self.assertIn("AVSL_MONITOR_SUMMARY", summary_call.args[0])
+        summary_call = next(
+            call for call in mock_info.call_args_list if "AVSL_MONITOR_SUMMARY" in call.args[0]
+        )
         self.assertEqual(summary_call.args[1:7], (5, 1, 1, 1, 1, 1))
