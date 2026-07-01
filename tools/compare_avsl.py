@@ -185,7 +185,7 @@ def _get_current_close(finder: Any, symbol: str) -> float | None:
 
 
 def _get_latest_original_avsl(finder: Any, symbol: str) -> float | None:
-    """Read the latest original AVSL diagnostic value from the shadow-only report."""
+    """Read the latest original AVSL value used by the live sell path."""
     report = finder.calculate_original_avsl_report(symbol)
     if report is None or report.empty or "original_avsl" not in report:
         return None
