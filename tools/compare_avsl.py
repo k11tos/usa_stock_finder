@@ -1,9 +1,9 @@
 """Dry-run comparison helper for legacy AVSL versus original AVSL.
 
 This module is intentionally monitoring-only. It does not place orders, execute
-sells, or feed its output back into live trading decisions. Current sell logic
-continues to use the legacy/approximate AVSL path unless a separate future
-change explicitly modifies trading behavior.
+sells, or feed its output back into live trading decisions. Live sell logic now
+uses original AVSL; this tool keeps comparing original against the temporary
+legacy/approximate path during the transition.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from stock_analysis import UsaStockFinder  # pylint: disable=wrong-import-positi
 
 MONITORING_NOTICE = (
     "MONITORING ONLY - AVSL comparison output is not used for trading decisions "
-    "and must not alter sell decisions."
+    "and does not place orders; live AVSL sell decisions now use original AVSL."
 )
 DEFAULT_PORTFOLIO_CSV = REPO_ROOT / "portfolio" / "portfolio.csv"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "avsl_monitor"
@@ -185,7 +185,7 @@ def _get_current_close(finder: Any, symbol: str) -> float | None:
 
 
 def _get_latest_original_avsl(finder: Any, symbol: str) -> float | None:
-    """Read the latest original AVSL diagnostic value from the shadow-only report."""
+    """Read the latest original AVSL value from the live calculation report."""
     report = finder.calculate_original_avsl_report(symbol)
     if report is None or report.empty or "original_avsl" not in report:
         return None

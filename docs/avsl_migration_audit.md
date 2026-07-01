@@ -2,11 +2,13 @@
 
 Date: 2026-06-30
 
+> Historical note: this audit captured the pre-migration state before original AVSL was promoted to live sell decisions. Current code now uses original AVSL for the live AVSL sell signal while retaining legacy/approximate AVSL for temporary comparison and rollback.
+
 ## Executive summary
 
 - No functional trading changes are made in this audit.
-- The current live AVSL sell signal is still the legacy/approximate VPCI/Bollinger-like implementation.
-- The original AVSL path exists separately and is currently shadow/monitoring-only.
+- At the time of this audit, the live AVSL sell signal was still the legacy/approximate VPCI/Bollinger-like implementation.
+- At the time of this audit, the original AVSL path existed separately as monitoring-only.
 - The latest 2026-06-30 comparison artifact showed the same sell/hold signal for the observed 21 symbols (`BOTH_HOLD: 21`, no sell divergences, no insufficient data, no errors), but the AVSL values were not identical: the max absolute difference percentage was about 5.62% and the mean absolute difference percentage was about 1.67%.
 - Therefore, the safe statement is: **Current sell/hold signals matched for the observed 21 symbols.** Do not claim that the legacy and original AVSL values are identical.
 
@@ -27,7 +29,7 @@ Current signal provider:
 Current implementation used by live signals:
 
 - `get_latest_avsl(symbol)` calls `calculate_avsl_series(symbol)`.
-- `calculate_avsl_series(...)` is explicitly documented as the current live sell-signal implementation and as a legacy/approximate AVSL with VPCI and Bollinger-band concepts, not the exact original Buff Dormeier formula.
+- `calculate_avsl_series(...)` was then documented as the live sell-signal implementation and as a legacy/approximate AVSL with VPCI and Bollinger-band concepts, not the exact original Buff Dormeier formula.
 - The older threshold fallback remains reachable only if `check_avsl_sell_signal(use_buff_avsl=False)` is called; the live call in `main.py` does not pass that flag and therefore uses the default legacy/approximate VPCI AVSL path.
 
 ## 2. Current original AVSL call path
@@ -40,8 +42,8 @@ Imports and exposure:
 
 Live trading impact:
 
-- The original AVSL module says it is a separate shadow-only path and must not be used for live trading sell decisions until explicitly wired in a future change.
-- `calculate_original_avsl(...)` says its result is for monitoring/comparison only, does not call network APIs, and does not affect `check_avsl_sell_signal()`.
+- The original AVSL module then described itself as a separate monitoring path pending explicit live wiring.
+- `calculate_original_avsl(...)` then said its result was for monitoring/comparison only and did not call network APIs.
 - `calculate_original_avsl_report(...)` also states it is not used by `check_avsl_sell_signal()` and therefore cannot change current live trading behavior.
 - The only current runtime consumer found is the comparison monitor, which reads original AVSL values for diagnostics.
 
@@ -95,7 +97,7 @@ Live sell path changes:
   - Remove or retire `calculate_avsl_series(...)`, `get_latest_avsl(...)`, and `calculate_vpci_components(...)` if they are no longer used outside tests/docs/backtests.
   - Remove the older threshold fallback from the live AVSL API if it is no longer a supported behavior.
 - `original_avsl.py`
-  - Update module/function docstrings from shadow-only wording to live-source-of-truth wording after the live path is intentionally wired.
+  - Update module/function docstrings from monitoring-only wording to live-source-of-truth wording after the live path is intentionally wired.
   - Keep the calculation pure and OHLCV based.
 - `sell_signals.py`
   - No major routing change should be needed if `check_avsl_sell_signal()` continues to return the same `{symbol: bool}` contract, but update comments/docs if they still imply legacy AVSL.

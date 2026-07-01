@@ -592,13 +592,77 @@ class TestUsaStockFinder(unittest.TestCase):
 
         self.assertEqual(result, {"STALE": False})
 
-    def test_check_avsl_sell_signal_legacy_approximate_mode(self):
-        """check check_avsl_sell_signal in legacy/approximate AVSL mode (default)"""
+    def test_check_avsl_sell_signal_original_avsl_default_mode(self):
+        """check check_avsl_sell_signal in original AVSL live mode (default)"""
         result = self.finder.check_avsl_sell_signal(use_buff_avsl=True)
         self.assertIsInstance(result, dict)
         for symbol in self.symbols:
             self.assertIn(symbol, result)
             self.assertIsInstance(result[symbol], (bool, type(True)))
+
+
+    def test_check_avsl_sell_signal_uses_original_avsl_sell_when_close_below(self):
+        """Live AVSL should sell when current close is below latest original AVSL."""
+        self.finder.stock_data.loc[self.finder.stock_data.index[-1], ("Close", "AAPL")] = 99.0
+
+        with patch.object(self.finder, "get_latest_original_avsl", return_value=100.0), patch.object(
+            self.finder, "get_latest_avsl", side_effect=AssertionError("legacy AVSL must not be called")
+        ):
+            result = self.finder.check_avsl_sell_signal()
+
+        self.assertTrue(result["AAPL"])
+
+    def test_check_avsl_sell_signal_uses_original_avsl_hold_when_close_at_or_above(self):
+        """Live AVSL should hold when current close is equal to or above latest original AVSL."""
+        self.finder.stock_data.loc[self.finder.stock_data.index[-1], ("Close", "AAPL")] = 100.0
+
+        with patch.object(self.finder, "get_latest_original_avsl", return_value=100.0), patch.object(
+            self.finder, "get_latest_avsl", side_effect=AssertionError("legacy AVSL must not be called")
+        ):
+            equal_result = self.finder.check_avsl_sell_signal()
+
+        self.finder.stock_data.loc[self.finder.stock_data.index[-1], ("Close", "AAPL")] = 101.0
+        with patch.object(self.finder, "get_latest_original_avsl", return_value=100.0), patch.object(
+            self.finder, "get_latest_avsl", side_effect=AssertionError("legacy AVSL must not be called")
+        ):
+            above_result = self.finder.check_avsl_sell_signal()
+
+        self.assertFalse(equal_result["AAPL"])
+        self.assertFalse(above_result["AAPL"])
+
+    def test_check_avsl_sell_signal_false_for_insufficient_original_avsl_data(self):
+        """Live AVSL should return False when original AVSL cannot be calculated."""
+        with patch.object(self.finder, "get_latest_original_avsl", return_value=None), patch.object(
+            self.finder, "get_latest_avsl", side_effect=AssertionError("legacy AVSL must not be called")
+        ):
+            result = self.finder.check_avsl_sell_signal()
+
+        self.assertEqual(result, {"AAPL": False, "MSFT": False})
+
+    def test_get_latest_original_avsl_returns_latest_positive_finite_value(self):
+        """Original AVSL helper should expose the latest valid original AVSL value."""
+        report = pd.DataFrame({"original_avsl": [np.nan, 98.5, 101.25]})
+
+        with patch.object(self.finder, "calculate_original_avsl_report", return_value=report):
+            latest_original_avsl = self.finder.get_latest_original_avsl("AAPL")
+
+        self.assertEqual(latest_original_avsl, 101.25)
+
+    def test_get_latest_original_avsl_rejects_invalid_values(self):
+        """Original AVSL helper should reject missing, non-finite, and non-positive values."""
+        invalid_reports = [
+            None,
+            pd.DataFrame({"original_avsl": [np.nan]}),
+            pd.DataFrame({"original_avsl": [np.inf]}),
+            pd.DataFrame({"original_avsl": [0.0]}),
+            pd.DataFrame({"not_original_avsl": [100.0]}),
+        ]
+
+        for report in invalid_reports:
+            with self.subTest(report=report), patch.object(
+                self.finder, "calculate_original_avsl_report", return_value=report
+            ):
+                self.assertIsNone(self.finder.get_latest_original_avsl("AAPL"))
 
     def test_avsl_with_volume_decline_scenario(self):
         """Test AVSL behavior when volume declines significantly"""

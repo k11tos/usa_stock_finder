@@ -178,18 +178,17 @@ class InvestmentConfig:
 
 
 class AVSLConfig:
-    """Legacy/approximate AVSL sell signal configuration.
+    """Legacy/approximate AVSL configuration retained temporarily.
 
-    The active live sell signal still uses the historical VPCI/dynamic-length
-    approximation. It is inspired by Buff Dormeier's AVSL, but it is not the
-    exact original formula. Keep this mode explicit so a future original AVSL
-    can be added separately without changing current trading decisions.
+    Live AVSL sell decisions now use the original AVSL implementation. These
+    legacy/approximate parameters remain for comparison and rollback only until
+    the transition monitor can be removed.
     """
 
     # Metadata only: documents the active implementation used by current sell signals.
-    # Do not treat this as a runtime switch; it intentionally preserves existing behavior.
-    IMPLEMENTATION_MODE = "legacy_approximate"
-    ORIGINAL_BUFF_DORMEIER_ENABLED = False
+    # Do not treat this as a runtime switch; legacy values below are comparison/rollback-only.
+    IMPLEMENTATION_MODE = "original_live"
+    ORIGINAL_BUFF_DORMEIER_ENABLED = True
 
     # Optional post-run diagnostic monitor. Disabled by default so daily trading
     # execution and notifications remain unchanged unless explicitly enabled.
@@ -216,12 +215,11 @@ class AVSLConfig:
 
 
 class OriginalAVSLConfig:
-    """Shadow-only original Buff Dormeier AVSL monitoring configuration.
+    """Live original Buff Dormeier AVSL sell-signal configuration.
 
-    These settings belong to the separate original AVSL calculation path and
-    are not consumed by live buy/sell decision logic.  The default enables the
-    calculation for reporting/comparison while preserving the legacy
-    ``check_avsl_sell_signal()`` behavior.
+    These settings control the original AVSL calculation used by
+    ``check_avsl_sell_signal()`` for live AVSL sell decisions. The same
+    calculation remains available to comparison tooling during the transition.
     """
 
     ENABLED = os.getenv("ORIGINAL_AVSL_ENABLED", "True").lower() == "true"

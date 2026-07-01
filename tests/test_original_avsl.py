@@ -1,4 +1,4 @@
-"""Tests for the shadow-only original Buff Dormeier AVSL calculation path."""
+"""Tests for the original Buff Dormeier AVSL calculation path."""
 
 from unittest.mock import patch
 
