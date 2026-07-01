@@ -1035,11 +1035,11 @@ class UsaStockFinder:
             if report is None or report.empty or "original_avsl" not in report:
                 return None
 
-            valid_avsl = report["original_avsl"].replace([np.inf, -np.inf], np.nan).dropna()
-            if valid_avsl.empty:
+            if report["original_avsl"].empty:
                 return None
 
-            latest_avsl = float(valid_avsl.iloc[-1])
+            latest_value = report["original_avsl"].iloc[-1]
+            latest_avsl = float(latest_value)
             if not np.isfinite(latest_avsl) or latest_avsl <= 0:
                 return None
 
