@@ -1721,13 +1721,8 @@ def _is_avsl_monitor_enabled() -> bool:
 
 
 def _is_avsl_monitor_telegram_enabled() -> bool:
-    """Return whether the optional AVSL monitor Telegram summary is enabled."""
-    return (
-        os.getenv("AVSL_MONITOR_TELEGRAM_ENABLED", str(AVSLConfig.MONITOR_TELEGRAM_ENABLED))
-        .strip()
-        .lower()
-        == "true"
-    )
+    """Return whether the optional AVSL monitor Telegram summary is explicitly enabled."""
+    return os.getenv("AVSL_MONITOR_TELEGRAM_ENABLED", "").strip().lower() == "true"
 
 
 def _build_avsl_monitor_symbols(
@@ -1771,6 +1766,12 @@ def _run_avsl_monitor_safely(
             _send_avsl_monitor_telegram_summary(
                 rows, paths.get("latest_markdown") or paths.get("latest_csv")
             )
+        else:
+            logger.info(
+                "AVSL monitor local artifacts generated at %s; Telegram summary skipped "
+                "because AVSL_MONITOR_TELEGRAM_ENABLED is not explicitly true.",
+                paths["latest_csv"].parent,
+            )
         return True
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("AVSL monitor failed and daily run will continue: %s", str(exc))
@@ -1781,6 +1782,13 @@ def _send_avsl_monitor_telegram_summary(
     rows: Iterable[Any], artifact_path: Path | str | None = None
 ) -> None:
     """Send the optional compact AVSL monitor Telegram summary."""
+    if not _is_avsl_monitor_telegram_enabled():
+        logger.info(
+            "AVSL monitor Telegram summary skipped because "
+            "AVSL_MONITOR_TELEGRAM_ENABLED is not explicitly true."
+        )
+        return
+
     bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
     chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
     if not bot_token or not chat_id:
