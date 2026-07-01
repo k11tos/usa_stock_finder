@@ -1,8 +1,8 @@
 """Original Buff Dormeier AVSL live sell-signal calculation.
 
-This module implements the original AVSL path now used by live AVSL sell
-decisions. It also remains available to comparison tooling during the temporary
-migration window and does not call network APIs.
+This module implements the original AVSL path used by live AVSL sell decisions.
+The calculation is pure, based on caller-provided OHLCV data, and does not call
+network APIs.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def calculate_original_avsl(
     max_length: int | None = None,
     stddev_mult: float | None = None,
 ) -> pd.DataFrame | None:
-    """Calculate a conservative original Buff Dormeier AVSL monitoring DataFrame.
+    """Calculate a conservative original Buff Dormeier AVSL live report.
 
     Public AVSL descriptions are not fully formalized.  This implementation
     keeps the stated shape of the formula while documenting the interpretation:
@@ -93,8 +93,8 @@ def calculate_original_avsl(
       VM while remaining non-negative and deterministic.
 
     The result does not call network APIs. Its latest positive finite
-    ``original_avsl`` value is now used by ``check_avsl_sell_signal()`` for live
-    AVSL sell decisions and by comparison tooling during the migration window.
+    ``original_avsl`` value is used by ``check_avsl_sell_signal()`` for live
+    AVSL sell decisions.
     """
     fast_period = OriginalAVSLConfig.FAST_PERIOD if fast_period is None else int(fast_period)
     slow_period = OriginalAVSLConfig.SLOW_PERIOD if slow_period is None else int(slow_period)

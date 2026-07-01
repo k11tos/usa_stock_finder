@@ -210,9 +210,8 @@ class AVSLConfig:
 class OriginalAVSLConfig:
     """Live original Buff Dormeier AVSL sell-signal configuration.
 
-    These settings belong to the original AVSL calculation path now used by
-    ``check_avsl_sell_signal()`` for live AVSL sell decisions. The same path also
-    feeds comparison reports during the temporary migration window.
+    These settings belong to the original AVSL calculation path used by
+    ``check_avsl_sell_signal()`` for live AVSL sell decisions.
     """
 
     ENABLED = os.getenv("ORIGINAL_AVSL_ENABLED", "True").lower() == "true"
