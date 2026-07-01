@@ -178,18 +178,18 @@ class InvestmentConfig:
 
 
 class AVSLConfig:
-    """Legacy/approximate AVSL sell signal configuration.
+    """Temporary legacy/approximate AVSL comparison and rollback configuration.
 
-    The active live sell signal still uses the historical VPCI/dynamic-length
-    approximation. It is inspired by Buff Dormeier's AVSL, but it is not the
-    exact original formula. Keep this mode explicit so a future original AVSL
-    can be added separately without changing current trading decisions.
+    Live AVSL sell decisions now use ``OriginalAVSLConfig`` and the original AVSL
+    calculation. These historical VPCI/dynamic-length approximation settings are
+    kept only for comparison tooling, backward compatibility, and rollback during
+    the migration window.
     """
 
-    # Metadata only: documents the active implementation used by current sell signals.
-    # Do not treat this as a runtime switch; it intentionally preserves existing behavior.
-    IMPLEMENTATION_MODE = "legacy_approximate"
-    ORIGINAL_BUFF_DORMEIER_ENABLED = False
+    # Metadata only: documents that the live implementation has moved to original AVSL.
+    # Do not treat this as a runtime switch.
+    IMPLEMENTATION_MODE = "original_live"
+    ORIGINAL_BUFF_DORMEIER_ENABLED = True
 
     # Optional post-run diagnostic monitor. Disabled by default so daily trading
     # execution and notifications remain unchanged unless explicitly enabled.
@@ -216,12 +216,11 @@ class AVSLConfig:
 
 
 class OriginalAVSLConfig:
-    """Shadow-only original Buff Dormeier AVSL monitoring configuration.
+    """Live original Buff Dormeier AVSL sell-signal configuration.
 
-    These settings belong to the separate original AVSL calculation path and
-    are not consumed by live buy/sell decision logic.  The default enables the
-    calculation for reporting/comparison while preserving the legacy
-    ``check_avsl_sell_signal()`` behavior.
+    These settings belong to the original AVSL calculation path now used by
+    ``check_avsl_sell_signal()`` for live AVSL sell decisions. The same path also
+    feeds comparison reports during the temporary migration window.
     """
 
     ENABLED = os.getenv("ORIGINAL_AVSL_ENABLED", "True").lower() == "true"

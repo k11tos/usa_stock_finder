@@ -1112,6 +1112,43 @@ class TestSellDecisionPriorityRegression(unittest.TestCase):
         mock_record_event.assert_called_once()
         mock_save_state.assert_called_once_with({})
 
+    def test_stop_loss_overrides_avsl(self):
+        """Regression: STOP_LOSS remains higher priority than AVSL."""
+        decision, mock_record_event, _ = self._run_decision(
+            current_price=80.0,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signal=True,
+            holding_trend_exit=True,
+        )
+
+        self.assertEqual(decision.reason, SellReason.STOP_LOSS)
+        self.assertEqual(decision.quantity, self.quantity)
+        mock_record_event.assert_called_once()
+
+    def test_trailing_overrides_avsl(self):
+        """Regression: TRAILING remains higher priority than AVSL."""
+        decision, mock_record_event, mock_save_state = self._run_decision(
+            current_price=108.0,
+            selected_buy=[],
+            selected_not_sell=[],
+            avsl_signal=True,
+            holding_trend_exit=True,
+            trailing_enabled=True,
+            trailing_overrides={
+                "trailing_min_profit_pct": 0.05,
+                "trailing_atr_multiplier": 5.0,
+                "trailing_atr_period": 14,
+                "atr_value": 2.0,
+                "highest_close": 120.0,
+            },
+        )
+
+        self.assertEqual(decision.reason, SellReason.TRAILING)
+        self.assertEqual(decision.quantity, self.quantity)
+        mock_record_event.assert_called_once()
+        mock_save_state.assert_called_once_with({})
+
     def test_avsl_overrides_trend(self):
         """Regression: AVSL remains higher priority than TREND."""
         decision, mock_record_event, _ = self._run_decision(

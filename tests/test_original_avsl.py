@@ -1,4 +1,4 @@
-"""Tests for the shadow-only original Buff Dormeier AVSL calculation path."""
+"""Tests for the live original Buff Dormeier AVSL calculation path."""
 
 from unittest.mock import patch
 
@@ -85,15 +85,14 @@ def test_original_avsl_line_is_positive_for_positive_prices() -> None:
     assert (valid_avsl > 0).all()
 
 
-def test_original_avsl_report_does_not_affect_legacy_sell_signal() -> None:
+def test_original_avsl_report_feeds_live_latest_original_helper() -> None:
     with patch("yfinance.download") as mock_download:
         mock_download.return_value = _synthetic_ohlcv(periods=100, symbol="SAFE")
         finder = UsaStockFinder(["SAFE"])
 
-        before = finder.check_avsl_sell_signal()
         report = finder.calculate_original_avsl_report("SAFE")
-        after = finder.check_avsl_sell_signal()
+        latest_original = finder.get_latest_original_avsl("SAFE")
 
     assert report is not None
     assert list(report.columns) == ["VPC", "VPR", "VM", "VPCI", "dynamic_length", "price_component", "original_avsl"]
-    assert before == after
+    assert latest_original == float(report["original_avsl"].replace([np.inf, -np.inf], np.nan).dropna().iloc[-1])

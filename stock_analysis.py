@@ -801,10 +801,11 @@ class UsaStockFinder:
         """
         Calculate the legacy/approximate AVSL (Anti-Volume Stop Loss) series.
 
-        This is the current live sell-signal implementation. It approximates an
+        This is the temporary legacy comparison/rollback implementation. It approximates an
         AVSL-style dynamic stop with VPCI and Bollinger-band concepts, but it is
-        not Buff Dormeier's exact original formula. Keep the public function
-        name stable until the original AVSL can be added separately in shadow mode.
+        not Buff Dormeier's exact original formula. The public function name is
+        kept stable for existing comparison tooling and tests while live sell
+        decisions use original AVSL.
 
         The legacy/approximate AVSL is a dynamic trailing stop based on:
         1. VPCI (Volume Price Component Indicator) to determine adaptive length
@@ -950,12 +951,24 @@ class UsaStockFinder:
             logger.debug("Error calculating AVSL series for %s: %s", symbol, str(e))
             return None
 
+    def calculate_legacy_avsl_series(
+        self,
+        symbol: str,
+        bars: int | None = None,
+        stddev_mult: float | None = None,
+        fast_period: int | None = None,
+        slow_period: int | None = None,
+    ) -> pd.Series | None:
+        """Return the temporary legacy/approximate AVSL series for comparison/rollback."""
+        return self.calculate_avsl_series(symbol, bars, stddev_mult, fast_period, slow_period)
+
     def get_latest_avsl(self, symbol: str) -> float | None:
         """
         Get the most recent legacy/approximate AVSL value for a symbol.
 
-        This returns the value used by current sell signals and does not
-        represent Buff Dormeier's exact original AVSL formula.
+        This returns the temporary legacy comparison/rollback value and does not
+        represent Buff Dormeier's exact original AVSL formula. Live AVSL sell
+        decisions use :meth:`get_latest_original_avsl`.
 
         Args:
             symbol (str): Stock symbol to analyze
@@ -980,12 +993,16 @@ class UsaStockFinder:
             logger.debug("Error getting latest AVSL for %s: %s", symbol, str(e))
             return None
 
-    def calculate_original_avsl_report(self, symbol: str) -> pd.DataFrame | None:
-        """Return shadow-only original Buff Dormeier AVSL diagnostics for monitoring.
+    def get_latest_legacy_avsl(self, symbol: str) -> float | None:
+        """Return the temporary legacy/approximate AVSL value for comparison/rollback."""
+        return self.get_latest_avsl(symbol)
 
-        This helper uses already-loaded ``self.stock_data`` only. It is not used
-        by ``check_avsl_sell_signal()`` and therefore cannot change current live
-        trading behavior.
+    def calculate_original_avsl_report(self, symbol: str) -> pd.DataFrame | None:
+        """Return original Buff Dormeier AVSL diagnostics for live sell decisions.
+
+        This helper uses already-loaded ``self.stock_data`` only and does not call
+        network APIs. Its latest valid ``original_avsl`` value is the live AVSL
+        sell implementation used by ``check_avsl_sell_signal()``.
         """
         if not OriginalAVSLConfig.ENABLED:
             return None
@@ -1011,6 +1028,27 @@ class UsaStockFinder:
             logger.debug("Error calculating original AVSL report for %s: %s", symbol, str(e))
             return None
 
+    def get_latest_original_avsl(self, symbol: str) -> float | None:
+        """Return the latest positive finite original AVSL value for live sell decisions."""
+        try:
+            report = self.calculate_original_avsl_report(symbol)
+            if report is None or report.empty or "original_avsl" not in report:
+                return None
+
+            valid_avsl = report["original_avsl"].replace([np.inf, -np.inf], np.nan).dropna()
+            if valid_avsl.empty:
+                return None
+
+            latest_avsl = float(valid_avsl.iloc[-1])
+            if not np.isfinite(latest_avsl) or latest_avsl <= 0:
+                return None
+
+            return latest_avsl
+
+        except (IndexError, KeyError, AttributeError, TypeError, ValueError) as e:
+            logger.debug("Error getting latest original AVSL for %s: %s", symbol, str(e))
+            return None
+
     def check_avsl_sell_signal(
         self,
         period_days: int | None = None,
@@ -1023,11 +1061,10 @@ class UsaStockFinder:
         Check for AVSL (Anti-Volume Stop Loss) sell signals.
 
         When use_buff_avsl=True (default):
-        - Uses the legacy/approximate AVSL calculation (VPCI + Bollinger Band based dynamic stop)
-        - Sell signal occurs when current price (close or low) falls below the AVSL line
-        - This indicates support level break and potential trend reversal
-        - Historical parameter name is kept for backward compatibility; this is
-          not Buff Dormeier's exact original AVSL formula
+        - Uses the original AVSL calculation for the live sell decision
+        - Sell signal occurs when current close falls below the latest original AVSL line
+        - Returns False when original AVSL cannot be calculated
+        - Historical parameter name is kept for backward compatibility during the migration
 
         When use_buff_avsl=False (older threshold fallback):
         - Uses simple volume/price decline threshold method
@@ -1042,8 +1079,7 @@ class UsaStockFinder:
                 legacy/approximate AVSL mode
             recent_days (int | None): Older threshold fallback parameter; not used in legacy/approximate
                 AVSL mode
-            use_buff_avsl (bool): Historical name; if True, use the current legacy/approximate AVSL
-                (default: True)
+            use_buff_avsl (bool): Historical name; if True, use live original AVSL (default: True)
 
         Returns:
             Dict[str, bool]: True if AVSL sell signal is detected (current price < AVSL stop loss)
@@ -1115,51 +1151,46 @@ class UsaStockFinder:
 
             return result
 
-        # Legacy/approximate VPCI AVSL mode (default). Keep this path unchanged for trading behavior.
+        logger.info("AVSL signal evaluation uses original AVSL")
+
+        # Live original AVSL mode (default). Legacy/approximate helpers remain available
+        # only for temporary comparison/rollback tooling.
         for symbol in self.symbols:
             try:
-                # Get latest AVSL stop loss level
-                latest_avsl = self.get_latest_avsl(symbol)
+                latest_avsl = self.get_latest_original_avsl(symbol)
 
                 if latest_avsl is None:
                     result[symbol] = False
-                    logger.debug("%s: AVSL calculation failed or insufficient data", symbol)
+                    logger.debug("%s: Original AVSL calculation failed or insufficient data", symbol)
                     continue
 
-                # Get current price (use close price, or low if available)
                 if symbol not in self.stock_data["Close"] or self.stock_data["Close"][symbol].empty:
                     result[symbol] = False
                     continue
 
-                current_price = self.stock_data["Close"][symbol].iloc[-1]
+                current_close = float(self.stock_data["Close"][symbol].iloc[-1])
+                if not np.isfinite(current_close):
+                    result[symbol] = False
+                    continue
 
-                # Alternative: use low price for more sensitive detection
-                # current_price = (
-                #     self.stock_data["Low"][symbol].iloc[-1]
-                #     if symbol in self.stock_data["Low"]
-                #     else current_price
-                # )
-
-                # AVSL sell signal: current price falls below AVSL stop loss
-                is_stop_hit = current_price < latest_avsl
-
+                is_stop_hit = current_close < latest_avsl
                 result[symbol] = bool(is_stop_hit)
 
                 logger.debug(
-                    "%s: Legacy approximate AVSL signal evaluation\n"
-                    "  Current price: %.2f\n"
-                    "  AVSL stop loss: %.2f\n"
-                    "  Price below AVSL: %s\n"
+                    "%s: Original AVSL signal evaluation\n"
+                    "  Current close: %.2f\n"
+                    "  Original AVSL stop loss: %.2f\n"
+                    "  Close below original AVSL: %s\n"
                     "  AVSL sell signal: %s",
                     symbol,
-                    current_price,
+                    current_close,
                     latest_avsl,
                     is_stop_hit,
                     result[symbol],
                 )
 
-            except (IndexError, KeyError, AttributeError, ValueError) as e:
+            except (IndexError, KeyError, AttributeError, TypeError, ValueError) as e:
                 result[symbol] = False
-                logger.debug("Error checking legacy approximate AVSL signal for %s: %s", symbol, str(e))
+                logger.debug("Error checking original AVSL signal for %s: %s", symbol, str(e))
 
         return result

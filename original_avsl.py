@@ -1,8 +1,8 @@
-"""Original Buff Dormeier AVSL monitoring calculation.
+"""Original Buff Dormeier AVSL live sell-signal calculation.
 
-This module intentionally implements a separate, shadow-only AVSL path.  It is
-not imported by sell-signaling code and must not be used to make live trading
-sell decisions until explicitly wired in a future change.
+This module implements the original AVSL path now used by live AVSL sell
+decisions. It also remains available to comparison tooling during the temporary
+migration window and does not call network APIs.
 """
 
 from __future__ import annotations
@@ -92,8 +92,9 @@ def calculate_original_avsl(
       scaled by ``1 + abs(VPCI) * abs(VM)`` so it is explicitly based on VPCI and
       VM while remaining non-negative and deterministic.
 
-    The result is for monitoring/comparison only.  It does not call network APIs
-    and does not affect ``check_avsl_sell_signal()``.
+    The result does not call network APIs. Its latest positive finite
+    ``original_avsl`` value is now used by ``check_avsl_sell_signal()`` for live
+    AVSL sell decisions and by comparison tooling during the migration window.
     """
     fast_period = OriginalAVSLConfig.FAST_PERIOD if fast_period is None else int(fast_period)
     slow_period = OriginalAVSLConfig.SLOW_PERIOD if slow_period is None else int(slow_period)
