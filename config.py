@@ -178,25 +178,17 @@ class InvestmentConfig:
 
 
 class AVSLConfig:
-    """Temporary legacy/approximate AVSL comparison and rollback configuration.
+    """Legacy/approximate AVSL compatibility configuration.
 
     Live AVSL sell decisions now use ``OriginalAVSLConfig`` and the original AVSL
     calculation. These historical VPCI/dynamic-length approximation settings are
-    kept only for comparison tooling, backward compatibility, and rollback during
-    the migration window.
+    kept only for backward compatibility and explicit legacy fallback calls.
     """
 
     # Metadata only: documents that the live implementation has moved to original AVSL.
     # Do not treat this as a runtime switch.
     IMPLEMENTATION_MODE = "original_live"
     ORIGINAL_BUFF_DORMEIER_ENABLED = True
-
-    # Optional post-run diagnostic monitor. Disabled by default so daily trading
-    # execution and notifications remain unchanged unless explicitly enabled.
-    MONITOR_ENABLED = os.getenv("AVSL_MONITOR_ENABLED", "False").lower() == "true"
-    MONITOR_TELEGRAM_ENABLED = (
-        os.getenv("AVSL_MONITOR_TELEGRAM_ENABLED", "False").lower() == "true"
-    )
 
     # Older threshold fallback parameters (kept for backward compatibility).
     PERIOD_DAYS = int(os.getenv("AVSL_PERIOD_DAYS", "50"))
@@ -218,9 +210,8 @@ class AVSLConfig:
 class OriginalAVSLConfig:
     """Live original Buff Dormeier AVSL sell-signal configuration.
 
-    These settings belong to the original AVSL calculation path now used by
-    ``check_avsl_sell_signal()`` for live AVSL sell decisions. The same path also
-    feeds comparison reports during the temporary migration window.
+    These settings belong to the original AVSL calculation path used by
+    ``check_avsl_sell_signal()`` for live AVSL sell decisions.
     """
 
     ENABLED = os.getenv("ORIGINAL_AVSL_ENABLED", "True").lower() == "true"
@@ -319,8 +310,6 @@ def get_config() -> dict[str, Any]:
         "avsl": {
             "implementation_mode": AVSLConfig.IMPLEMENTATION_MODE,
             "original_buff_dormeier_enabled": AVSLConfig.ORIGINAL_BUFF_DORMEIER_ENABLED,
-            "monitor_enabled": AVSLConfig.MONITOR_ENABLED,
-            "monitor_telegram_enabled": AVSLConfig.MONITOR_TELEGRAM_ENABLED,
             "period_days": AVSLConfig.PERIOD_DAYS,
             "volume_decline_threshold": AVSLConfig.VOLUME_DECLINE_THRESHOLD,
             "price_decline_threshold": AVSLConfig.PRICE_DECLINE_THRESHOLD,

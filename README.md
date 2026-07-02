@@ -311,23 +311,6 @@ pytest --cov=. --cov-report=html
 - **Buff Dormeier**: AVSL 방법론
 
 
-### Optional post-run AVSL monitoring
-
-`main.py` can optionally generate a monitoring-only legacy-vs-original AVSL comparison after the normal daily run.
-The monitor includes current holdings first and also checks final buy / not-sell symbols when available. It writes CSV and markdown artifacts to `outputs/avsl_monitor/latest/` and historical copies to `outputs/avsl_monitor/history/<run_date>/`. Monitor errors are logged as warnings and do not affect trading execution or Telegram buy/sell messages.
-
-Environment variables:
-
-- `AVSL_MONITOR_ENABLED` (default: `False`)
-- `AVSL_MONITOR_TELEGRAM_ENABLED` (default: `False`) - must be explicitly set to `true` to send the compact monitoring-only Telegram summary; local artifacts are still generated when only `AVSL_MONITOR_ENABLED=true`
-- `AVSL_MONITOR_OUTPUT_DIR` (default: `outputs/avsl_monitor`)
-
-```env
-AVSL_MONITOR_ENABLED=true
-AVSL_MONITOR_TELEGRAM_ENABLED=false
-AVSL_MONITOR_OUTPUT_DIR=outputs/avsl_monitor
-```
-
 ### Optional auto refresh after daily run
 
 `main.py` can optionally refresh the live performance report **after** it appends trade signals/account snapshots and saves `data/data.json`.
