@@ -178,48 +178,14 @@ class InvestmentConfig:
 
 
 class AVSLConfig:
-    """Legacy/approximate AVSL compatibility configuration.
+    """Live original Buff Dormeier AVSL sell-signal configuration."""
 
-    Live AVSL sell decisions now use ``OriginalAVSLConfig`` and the original AVSL
-    calculation. These historical VPCI/dynamic-length approximation settings are
-    kept only for backward compatibility and explicit legacy fallback calls.
-    """
-
-    # Metadata only: documents that the live implementation has moved to original AVSL.
-    # Do not treat this as a runtime switch.
-    IMPLEMENTATION_MODE = "original_live"
-    ORIGINAL_BUFF_DORMEIER_ENABLED = True
-
-    # Older threshold fallback parameters (kept for backward compatibility).
-    PERIOD_DAYS = int(os.getenv("AVSL_PERIOD_DAYS", "50"))
-    VOLUME_DECLINE_THRESHOLD = float(os.getenv("AVSL_VOLUME_DECLINE_THRESHOLD", "0.5"))  # 50% below average
-    PRICE_DECLINE_THRESHOLD = float(os.getenv("AVSL_PRICE_DECLINE_THRESHOLD", "0.03"))  # 3% decline
-    RECENT_DAYS = int(os.getenv("AVSL_RECENT_DAYS", "5"))
-
-    # Legacy/approximate VPCI AVSL parameters. These names are kept for backward compatibility.
-    # They do not represent a verified implementation of Buff Dormeier's original AVSL formula.
-    BARS = int(os.getenv("AVSL_BARS", "26"))  # 기본 기간 (일반적으로 26 또는 50)
-    STDDEV_MULT = float(os.getenv("AVSL_STDDEV_MULT", "2.0"))  # 표준편차 배수 (볼린저 밴드)
-    MIN_LENGTH = int(os.getenv("AVSL_MIN_LENGTH", "3"))  # VPCI 기반 Length 최소값
-    MAX_LENGTH = int(os.getenv("AVSL_MAX_LENGTH", "50"))  # VPCI 기반 Length 최대값
-    FAST_PERIOD = int(os.getenv("AVSL_FAST_PERIOD", "5"))  # 빠른 이동평균 기간
-    SLOW_PERIOD = int(os.getenv("AVSL_SLOW_PERIOD", "20"))  # 느린 이동평균 기간
-    TIMEFRAME = os.getenv("AVSL_TIMEFRAME", "1d")  # 타임프레임 (1d, 1wk, 1mo)
-
-
-class OriginalAVSLConfig:
-    """Live original Buff Dormeier AVSL sell-signal configuration.
-
-    These settings belong to the original AVSL calculation path used by
-    ``check_avsl_sell_signal()`` for live AVSL sell decisions.
-    """
-
-    ENABLED = os.getenv("ORIGINAL_AVSL_ENABLED", "True").lower() == "true"
-    FAST_PERIOD = int(os.getenv("ORIGINAL_AVSL_FAST_PERIOD", "5"))
-    SLOW_PERIOD = int(os.getenv("ORIGINAL_AVSL_SLOW_PERIOD", "20"))
-    MIN_LENGTH = int(os.getenv("ORIGINAL_AVSL_MIN_LENGTH", "3"))
-    MAX_LENGTH = int(os.getenv("ORIGINAL_AVSL_MAX_LENGTH", "50"))
-    STDDEV_MULT = float(os.getenv("ORIGINAL_AVSL_STDDEV_MULT", "2.0"))
+    ENABLED = os.getenv("AVSL_ENABLED", "True").lower() == "true"
+    FAST_PERIOD = int(os.getenv("AVSL_FAST_PERIOD", "5"))
+    SLOW_PERIOD = int(os.getenv("AVSL_SLOW_PERIOD", "20"))
+    MIN_LENGTH = int(os.getenv("AVSL_MIN_LENGTH", "3"))
+    MAX_LENGTH = int(os.getenv("AVSL_MAX_LENGTH", "50"))
+    STDDEV_MULT = float(os.getenv("AVSL_STDDEV_MULT", "2.0"))
 
 
 class DataQualityConfig:
@@ -308,28 +274,12 @@ def get_config() -> dict[str, Any]:
             "proportional_percentage": InvestmentConfig.PROPORTIONAL_PERCENTAGE,
         },
         "avsl": {
-            "implementation_mode": AVSLConfig.IMPLEMENTATION_MODE,
-            "original_buff_dormeier_enabled": AVSLConfig.ORIGINAL_BUFF_DORMEIER_ENABLED,
-            "period_days": AVSLConfig.PERIOD_DAYS,
-            "volume_decline_threshold": AVSLConfig.VOLUME_DECLINE_THRESHOLD,
-            "price_decline_threshold": AVSLConfig.PRICE_DECLINE_THRESHOLD,
-            "recent_days": AVSLConfig.RECENT_DAYS,
-            "bars": AVSLConfig.BARS,
-            "stddev_mult": AVSLConfig.STDDEV_MULT,
-            "min_length": AVSLConfig.MIN_LENGTH,
-            "max_length": AVSLConfig.MAX_LENGTH,
+            "enabled": AVSLConfig.ENABLED,
             "fast_period": AVSLConfig.FAST_PERIOD,
             "slow_period": AVSLConfig.SLOW_PERIOD,
-            "timeframe": AVSLConfig.TIMEFRAME,
-        },
-        "original_avsl": {
-            "enabled": OriginalAVSLConfig.ENABLED,
-            "fast_period": OriginalAVSLConfig.FAST_PERIOD,
-            "slow_period": OriginalAVSLConfig.SLOW_PERIOD,
-            "min_length": OriginalAVSLConfig.MIN_LENGTH,
-            "max_length": OriginalAVSLConfig.MAX_LENGTH,
-            "stddev_mult": OriginalAVSLConfig.STDDEV_MULT,
-            "trading_decisions_enabled": False,
+            "min_length": AVSLConfig.MIN_LENGTH,
+            "max_length": AVSLConfig.MAX_LENGTH,
+            "stddev_mult": AVSLConfig.STDDEV_MULT,
         },
         "data_quality": {
             "min_data_points_ma_50": DataQualityConfig.MIN_DATA_POINTS_MA_50,

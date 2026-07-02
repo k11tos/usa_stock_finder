@@ -59,7 +59,7 @@ def test_original_avsl_final_valid_output_has_no_nan_or_inf() -> None:
     assert result is not None
     valid = result.dropna(subset=["original_avsl"])
     assert not valid.empty
-    assert np.isfinite(valid[["VPC", "VPR", "VM", "VPCI", "price_component", "original_avsl"]].to_numpy()).all()
+    assert np.isfinite(valid[["VPC", "VPR", "VM", "vpci", "price_component", "original_avsl"]].to_numpy()).all()
 
 
 def test_original_avsl_dynamic_length_is_clamped_within_configured_range() -> None:
@@ -85,14 +85,14 @@ def test_original_avsl_line_is_positive_for_positive_prices() -> None:
     assert (valid_avsl > 0).all()
 
 
-def test_original_avsl_report_feeds_live_latest_original_helper() -> None:
+def test_original_avsl_report_feeds_live_latest_helper() -> None:
     with patch("yfinance.download") as mock_download:
         mock_download.return_value = _synthetic_ohlcv(periods=100, symbol="SAFE")
         finder = UsaStockFinder(["SAFE"])
 
         report = finder.calculate_original_avsl_report("SAFE")
-        latest_original = finder.get_latest_original_avsl("SAFE")
+        latest_original = finder.get_latest_avsl("SAFE")
 
     assert report is not None
-    assert list(report.columns) == ["VPC", "VPR", "VM", "VPCI", "dynamic_length", "price_component", "original_avsl"]
+    assert list(report.columns) == ["VPC", "VPR", "VM", "vpci", "dynamic_length", "price_component", "original_avsl"]
     assert latest_original == float(report["original_avsl"].replace([np.inf, -np.inf], np.nan).dropna().iloc[-1])
