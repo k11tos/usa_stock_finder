@@ -222,134 +222,77 @@ class TestUsaStockFinder(unittest.TestCase):
             # Result should be boolean (numpy bool is also acceptable)
             self.assertIsInstance(result[symbol], (bool, type(True)))
 
-    def test_get_latest_original_avsl_returns_latest_row_when_positive_finite(self):
-        """latest original AVSL helper should return the actual latest row value."""
+    def test_get_latest_avsl_returns_latest_row_when_positive_finite(self):
+        """live AVSL helper should return the actual latest row value."""
         report = pd.DataFrame({"original_avsl": [90.0, 95.0, 101.25]})
 
         with patch.object(self.finder, "calculate_original_avsl_report", return_value=report):
-            latest_original = self.finder.get_latest_original_avsl("AAPL")
+            latest_original = self.finder.get_latest_avsl("AAPL")
 
         self.assertEqual(latest_original, 101.25)
 
-    def test_get_latest_original_avsl_returns_none_when_latest_row_nan(self):
-        """latest original AVSL helper must not fall back when the latest row is NaN."""
+    def test_get_latest_avsl_returns_none_when_latest_row_nan(self):
+        """live AVSL helper must not fall back when the latest row is NaN."""
         report = pd.DataFrame({"original_avsl": [90.0, 95.0, np.nan]})
 
         with patch.object(self.finder, "calculate_original_avsl_report", return_value=report):
-            latest_original = self.finder.get_latest_original_avsl("AAPL")
+            latest_original = self.finder.get_latest_avsl("AAPL")
 
         self.assertIsNone(latest_original)
 
-    def test_get_latest_original_avsl_returns_none_when_latest_row_invalid(self):
-        """latest original AVSL helper should reject inf, zero, and negative latest rows."""
+    def test_get_latest_avsl_returns_none_when_latest_row_invalid(self):
+        """live AVSL helper should reject inf, zero, and negative latest rows."""
         for invalid_value in (np.inf, -np.inf, 0.0, -1.0):
             with self.subTest(invalid_value=invalid_value):
                 report = pd.DataFrame({"original_avsl": [90.0, 95.0, invalid_value]})
 
                 with patch.object(self.finder, "calculate_original_avsl_report", return_value=report):
-                    latest_original = self.finder.get_latest_original_avsl("AAPL")
+                    latest_original = self.finder.get_latest_avsl("AAPL")
 
                 self.assertIsNone(latest_original)
 
-    def test_check_avsl_sell_signal_false_when_latest_original_avsl_row_invalid(self):
-        """live AVSL should hold on invalid latest original AVSL and avoid legacy fallback."""
+    def test_check_avsl_sell_signal_false_when_latest_avsl_row_invalid(self):
+        """live AVSL should hold on invalid latest AVSL."""
         self.finder.stock_data.loc[self.finder.stock_data.index[-1], ("Close", "AAPL")] = 50.0
         report = pd.DataFrame({"original_avsl": [40.0, 45.0, np.nan]})
 
-        with patch.object(self.finder, "calculate_original_avsl_report", return_value=report), \
-             patch.object(self.finder, "get_latest_avsl") as mock_legacy_avsl:
+        with patch.object(self.finder, "calculate_original_avsl_report", return_value=report):
             result = self.finder.check_avsl_sell_signal()
 
         for symbol in self.symbols:
             self.assertFalse(result[symbol])
-        mock_legacy_avsl.assert_not_called()
 
     def test_check_avsl_sell_signal_true_when_close_below_original_avsl(self):
         """live AVSL should sell when current close is below latest original AVSL"""
         self.finder.stock_data.loc[self.finder.stock_data.index[-1], ("Close", "AAPL")] = 95.0
 
-        with patch.object(self.finder, "get_latest_original_avsl", return_value=100.0), \
-             patch.object(self.finder, "get_latest_avsl") as mock_legacy_avsl:
+        with patch.object(self.finder, "get_latest_avsl", return_value=100.0):
             result = self.finder.check_avsl_sell_signal()
 
         self.assertTrue(result["AAPL"])
-        mock_legacy_avsl.assert_not_called()
 
     def test_check_avsl_sell_signal_false_when_close_at_or_above_original_avsl(self):
         """live AVSL should hold when current close is at or above latest original AVSL"""
         self.finder.stock_data.loc[self.finder.stock_data.index[-1], ("Close", "AAPL")] = 100.0
 
-        with patch.object(self.finder, "get_latest_original_avsl", return_value=100.0), \
-             patch.object(self.finder, "get_latest_avsl") as mock_legacy_avsl:
+        with patch.object(self.finder, "get_latest_avsl", return_value=100.0):
             equal_result = self.finder.check_avsl_sell_signal()
 
         self.assertFalse(equal_result["AAPL"])
-        mock_legacy_avsl.assert_not_called()
 
         self.finder.stock_data.loc[self.finder.stock_data.index[-1], ("Close", "AAPL")] = 101.0
-        with patch.object(self.finder, "get_latest_original_avsl", return_value=100.0):
+        with patch.object(self.finder, "get_latest_avsl", return_value=100.0):
             above_result = self.finder.check_avsl_sell_signal()
 
         self.assertFalse(above_result["AAPL"])
 
     def test_check_avsl_sell_signal_false_for_insufficient_original_avsl_data(self):
         """live AVSL should hold when original AVSL cannot be calculated"""
-        with patch.object(self.finder, "get_latest_original_avsl", return_value=None), \
-             patch.object(self.finder, "get_latest_avsl") as mock_legacy_avsl:
+        with patch.object(self.finder, "get_latest_avsl", return_value=None):
             result = self.finder.check_avsl_sell_signal()
 
         for symbol in self.symbols:
             self.assertFalse(result[symbol])
-        mock_legacy_avsl.assert_not_called()
-
-    def test_check_avsl_sell_signal_with_custom_params(self):
-        """check check_avsl_sell_signal with custom parameters"""
-        result = self.finder.check_avsl_sell_signal(
-            period_days=30, volume_decline_threshold=0.6, price_decline_threshold=0.05, recent_days=3
-        )
-        self.assertIsInstance(result, dict)
-        for symbol in self.symbols:
-            self.assertIn(symbol, result)
-
-    def test_check_avsl_sell_signal_legacy_mode_true_on_clear_decline(self):
-        """legacy AVSL mode should trigger when recent price and volume clearly collapse"""
-        with patch("yfinance.download") as mock_download:
-            periods = 60
-            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
-
-            close = np.concatenate([np.full(55, 100.0), np.array([99.0, 97.0, 95.0, 93.0, 90.0])])
-            volume = np.concatenate([np.full(55, 1000.0), np.full(5, 100.0)])
-
-            mock_data = pd.DataFrame(
-                {
-                    ("High", "DROP"): close * 1.01,
-                    ("Low", "DROP"): close * 0.99,
-                    ("Close", "DROP"): close,
-                    ("Volume", "DROP"): volume,
-                },
-                index=index,
-            )
-            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
-            mock_download.return_value = mock_data
-
-            finder = UsaStockFinder(["DROP"])
-            result = finder.check_avsl_sell_signal(
-                use_buff_avsl=False,
-                period_days=50,
-                recent_days=5,
-                volume_decline_threshold=0.5,
-                price_decline_threshold=0.03,
-            )
-
-            self.assertEqual(result, {"DROP": True})
-
-    def test_check_avsl_sell_signal_legacy_mode(self):
-        """check check_avsl_sell_signal in legacy mode"""
-        result = self.finder.check_avsl_sell_signal(use_buff_avsl=False)
-        self.assertIsInstance(result, dict)
-        for symbol in self.symbols:
-            self.assertIn(symbol, result)
-            self.assertIsInstance(result[symbol], (bool, type(True)))
 
     def test_is_special_situation_price_pinned_detects_ewcz_like_pattern(self):
         """Large gap-up followed by tight, low-volatility pinning should be detected."""
@@ -548,54 +491,23 @@ class TestUsaStockFinder(unittest.TestCase):
             finder = UsaStockFinder(["NORM"])
             self.assertFalse(finder.is_event_quarantine("NORM"))
 
-    def test_calculate_vpci_components(self):
-        """check calculate_vpci_components function"""
-        for symbol in self.symbols:
-            vpci_df = self.finder.calculate_vpci_components(symbol)
-            if vpci_df is not None:
-                self.assertIsInstance(vpci_df, pd.DataFrame)
-                self.assertIn("VPC", vpci_df.columns)
-                self.assertIn("VPR", vpci_df.columns)
-                self.assertIn("VM", vpci_df.columns)
-                self.assertIn("VPCI", vpci_df.columns)
-
-    def test_calculate_avsl_series(self):
-        """check calculate_avsl_series function"""
-        for symbol in self.symbols:
-            avsl_series = self.finder.calculate_avsl_series(symbol)
-            if avsl_series is not None:
-                self.assertIsInstance(avsl_series, pd.Series)
-                # AVSL should be positive values
-                if not avsl_series.empty:
-                    valid_values = avsl_series.dropna()
-                    if not valid_values.empty:
-                        self.assertTrue((valid_values > 0).all())
-
-    def test_get_latest_avsl(self):
-        """check get_latest_avsl function"""
-        for symbol in self.symbols:
-            latest_avsl = self.finder.get_latest_avsl(symbol)
-            if latest_avsl is not None:
-                self.assertIsInstance(latest_avsl, (float, np.floating))
-                self.assertGreater(latest_avsl, 0)
-
-    def test_calculate_avsl_series_returns_valid_values_for_normal_ohlcv(self):
-        """legacy AVSL should return positive values when enough OHLCV data exists"""
+    def test_calculate_original_avsl_report_returns_valid_values_for_normal_ohlcv(self):
+        """live AVSL report should return positive finite values with enough OHLCV data."""
         with patch("yfinance.download") as mock_download:
             mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="AVSL")
             finder = UsaStockFinder(["AVSL"])
 
-        avsl_series = finder.calculate_avsl_series("AVSL")
+        report = finder.calculate_original_avsl_report("AVSL")
 
-        self.assertIsNotNone(avsl_series)
-        self.assertIsInstance(avsl_series, pd.Series)
-        valid_values = avsl_series.dropna()
+        self.assertIsNotNone(report)
+        self.assertIsInstance(report, pd.DataFrame)
+        valid_values = report["original_avsl"].dropna()
         self.assertFalse(valid_values.empty)
         self.assertTrue(np.isfinite(valid_values.to_numpy()).all())
         self.assertTrue((valid_values > 0).all())
 
     def test_get_latest_avsl_returns_positive_float_for_sufficient_data(self):
-        """latest legacy AVSL should be available for a normal synthetic dataset"""
+        """latest AVSL should be available for a normal synthetic dataset."""
         with patch("yfinance.download") as mock_download:
             mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="AVSL")
             finder = UsaStockFinder(["AVSL"])
@@ -605,76 +517,9 @@ class TestUsaStockFinder(unittest.TestCase):
         self.assertIsInstance(latest_avsl, float)
         self.assertGreater(latest_avsl, 0.0)
 
-    def test_calculate_avsl_series_handles_early_non_finite_vpci_lengths(self):
-        """early NaN/inf VPCI values should not make integer length conversion fail"""
-        symbol = "AAPL"
-        index = self.finder.stock_data.index
-        vpci = pd.Series(np.linspace(0.05, 0.15, len(index)), index=index)
-        vpci.iloc[:5] = [np.nan, np.inf, -np.inf, np.nan, 0.05]
-        vpci_df = pd.DataFrame(
-            {
-                "VPC": pd.Series(0.05, index=index),
-                "VPR": pd.Series(1.0, index=index),
-                "VM": pd.Series(1.0, index=index),
-                "VPCI": vpci,
-            }
-        )
-
-        with patch.object(self.finder, "calculate_vpci_components", return_value=vpci_df):
-            avsl_series = self.finder.calculate_avsl_series(symbol)
-
-        self.assertIsNotNone(avsl_series)
-        valid_values = avsl_series.dropna()
-        self.assertFalse(valid_values.empty)
-        self.assertTrue(np.isfinite(valid_values.to_numpy()).all())
-
-    def test_get_latest_avsl_rejects_stale_forward_fill_when_latest_vpci_invalid(self):
-        """latest invalid VPCI should not return a previous day's forward-filled AVSL"""
-        with patch("yfinance.download") as mock_download:
-            mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="STALE")
-            finder = UsaStockFinder(["STALE"])
-
-        index = finder.stock_data.index
-        vpci_df = pd.DataFrame(
-            {
-                "VPC": pd.Series(0.05, index=index),
-                "VPR": pd.Series(1.0, index=index),
-                "VM": pd.Series(1.0, index=index),
-                "VPCI": pd.Series(0.10, index=index),
-            }
-        )
-        vpci_df.loc[index[-1], "VPCI"] = np.nan
-
-        with patch.object(finder, "calculate_vpci_components", return_value=vpci_df):
-            latest_avsl = finder.get_latest_avsl("STALE")
-
-        self.assertIsNone(latest_avsl)
-
-    def test_get_latest_legacy_avsl_rejects_stale_latest_avsl(self):
-        """legacy comparison helper should reject stale latest AVSL"""
-        with patch("yfinance.download") as mock_download:
-            mock_download.return_value = _deterministic_ohlcv(periods=100, symbol="STALE")
-            finder = UsaStockFinder(["STALE"])
-
-        index = finder.stock_data.index
-        vpci_df = pd.DataFrame(
-            {
-                "VPC": pd.Series(0.05, index=index),
-                "VPR": pd.Series(1.0, index=index),
-                "VM": pd.Series(1.0, index=index),
-                "VPCI": pd.Series(0.10, index=index),
-            }
-        )
-        vpci_df.loc[index[-1], "VPCI"] = np.inf
-
-        with patch.object(finder, "calculate_vpci_components", return_value=vpci_df):
-            legacy_latest = finder.get_latest_legacy_avsl("STALE")
-
-        self.assertIsNone(legacy_latest)
-
     def test_check_avsl_sell_signal_original_live_mode(self):
-        """check check_avsl_sell_signal in original AVSL live mode (default)"""
-        result = self.finder.check_avsl_sell_signal(use_buff_avsl=True)
+        """check check_avsl_sell_signal in original AVSL live mode."""
+        result = self.finder.check_avsl_sell_signal()
         self.assertIsInstance(result, dict)
         for symbol in self.symbols:
             self.assertIn(symbol, result)
@@ -712,7 +557,7 @@ class TestUsaStockFinder(unittest.TestCase):
             mock_download.return_value = mock_data
 
             finder = UsaStockFinder(["TEST"])
-            result = finder.check_avsl_sell_signal(use_buff_avsl=True)
+            result = finder.check_avsl_sell_signal()
 
             self.assertIn("TEST", result)
             # AVSL should detect the price decline with volume drop

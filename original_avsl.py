@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from config import OriginalAVSLConfig
+from config import AVSLConfig
 
 logger = logging.getLogger(__name__)
 
@@ -85,22 +85,22 @@ def calculate_original_avsl(
       zero and can invert positive prices.
     * VPR compares fast and slow VWMA/SMA price-confirmation ratios.
     * VM is the fast/slow volume moving-average ratio.
-    * VPCI is the signed deviation of VPC from neutral, multiplied by VPR and VM.
-    * Length follows the public ``round(3 + VPCI)`` rule and is clamped by config.
+    * The volume-price component indicator is the signed deviation of VPC from neutral, multiplied by VPR and VM.
+    * Length follows the public dynamic length rule and is clamped by config.
     * The lower Bollinger-style stop subtracts a rolling standard-deviation term
       from the rolling average of ``Low * 1/VPC * 1/VPR``.  The deviation term is
-      scaled by ``1 + abs(VPCI) * abs(VM)`` so it is explicitly based on VPCI and
-      VM while remaining non-negative and deterministic.
+      scaled by the volume-price component indicator and VM while remaining
+      non-negative and deterministic.
 
     The result does not call network APIs. Its latest positive finite
     ``original_avsl`` value is used by ``check_avsl_sell_signal()`` for live
     AVSL sell decisions.
     """
-    fast_period = OriginalAVSLConfig.FAST_PERIOD if fast_period is None else int(fast_period)
-    slow_period = OriginalAVSLConfig.SLOW_PERIOD if slow_period is None else int(slow_period)
-    min_length = OriginalAVSLConfig.MIN_LENGTH if min_length is None else int(min_length)
-    max_length = OriginalAVSLConfig.MAX_LENGTH if max_length is None else int(max_length)
-    stddev_mult = OriginalAVSLConfig.STDDEV_MULT if stddev_mult is None else float(stddev_mult)
+    fast_period = AVSLConfig.FAST_PERIOD if fast_period is None else int(fast_period)
+    slow_period = AVSLConfig.SLOW_PERIOD if slow_period is None else int(slow_period)
+    min_length = AVSLConfig.MIN_LENGTH if min_length is None else int(min_length)
+    max_length = AVSLConfig.MAX_LENGTH if max_length is None else int(max_length)
+    stddev_mult = AVSLConfig.STDDEV_MULT if stddev_mult is None else float(stddev_mult)
 
     if ohlcv is None or ohlcv.empty:
         return None
@@ -159,7 +159,7 @@ def calculate_original_avsl(
             "VPC": vpc,
             "VPR": vpr,
             "VM": vm,
-            "VPCI": vpci,
+            "vpci": vpci,
             "dynamic_length": dynamic_length,
             "price_component": price_component,
             "original_avsl": original_avsl,

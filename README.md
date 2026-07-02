@@ -185,11 +185,8 @@ python tools/performance_report.py \
 - `--entry`: `none`, `trend_relaxed`, `trend_basic`, `trend_strict`
 - `--exit`: `hold_fixed`, `stop_loss`, `trailing`, `trend_exit`, `avsl`
 
-> 백테스트 `avsl`는 **근사(approximation)** 입니다.  
-> 라이브 코드처럼 VPCI/동적 길이 기반 AVSL를 백테스트 엔진 안에서 직접 계산하지 않고,
-> 입력된 가격 이력의 `avsl` 컬럼(사전 계산값)을 사용해 `close < avsl` 조건만 평가합니다.
-> 이는 비교 실험의 결정론/재현성을 위한 의도적 분리입니다. `avsl` 입력이 누락/무효이면
-> AVSL 백테스트는 실패(fail fast)하도록 설계되어, 조용히 잘못된 결과가 생성되지 않게 합니다.
+> 백테스트 `--exit avsl`는 입력된 가격 이력의 `avsl` 컬럼(사전 계산된 일별 AVSL 스탑 값)을 사용해 `close < avsl` 조건을 평가합니다.
+> `avsl` 입력이 누락/무효이면 AVSL 백테스트는 실패(fail fast)하도록 설계되어, 조용히 잘못된 결과가 생성되지 않게 합니다.
 
 **예시 명령어**
 ```bash
@@ -241,8 +238,8 @@ python run_backtest.py \
   - 4개 고정 조합(`quantus/none`, `quantus/trend_basic`, `quantus_minervini/none`, `quantus_minervini/trend_basic`; 공통 `hold_fixed`)을 일괄 실행해 콘솔 요약을 출력합니다.
   - 빠른 상대 비교용 기능이며, 파라미터 스윕/통계적 유의성 검정까지 자동 제공하지는 않습니다.
 
-- **제한사항 / AVSL 근사**
-  - `--exit avsl`는 여전히 **근사 모델**입니다. 백테스트 엔진 내부에서 VPCI/동적 길이 AVSL를 재계산하지 않고, 입력 CSV의 `avsl` 컬럼을 그대로 사용해 `close < avsl`만 판정합니다.
+- **제한사항 / AVSL 입력**
+  - `--exit avsl`는 입력 CSV의 `avsl` 컬럼을 그대로 사용해 `close < avsl`만 판정합니다.
   - 따라서 AVSL 백테스트 품질은 입력 `avsl` 시계열 품질에 직접 의존합니다. `avsl`가 누락/비정상(양수 수치 아님)이면 fail-fast로 중단됩니다.
 
 ### LM 후보 정성 필터 로그 스키마 (준비 단계)
