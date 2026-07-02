@@ -761,7 +761,7 @@ class UsaStockFinder:
         return ``False``.
         """
         result: Dict[str, bool] = {}
-        logger.info("AVSL signal evaluation uses live original AVSL")
+        logger.info("AVSL signal evaluation uses original AVSL")
 
         for symbol in self.symbols:
             try:

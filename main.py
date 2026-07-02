@@ -1458,7 +1458,7 @@ def _evaluate_and_log_sell_decisions(
     """Evaluate sell decisions and keep existing diagnostics/logging unchanged."""
     avsl_signals = finder.check_avsl_sell_signal()
     avsl_count = sum(1 for v in avsl_signals.values() if v)
-    logger.info("AVSL 시그널 확인 완료 - AVSL=True인 종목: %d개", avsl_count)
+    logger.info("AVSL signal evaluation complete - AVSL=True count: %d", avsl_count)
     holding_trend_diagnostics = finder.get_trend_template_diagnostics(StrategyConfig.MARGIN_RELAXED)
     holding_trend_template = {
         symbol: bool(diagnostics["final_result"]) for symbol, diagnostics in holding_trend_diagnostics.items()

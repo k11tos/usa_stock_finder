@@ -14,9 +14,18 @@
 
 - **기술적 분석**: 이동평균선, 가격-거래량 상관관계 분석
 - **트렌드 분석**: 52주 고가/저가 기반 트렌드 유효성 검증
-- **매수/매도 신호**: 3단계 매도 시스템 (Stop Loss → Trailing Stop → AVSL → Trend)
+- **매수/매도 신호**: 5단계 매도 시스템 (Stop Loss → Special Situation Take Profit → Trailing Stop → AVSL → Trend)
 - **포트폴리오 관리**: 자동 투자 금액 계산 및 분배
 - **텔레그램 알림**: 실시간 매수/매도 신호 알림
+
+
+### AVSL 운영 확인
+
+- 라이브 AVSL은 원본 deterministic OHLCV 기반 계산을 사용합니다. 최신 종가가 최신 AVSL 라인보다 낮을 때(`latest_close < latest_avsl`) AVSL 매도 신호가 발생합니다.
+- 매도 결정 우선순위에서 AVSL은 Stop Loss, Special Situation Take Profit, Trailing Stop 이후에 평가되고, Trend Exit 이전에 평가됩니다.
+- 로그에서 AVSL 평가 시작은 `AVSL signal evaluation uses original AVSL`로 확인하고, 평가 결과 집계는 `AVSL=True count: <n>` 형식으로 확인합니다. 실제 AVSL 매도 결정은 `AVSL 매도 결정` 로그를 검색합니다.
+- 거래 신호 CSV에서는 해당 종목의 매도 사유/타입 컬럼 값이 `AVSL`인지 확인해 AVSL 매도 사유를 검증합니다.
+- AVSL 데이터가 부족한 경우 로그의 `AVSL calculation failed or insufficient data` 메시지를 확인하고, 해당 종목의 OHLCV 이력 길이, 필수 컬럼(Open/High/Low/Close/Volume), 최신 종가, 그리고 최신 AVSL 값이 양수 finite 값인지 점검합니다.
 
 ## 🛠️ 기술 스택
 
