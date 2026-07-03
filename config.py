@@ -8,7 +8,7 @@ Configuration Categories:
     - Environment Variables: API keys, account numbers, Telegram settings
     - Strategy Parameters: Trading thresholds, moving average periods, correlation thresholds
     - Investment Parameters: Reserve ratio, min/max investment amounts
-    - AVSL Parameters: Volume and price decline thresholds
+    - AVSL Parameters: Original deterministic OHLCV-based AVSL settings
 """
 
 import os
@@ -20,15 +20,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _get_env_with_deprecated_alias(primary: str, deprecated_alias: str, default: str) -> str:
-    """Return primary env value, falling back to a deprecated alias for migration."""
-    primary_value = os.getenv(primary)
-    if primary_value is not None:
-        return primary_value
-    alias_value = os.getenv(deprecated_alias)
-    if alias_value is not None:
-        return alias_value
-    return default
+def _get_avsl_enabled_env() -> str:
+    """Resolve the live AVSL enabled flag without silently ignoring migration disables.
+
+    ``AVSL_ENABLED`` is the final supported public name. ``ORIGINAL_AVSL_ENABLED``
+    is honored only as a deprecated runtime compatibility alias for the enable
+    flag so deployed environments that explicitly disabled AVSL during migration
+    are not silently re-enabled. When both are set, ``AVSL_ENABLED`` wins.
+    """
+    avsl_enabled = os.getenv("AVSL_ENABLED")
+    if avsl_enabled is not None:
+        return avsl_enabled
+
+    original_avsl_enabled = os.getenv("ORIGINAL_AVSL_ENABLED")
+    if original_avsl_enabled is not None:
+        return original_avsl_enabled
+
+    return "True"
 
 
 class ConfigError(Exception):
@@ -189,31 +197,14 @@ class InvestmentConfig:
 
 
 class AVSLConfig:
-    """Live original Buff Dormeier AVSL sell-signal configuration.
+    """Live original Buff Dormeier AVSL sell-signal configuration."""
 
-    ``ORIGINAL_AVSL_*`` environment variables are deprecated aliases kept for
-    migration compatibility. The new ``AVSL_*`` names take precedence whenever
-    both names are set.
-    """
-
-    ENABLED = (
-        _get_env_with_deprecated_alias("AVSL_ENABLED", "ORIGINAL_AVSL_ENABLED", "True").lower() == "true"
-    )
-    FAST_PERIOD = int(
-        _get_env_with_deprecated_alias("AVSL_FAST_PERIOD", "ORIGINAL_AVSL_FAST_PERIOD", "5")
-    )
-    SLOW_PERIOD = int(
-        _get_env_with_deprecated_alias("AVSL_SLOW_PERIOD", "ORIGINAL_AVSL_SLOW_PERIOD", "20")
-    )
-    MIN_LENGTH = int(
-        _get_env_with_deprecated_alias("AVSL_MIN_LENGTH", "ORIGINAL_AVSL_MIN_LENGTH", "3")
-    )
-    MAX_LENGTH = int(
-        _get_env_with_deprecated_alias("AVSL_MAX_LENGTH", "ORIGINAL_AVSL_MAX_LENGTH", "50")
-    )
-    STDDEV_MULT = float(
-        _get_env_with_deprecated_alias("AVSL_STDDEV_MULT", "ORIGINAL_AVSL_STDDEV_MULT", "2.0")
-    )
+    ENABLED = _get_avsl_enabled_env().lower() == "true"
+    FAST_PERIOD = int(os.getenv("AVSL_FAST_PERIOD", "5"))
+    SLOW_PERIOD = int(os.getenv("AVSL_SLOW_PERIOD", "20"))
+    MIN_LENGTH = int(os.getenv("AVSL_MIN_LENGTH", "3"))
+    MAX_LENGTH = int(os.getenv("AVSL_MAX_LENGTH", "50"))
+    STDDEV_MULT = float(os.getenv("AVSL_STDDEV_MULT", "2.0"))
 
 
 class DataQualityConfig:

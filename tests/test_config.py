@@ -133,55 +133,32 @@ class TestImportTimeConfigParsing(unittest.TestCase):
         self.assertEqual(temp_config.InvestmentConfig.RESERVE_RATIO, 0.1)
         self.assertEqual(temp_config.ScheduleConfig.EXECUTION_MARGIN_MINUTES, 10)
 
-    def test_original_avsl_enabled_alias_is_honored_when_new_name_absent(self):
+    def test_original_avsl_enabled_alias_still_prevents_silent_reenable(self):
         with patch.dict(os.environ, {"ORIGINAL_AVSL_ENABLED": "False"}, clear=True):
             temp_config = self._load_reloaded_temp_module()
 
         self.assertFalse(temp_config.AVSLConfig.ENABLED)
         self.assertFalse(temp_config.get_config()["avsl"]["enabled"])
 
-    def test_original_avsl_tuning_aliases_are_honored_when_new_names_absent(self):
+    def test_avsl_enabled_takes_precedence_over_original_enabled_alias(self):
         env = {
-            "ORIGINAL_AVSL_FAST_PERIOD": "7",
-            "ORIGINAL_AVSL_SLOW_PERIOD": "31",
-            "ORIGINAL_AVSL_MIN_LENGTH": "4",
-            "ORIGINAL_AVSL_MAX_LENGTH": "44",
-            "ORIGINAL_AVSL_STDDEV_MULT": "2.75",
+            "AVSL_ENABLED": "True",
+            "ORIGINAL_AVSL_ENABLED": "False",
         }
         with patch.dict(os.environ, env, clear=True):
             temp_config = self._load_reloaded_temp_module()
 
-        self.assertEqual(temp_config.AVSLConfig.FAST_PERIOD, 7)
-        self.assertEqual(temp_config.AVSLConfig.SLOW_PERIOD, 31)
-        self.assertEqual(temp_config.AVSLConfig.MIN_LENGTH, 4)
-        self.assertEqual(temp_config.AVSLConfig.MAX_LENGTH, 44)
-        self.assertEqual(temp_config.AVSLConfig.STDDEV_MULT, 2.75)
-        self.assertEqual(
-            temp_config.get_config()["avsl"],
-            {
-                "enabled": True,
-                "fast_period": 7,
-                "slow_period": 31,
-                "min_length": 4,
-                "max_length": 44,
-                "stddev_mult": 2.75,
-            },
-        )
+        self.assertTrue(temp_config.AVSLConfig.ENABLED)
+        self.assertTrue(temp_config.get_config()["avsl"]["enabled"])
 
-    def test_new_avsl_names_take_precedence_over_original_avsl_aliases(self):
+    def test_avsl_supported_names_configure_live_original_avsl(self):
         env = {
             "AVSL_ENABLED": "True",
-            "ORIGINAL_AVSL_ENABLED": "False",
             "AVSL_FAST_PERIOD": "8",
-            "ORIGINAL_AVSL_FAST_PERIOD": "7",
             "AVSL_SLOW_PERIOD": "32",
-            "ORIGINAL_AVSL_SLOW_PERIOD": "31",
             "AVSL_MIN_LENGTH": "5",
-            "ORIGINAL_AVSL_MIN_LENGTH": "4",
             "AVSL_MAX_LENGTH": "45",
-            "ORIGINAL_AVSL_MAX_LENGTH": "44",
             "AVSL_STDDEV_MULT": "3.5",
-            "ORIGINAL_AVSL_STDDEV_MULT": "2.75",
         }
         with patch.dict(os.environ, env, clear=True):
             temp_config = self._load_reloaded_temp_module()
