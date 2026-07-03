@@ -20,6 +20,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_avsl_enabled_env() -> str:
+    """Resolve the live AVSL enabled flag without silently ignoring migration disables.
+
+    ``AVSL_ENABLED`` is the final supported public name. ``ORIGINAL_AVSL_ENABLED``
+    is honored only as a deprecated runtime compatibility alias for the enable
+    flag so deployed environments that explicitly disabled AVSL during migration
+    are not silently re-enabled. When both are set, ``AVSL_ENABLED`` wins.
+    """
+    avsl_enabled = os.getenv("AVSL_ENABLED")
+    if avsl_enabled is not None:
+        return avsl_enabled
+
+    original_avsl_enabled = os.getenv("ORIGINAL_AVSL_ENABLED")
+    if original_avsl_enabled is not None:
+        return original_avsl_enabled
+
+    return "True"
+
 
 class ConfigError(Exception):
     """Custom exception for configuration errors."""
@@ -181,7 +199,7 @@ class InvestmentConfig:
 class AVSLConfig:
     """Live original Buff Dormeier AVSL sell-signal configuration."""
 
-    ENABLED = os.getenv("AVSL_ENABLED", "True").lower() == "true"
+    ENABLED = _get_avsl_enabled_env().lower() == "true"
     FAST_PERIOD = int(os.getenv("AVSL_FAST_PERIOD", "5"))
     SLOW_PERIOD = int(os.getenv("AVSL_SLOW_PERIOD", "20"))
     MIN_LENGTH = int(os.getenv("AVSL_MIN_LENGTH", "3"))

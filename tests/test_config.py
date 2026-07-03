@@ -133,6 +133,24 @@ class TestImportTimeConfigParsing(unittest.TestCase):
         self.assertEqual(temp_config.InvestmentConfig.RESERVE_RATIO, 0.1)
         self.assertEqual(temp_config.ScheduleConfig.EXECUTION_MARGIN_MINUTES, 10)
 
+    def test_original_avsl_enabled_alias_still_prevents_silent_reenable(self):
+        with patch.dict(os.environ, {"ORIGINAL_AVSL_ENABLED": "False"}, clear=True):
+            temp_config = self._load_reloaded_temp_module()
+
+        self.assertFalse(temp_config.AVSLConfig.ENABLED)
+        self.assertFalse(temp_config.get_config()["avsl"]["enabled"])
+
+    def test_avsl_enabled_takes_precedence_over_original_enabled_alias(self):
+        env = {
+            "AVSL_ENABLED": "True",
+            "ORIGINAL_AVSL_ENABLED": "False",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            temp_config = self._load_reloaded_temp_module()
+
+        self.assertTrue(temp_config.AVSLConfig.ENABLED)
+        self.assertTrue(temp_config.get_config()["avsl"]["enabled"])
+
     def test_avsl_supported_names_configure_live_original_avsl(self):
         env = {
             "AVSL_ENABLED": "True",
