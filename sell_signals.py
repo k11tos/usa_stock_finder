@@ -22,9 +22,11 @@ from config import StrategyConfig
 from stock_analysis import UsaStockFinder
 from stop_loss_cooldown import record_stop_loss_event
 from trailing_stop import (
+    get_observed_holding_history,
     get_observed_holding_since,
+    has_constant_observed_cost_basis,
     load_trailing_state,
-    reconstruct_highest_close,
+    reconstruct_activated_highest_close,
     save_trailing_state,
     update_highest_close,
 )
@@ -249,11 +251,15 @@ def evaluate_sell_decisions(
             state_entry = trailing_state.get(symbol, {})
             state_missing = symbol not in trailing_state
             persisted_highest = float(state_entry.get("highest_close", 0.0) or 0.0)
-            observed_holding_since = get_observed_holding_since(symbol)
-            reconstructed_highest = (
-                reconstruct_highest_close(finder, symbol, observed_holding_since)
-                if observed_holding_since is not None
-                else None
+            holding_history = get_observed_holding_history(symbol)
+            observed_holding_since = (
+                holding_history[0].run_date if holding_history else get_observed_holding_since(symbol)
+            )
+            reconstructed_highest = reconstruct_activated_highest_close(
+                finder,
+                symbol,
+                holding_history,
+                StrategyConfig.TRAILING_MIN_PROFIT_PCT,
             )
             activation_threshold = avg_price * (1 + StrategyConfig.TRAILING_MIN_PROFIT_PCT)
             trailing_activated = bool(state_entry.get("activated", False))
@@ -261,7 +267,6 @@ def evaluate_sell_decisions(
             if (
                 not trailing_activated
                 and reconstructed_highest is not None
-                and reconstructed_highest >= activation_threshold
             ):
                 trailing_activated = True
                 activation_source = "account_snapshot_reconstruction"
@@ -269,6 +274,7 @@ def evaluate_sell_decisions(
                 not trailing_activated
                 and "activated" not in state_entry
                 and persisted_highest >= activation_threshold
+                and has_constant_observed_cost_basis(holding_history, avg_price)
             ):
                 # Legacy states tracked a holding-period high before activation was persisted.
                 trailing_activated = True

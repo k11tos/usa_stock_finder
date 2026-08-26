@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import sell_signals
 from sell_signals import SellReason, evaluate_sell_decisions, select_current_price
+from trailing_stop import ObservedHoldingSnapshot
 
 
 class TestSellSignals(unittest.TestCase):
@@ -886,6 +887,10 @@ class TestTrailingActivationPersistence(unittest.TestCase):
 
         with patch("sell_signals.load_trailing_state", return_value=trailing_state), \
              patch("sell_signals.save_trailing_state") as mock_save_trailing_state, \
+             patch(
+                 "sell_signals.get_observed_holding_history",
+                 return_value=[ObservedHoldingSnapshot(date(2026, 1, 1), self.quantity, self.avg_price)],
+             ), \
              patch("sell_signals.record_stop_loss_event") as mock_record_stop_loss_event, \
              patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", True), \
              patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", 0.10), \

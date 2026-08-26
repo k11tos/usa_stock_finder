@@ -14,6 +14,7 @@ import json
 import logging
 import os
 from csv import DictReader
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict
@@ -24,6 +25,101 @@ logger = logging.getLogger(__name__)
 
 TRAILING_STATE_PATH = os.path.join("data", "trailing_state.json")
 ACCOUNT_SNAPSHOTS_PATH = os.path.join("data", "live", "account_snapshots.csv")
+
+
+@dataclass(frozen=True)
+class ObservedHoldingSnapshot:
+    """Position facts observed during one complete account snapshot run."""
+
+    run_date: date
+    quantity: float
+    avg_price: float | None
+
+
+def get_observed_holding_history(
+    symbol: str,
+    snapshots_path: str | os.PathLike[str] = ACCOUNT_SNAPSHOTS_PATH,
+) -> list[ObservedHoldingSnapshot]:
+    """Return snapshots in the current observed positive-holding segment.
+
+    An invalid average price remains represented as ``None`` rather than being
+    replaced with the latest cost basis.  This lets activation recovery decline
+    to make a retroactive inference when the contemporaneous basis is unknown.
+    """
+    path = Path(snapshots_path)
+    if not path.exists():
+        return []
+
+    try:
+        with path.open(newline="", encoding="utf-8") as file_obj:
+            rows = list(DictReader(file_obj))
+    except (OSError, UnicodeError):
+        logger.warning(
+            "Unable to read account snapshots for trailing recovery: %s", path
+        )
+        return []
+
+    runs: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        run_id = (row.get("run_id") or "").strip()
+        run_date = (row.get("run_date") or "").strip()
+        if not run_id or not run_date:
+            continue
+        try:
+            parsed_date = date.fromisoformat(run_date)
+            quantity = float(row.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            runs.setdefault(run_id, {"date": None, "invalid": True, "symbols": {}})
+            runs[run_id]["invalid"] = True
+            continue
+        run = runs.setdefault(
+            run_id, {"date": parsed_date, "invalid": False, "symbols": {}}
+        )
+        if run["date"] != parsed_date:
+            run["invalid"] = True
+        row_symbol = (row.get("symbol") or "").strip().upper()
+        if row_symbol:
+            position = run["symbols"].setdefault(
+                row_symbol,
+                {"quantity": 0.0, "cost": 0.0, "avg_valid": True},
+            )
+            position["quantity"] += quantity
+            try:
+                row_avg = float(row.get("avg_price") or 0.0)
+            except (TypeError, ValueError):
+                row_avg = 0.0
+            if quantity > 0 and row_avg > 0:
+                position["cost"] += quantity * row_avg
+            elif quantity > 0:
+                position["avg_valid"] = False
+
+    ordered = sorted(
+        (
+            run
+            for run in runs.values()
+            if not run["invalid"] and run["date"] is not None
+        ),
+        key=lambda run: run["date"],
+    )
+    target = symbol.upper()
+    if not ordered or ordered[-1]["symbols"].get(target, {}).get("quantity", 0.0) <= 0:
+        return []
+
+    current_segment = []
+    for run in reversed(ordered):
+        position = run["symbols"].get(target, {})
+        quantity = position.get("quantity", 0.0)
+        if quantity <= 0:
+            break
+        avg_price = (
+            position["cost"] / quantity
+            if position.get("avg_valid", False) and position.get("cost", 0.0) > 0
+            else None
+        )
+        current_segment.append(
+            ObservedHoldingSnapshot(run["date"], quantity, avg_price)
+        )
+    return list(reversed(current_segment))
 
 
 def get_observed_holding_since(
@@ -42,51 +138,8 @@ def get_observed_holding_since(
     introduced after the purchase, so the returned date is not asserted to be the
     broker's actual purchase date.
     """
-    path = Path(snapshots_path)
-    if not path.exists():
-        return None
-
-    try:
-        with path.open(newline="", encoding="utf-8") as file_obj:
-            rows = list(DictReader(file_obj))
-    except (OSError, UnicodeError):
-        logger.warning("Unable to read account snapshots for trailing recovery: %s", path)
-        return None
-
-    runs: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        run_id = (row.get("run_id") or "").strip()
-        run_date = (row.get("run_date") or "").strip()
-        if not run_id or not run_date:
-            continue
-        try:
-            parsed_date = date.fromisoformat(run_date)
-            quantity = float(row.get("quantity") or 0.0)
-        except (TypeError, ValueError):
-            # A partially written run cannot safely establish presence/absence.
-            runs.setdefault(run_id, {"date": None, "invalid": True, "symbols": {}})
-            runs[run_id]["invalid"] = True
-            continue
-        run = runs.setdefault(run_id, {"date": parsed_date, "invalid": False, "symbols": {}})
-        if run["date"] != parsed_date:
-            run["invalid"] = True
-        row_symbol = (row.get("symbol") or "").strip().upper()
-        if row_symbol:
-            run["symbols"][row_symbol] = run["symbols"].get(row_symbol, 0.0) + quantity
-
-    ordered = sorted(
-        (run for run in runs.values() if not run["invalid"] and run["date"] is not None),
-        key=lambda run: run["date"],
-    )
-    if not ordered or ordered[-1]["symbols"].get(symbol.upper(), 0.0) <= 0:
-        return None
-
-    observed_start = ordered[-1]["date"]
-    for run in reversed(ordered[:-1]):
-        if run["symbols"].get(symbol.upper(), 0.0) <= 0:
-            break
-        observed_start = run["date"]
-    return observed_start
+    history = get_observed_holding_history(symbol, snapshots_path)
+    return history[0].run_date if history else None
 
 
 def reconstruct_highest_close(
@@ -98,11 +151,93 @@ def reconstruct_highest_close(
     try:
         closes = finder.stock_data["Close"][symbol]
         index_dates = pd.to_datetime(closes.index, errors="coerce").date
-        eligible = pd.to_numeric(closes, errors="coerce")[index_dates >= observed_holding_since].dropna()
+        eligible = pd.to_numeric(closes, errors="coerce")[
+            index_dates >= observed_holding_since
+        ].dropna()
         eligible = eligible[eligible > 0]
         return float(eligible.max()) if not eligible.empty else None
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
+
+
+def reconstruct_activated_highest_close(
+    finder: Any,
+    symbol: str,
+    history: list[ObservedHoldingSnapshot],
+    min_profit_pct: float,
+) -> float | None:
+    """Recover an activated high without retroactively applying a new basis.
+
+    When every observed cost basis is the same, all closes in the observed
+    segment can be evaluated.  If the basis changed, only closes on snapshot
+    dates have a contemporaneously observed basis.  Once activation is proven,
+    normal trailing semantics resume and every later close can update the high.
+    """
+    if not history:
+        return None
+    try:
+        closes = pd.to_numeric(
+            finder.stock_data["Close"][symbol], errors="coerce"
+        ).dropna()
+        closes_by_date = {
+            timestamp.date(): float(close)
+            for timestamp, close in zip(
+                pd.to_datetime(closes.index, errors="coerce"), closes
+            )
+            if not pd.isna(timestamp) and float(close) > 0
+        }
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+    known_bases = [
+        snapshot.avg_price for snapshot in history if snapshot.avg_price is not None
+    ]
+    all_bases_known = len(known_bases) == len(history)
+    constant_basis = all_bases_known and all(
+        abs(basis - known_bases[0]) <= 1e-6 for basis in known_bases[1:]
+    )
+    activation_date = None
+    if constant_basis:
+        threshold = known_bases[0] * (1 + min_profit_pct)
+        activation_date = next(
+            (
+                close_date
+                for close_date, close in sorted(closes_by_date.items())
+                if close_date >= history[0].run_date and close >= threshold
+            ),
+            None,
+        )
+    else:
+        for snapshot in history:
+            close = closes_by_date.get(snapshot.run_date)
+            if (
+                snapshot.avg_price is not None
+                and close is not None
+                and close >= snapshot.avg_price * (1 + min_profit_pct)
+            ):
+                activation_date = snapshot.run_date
+                break
+
+    if activation_date is None:
+        return None
+    activated_closes = [
+        close
+        for close_date, close in closes_by_date.items()
+        if close_date >= activation_date
+    ]
+    return max(activated_closes) if activated_closes else None
+
+
+def has_constant_observed_cost_basis(
+    history: list[ObservedHoldingSnapshot],
+    current_avg_price: float,
+) -> bool:
+    """Return whether every observed basis is known and equals the current basis."""
+    return bool(history) and all(
+        snapshot.avg_price is not None
+        and abs(snapshot.avg_price - current_avg_price) <= 1e-6
+        for snapshot in history
+    )
 
 
 def load_trailing_state() -> Dict[str, Dict[str, Any]]:
@@ -129,10 +264,14 @@ def load_trailing_state() -> Dict[str, Dict[str, Any]]:
             logger.debug("Trailing state loaded: %d symbols", len(state))
             return state
     except json.JSONDecodeError as e:
-        logger.warning("Failed to parse trailing state file: %s. Returning empty state.", str(e))
+        logger.warning(
+            "Failed to parse trailing state file: %s. Returning empty state.", str(e)
+        )
         return {}
     except Exception as e:
-        logger.warning("Error loading trailing state file: %s. Returning empty state.", str(e))
+        logger.warning(
+            "Error loading trailing state file: %s. Returning empty state.", str(e)
+        )
         return {}
 
 
