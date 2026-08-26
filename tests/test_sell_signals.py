@@ -952,16 +952,16 @@ class TestTrailingActivationPersistence(unittest.TestCase):
         mock_record_stop_loss_event.assert_called_once()
         mock_save_trailing_state.assert_called_once_with({})
 
-    def test_old_state_without_activation_stays_inactive_below_threshold(self):
-        """Case E: old state without activated is treated as inactive below threshold."""
+    def test_old_state_without_activation_recovers_from_highest_close(self):
+        """Legacy high proves the activation threshold was reached."""
         trailing_state = {self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27"}}
         decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(108.0, trailing_state)
 
         self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)
-        self.assertNotIn("activated", trailing_state[self.symbol])
-        self.finder.get_atr.assert_not_called()
+        self.assertTrue(trailing_state[self.symbol]["activated"])
+        self.finder.get_atr.assert_called_once_with(self.symbol, 14)
         mock_record_stop_loss_event.assert_not_called()
-        mock_save_trailing_state.assert_not_called()
+        mock_save_trailing_state.assert_called_once_with(trailing_state)
 
     def test_old_state_without_activation_upgrades_above_threshold(self):
         """Case E: old state without activated is upgraded when profit reaches threshold."""
