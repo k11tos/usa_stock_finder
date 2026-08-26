@@ -21,7 +21,17 @@ from typing import Any, Dict, List
 from config import StrategyConfig
 from stock_analysis import UsaStockFinder
 from stop_loss_cooldown import record_stop_loss_event
-from trailing_stop import load_trailing_state, save_trailing_state, update_highest_close
+from trailing_stop import (
+    get_observed_holding_history,
+    get_observed_holding_since,
+    has_constant_observed_cost_basis,
+    load_trailing_state,
+    reconstruct_activated_highest_close,
+    reconstruct_highest_close,
+    save_trailing_state,
+    state_matches_observed_segment,
+    update_highest_close,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +251,60 @@ def evaluate_sell_decisions(
         if StrategyConfig.TRAILING_ENABLED and avg_price > 0 and current_price > 0:
             profit_pct = (current_price - avg_price) / avg_price
             state_entry = trailing_state.get(symbol, {})
-            trailing_activated = bool(state_entry.get("activated", False))
+            state_missing = symbol not in trailing_state
+            persisted_highest = float(state_entry.get("highest_close", 0.0) or 0.0)
+            holding_history = get_observed_holding_history(symbol)
+            observed_holding_since = (
+                holding_history[0].run_date if holding_history else get_observed_holding_since(symbol)
+            )
+            activation_reconstructed_highest = reconstruct_activated_highest_close(
+                finder,
+                symbol,
+                holding_history,
+                StrategyConfig.TRAILING_MIN_PROFIT_PCT,
+            )
+            state_provenance_valid = state_matches_observed_segment(
+                state_entry,
+                holding_history,
+                symbol,
+            )
+            persisted_activated = bool(state_entry.get("activated", False))
+            trailing_activated = persisted_activated and state_provenance_valid
+            reconstructed_highest = (
+                reconstruct_highest_close(finder, symbol, observed_holding_since)
+                if trailing_activated and observed_holding_since is not None
+                else activation_reconstructed_highest
+            )
+            activation_threshold = avg_price * (1 + StrategyConfig.TRAILING_MIN_PROFIT_PCT)
+            activation_source = "persisted_state" if trailing_activated else "none"
+            if persisted_activated and not state_provenance_valid:
+                logger.warning(
+                    "%s: Ignoring persisted trailing activation/high with ambiguous holding-segment provenance "
+                    "(state_observed_holding_since=%s, current_observed_holding_since=%s, last_update=%s)",
+                    symbol,
+                    state_entry.get("observed_holding_since"),
+                    observed_holding_since,
+                    state_entry.get("last_update"),
+                )
+            if not state_provenance_valid and state_entry:
+                trailing_state.setdefault(symbol, {}).pop("activated", None)
+                trailing_state.setdefault(symbol, {}).pop("highest_close", None)
+                trailing_state.setdefault(symbol, {}).pop("observed_holding_since", None)
+                trailing_state.setdefault(symbol, {}).pop("observed_holding_run_id", None)
+                trailing_state_modified = True
+            if not trailing_activated and activation_reconstructed_highest is not None:
+                trailing_activated = True
+                activation_source = "account_snapshot_reconstruction"
+            elif (
+                not trailing_activated
+                and "activated" not in state_entry
+                and persisted_highest >= activation_threshold
+                and state_provenance_valid
+                and has_constant_observed_cost_basis(holding_history, avg_price)
+            ):
+                # Legacy states tracked a holding-period high before activation was persisted.
+                trailing_activated = True
+                activation_source = "persisted_state"
 
             if trailing_activated:
                 logger.debug(
@@ -255,6 +318,7 @@ def evaluate_sell_decisions(
                 )
             elif profit_pct >= StrategyConfig.TRAILING_MIN_PROFIT_PCT:
                 trailing_activated = True
+                activation_source = "runtime_activation"
                 trailing_state.setdefault(symbol, {})["activated"] = True
                 trailing_state_modified = True
                 logger.info(
@@ -279,18 +343,47 @@ def evaluate_sell_decisions(
 
             if trailing_activated:
                 today = date.today()
-
-                # 트레일링에 사용할 "종가" 개념: 여기서는 current_price를 사용
-                close_for_trailing = current_price
-
-                # 최고 종가 갱신
+                trusted_persisted_highest = persisted_highest if state_provenance_valid else 0.0
+                if not state_provenance_valid:
+                    trailing_state.setdefault(symbol, {}).pop("highest_close", None)
+                candidates = [
+                    value
+                    for value in (
+                        trusted_persisted_highest,
+                        reconstructed_highest,
+                    )
+                    if value and value > 0
+                ]
+                highest_close_source = "persisted_state"
+                if (
+                    reconstructed_highest is not None
+                    and reconstructed_highest >= trusted_persisted_highest
+                ):
+                    highest_close_source = "historical_ohlcv"
+                if candidates:
+                    recovery_high = max(candidates)
+                else:
+                    recovery_high = current_price
+                    highest_close_source = "fallback_current_price"
+                    logger.warning(
+                        "%s: TRAILING recovery unavailable; falling back to current price and trailing protection may "
+                        "reset "
+                        "(state_missing=%s, observed_holding_since=%s)",
+                        symbol, state_missing, observed_holding_since,
+                    )
+                if recovery_high > trusted_persisted_highest:
+                    trailing_state.setdefault(symbol, {})["highest_close"] = recovery_high
                 highest_close = update_highest_close(
                     trailing_state,
                     symbol,
-                    close_for_trailing,
+                    current_price,
                     today,
                 )
                 trailing_state.setdefault(symbol, {})["activated"] = True
+                if observed_holding_since is not None:
+                    trailing_state[symbol]["observed_holding_since"] = observed_holding_since.isoformat()
+                if holding_history and holding_history[0].run_id:
+                    trailing_state[symbol]["observed_holding_run_id"] = holding_history[0].run_id
                 trailing_state_modified = True
 
                 # ATR 계산
@@ -299,17 +392,30 @@ def evaluate_sell_decisions(
                 if atr_value > 0 and highest_close > 0:
                     trailing_stop_price = highest_close - atr_value * StrategyConfig.TRAILING_ATR_MULTIPLIER
 
+                    triggered = current_price <= trailing_stop_price
                     logger.debug(
-                        "%s: TRAILING 체크 - profit_pct=%.4f (%.2f%%), highest_close=%.4f, "
-                        "ATR=%.4f, multiplier=%.2f, trailing_stop_price=%.4f, current_price=%.4f",
+                        "%s: TRAILING diagnostic avg_price=%.4f current_price=%.4f profit_pct=%.4f "
+                        "activated=%s activation_source=%s state_missing=%s holding_since=%s "
+                        "holding_since_source=%s persisted_highest_close=%.4f reconstructed_highest_close=%s "
+                        "effective_highest_close=%.4f highest_close_source=%s ATR=%.4f ATR_multiplier=%.2f "
+                        "trailing_stop_price=%.4f triggered=%s",
                         symbol,
+                        avg_price,
+                        current_price,
                         profit_pct,
-                        profit_pct * 100,
+                        trailing_activated,
+                        activation_source,
+                        state_missing,
+                        observed_holding_since,
+                        "account_snapshot_reconstruction" if observed_holding_since else "unavailable",
+                        persisted_highest,
+                        reconstructed_highest,
                         highest_close,
+                        highest_close_source,
                         atr_value,
                         StrategyConfig.TRAILING_ATR_MULTIPLIER,
                         trailing_stop_price,
-                        current_price,
+                        triggered,
                     )
 
                     # 현재가가 트레일링 스탑 아래로 내려가면 매도
