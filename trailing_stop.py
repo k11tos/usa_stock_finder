@@ -34,18 +34,13 @@ class ObservedHoldingSnapshot:
     run_date: date
     quantity: float
     avg_price: float | None
+    run_id: str = ""
 
 
-def get_observed_holding_history(
-    symbol: str,
-    snapshots_path: str | os.PathLike[str] = ACCOUNT_SNAPSHOTS_PATH,
-) -> list[ObservedHoldingSnapshot]:
-    """Return snapshots in the current observed positive-holding segment.
-
-    An invalid average price remains represented as ``None`` rather than being
-    replaced with the latest cost basis.  This lets activation recovery decline
-    to make a retroactive inference when the contemporaneous basis is unknown.
-    """
+def _read_observed_holding_runs(
+    snapshots_path: str | os.PathLike[str],
+) -> list[dict[str, Any]]:
+    """Read valid account snapshot runs in execution order."""
     path = Path(snapshots_path)
     if not path.exists():
         return []
@@ -69,11 +64,15 @@ def get_observed_holding_history(
             parsed_date = date.fromisoformat(run_date)
             quantity = float(row.get("quantity") or 0.0)
         except (TypeError, ValueError):
-            runs.setdefault(run_id, {"date": None, "invalid": True, "symbols": {}})
+            runs.setdefault(
+                run_id,
+                {"run_id": run_id, "date": None, "invalid": True, "symbols": {}},
+            )
             runs[run_id]["invalid"] = True
             continue
         run = runs.setdefault(
-            run_id, {"date": parsed_date, "invalid": False, "symbols": {}}
+            run_id,
+            {"run_id": run_id, "date": parsed_date, "invalid": False, "symbols": {}},
         )
         if run["date"] != parsed_date:
             run["invalid"] = True
@@ -93,14 +92,27 @@ def get_observed_holding_history(
             elif quantity > 0:
                 position["avg_valid"] = False
 
-    ordered = sorted(
+    return sorted(
         (
             run
             for run in runs.values()
             if not run["invalid"] and run["date"] is not None
         ),
-        key=lambda run: run["date"],
+        key=lambda run: (run["date"], run["run_id"]),
     )
+
+
+def get_observed_holding_history(
+    symbol: str,
+    snapshots_path: str | os.PathLike[str] = ACCOUNT_SNAPSHOTS_PATH,
+) -> list[ObservedHoldingSnapshot]:
+    """Return snapshots in the current observed positive-holding segment.
+
+    An invalid average price remains represented as ``None`` rather than being
+    replaced with the latest cost basis.  This lets activation recovery decline
+    to make a retroactive inference when the contemporaneous basis is unknown.
+    """
+    ordered = _read_observed_holding_runs(snapshots_path)
     target = symbol.upper()
     if not ordered or ordered[-1]["symbols"].get(target, {}).get("quantity", 0.0) <= 0:
         return []
@@ -117,7 +129,7 @@ def get_observed_holding_history(
             else None
         )
         current_segment.append(
-            ObservedHoldingSnapshot(run["date"], quantity, avg_price)
+            ObservedHoldingSnapshot(run["date"], quantity, avg_price, run["run_id"])
         )
     return list(reversed(current_segment))
 
@@ -242,23 +254,56 @@ def has_constant_observed_cost_basis(
 
 def state_matches_observed_segment(
     state_entry: dict[str, Any],
-    observed_holding_since: date | None,
+    observed_holding_history: list[ObservedHoldingSnapshot],
+    symbol: str,
+    snapshots_path: str | os.PathLike[str] = ACCOUNT_SNAPSHOTS_PATH,
 ) -> bool:
     """Return whether state explicitly identifies the current holding segment.
 
-    ``last_update`` is intentionally insufficient: an old high can survive an
-    unrelated exit and receive a new update date after repurchase.  The segment
-    boundary itself is the backward-compatible provenance marker.
+    The snapshot ``run_id`` is the segment boundary.  A date-only marker is
+    accepted only for legacy state when snapshot history proves that no earlier
+    positive run for the symbol exists on that same date.  This preserves safe
+    legacy state while rejecting the ambiguous same-day exit/re-entry case.
     """
-    if observed_holding_since is None:
+    if not observed_holding_history:
         return False
-    try:
+
+    current_segment = observed_holding_history[0]
+    if "observed_holding_run_id" in state_entry:
         return (
-            date.fromisoformat(str(state_entry.get("observed_holding_since", "")))
-            == observed_holding_since
+            bool(current_segment.run_id)
+            and str(state_entry.get("observed_holding_run_id", "")).strip()
+            == current_segment.run_id
         )
+
+    try:
+        legacy_since = date.fromisoformat(str(state_entry.get("observed_holding_since", "")))
     except ValueError:
         return False
+
+    if legacy_since != current_segment.run_date:
+        return False
+    if not current_segment.run_id:
+        return True
+
+    ordered = _read_observed_holding_runs(snapshots_path)
+    current_index = next(
+        (
+            index
+            for index, run in enumerate(ordered)
+            if run["run_id"] == current_segment.run_id
+        ),
+        None,
+    )
+    if current_index is None:
+        return False
+
+    target = symbol.upper()
+    return not any(
+        run["date"] == current_segment.run_date
+        and run["symbols"].get(target, {}).get("quantity", 0.0) > 0
+        for run in ordered[:current_index]
+    )
 
 
 def load_trailing_state() -> Dict[str, Dict[str, Any]]:
@@ -274,6 +319,7 @@ def load_trailing_state() -> Dict[str, Dict[str, Any]]:
             - "last_update": ISO format date string of last update
             - "activated": Whether ATR trailing has been activated for the symbol
             - "observed_holding_since": Earliest date of the current segment seen in snapshots
+            - "observed_holding_run_id": First snapshot run_id of the current segment
     """
     if not os.path.exists(TRAILING_STATE_PATH):
         logger.debug("Trailing state file does not exist: %s", TRAILING_STATE_PATH)

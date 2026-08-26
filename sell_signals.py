@@ -265,7 +265,8 @@ def evaluate_sell_decisions(
             )
             state_provenance_valid = state_matches_observed_segment(
                 state_entry,
-                observed_holding_since,
+                holding_history,
+                symbol,
             )
             persisted_activated = bool(state_entry.get("activated", False))
             trailing_activated = persisted_activated and state_provenance_valid
@@ -285,10 +286,13 @@ def evaluate_sell_decisions(
                     observed_holding_since,
                     state_entry.get("last_update"),
                 )
-            if (
-                not trailing_activated
-                and activation_reconstructed_highest is not None
-            ):
+            if not state_provenance_valid and state_entry:
+                trailing_state.setdefault(symbol, {}).pop("activated", None)
+                trailing_state.setdefault(symbol, {}).pop("highest_close", None)
+                trailing_state.setdefault(symbol, {}).pop("observed_holding_since", None)
+                trailing_state.setdefault(symbol, {}).pop("observed_holding_run_id", None)
+                trailing_state_modified = True
+            if not trailing_activated and activation_reconstructed_highest is not None:
                 trailing_activated = True
                 activation_source = "account_snapshot_reconstruction"
             elif (
@@ -362,7 +366,8 @@ def evaluate_sell_decisions(
                     recovery_high = current_price
                     highest_close_source = "fallback_current_price"
                     logger.warning(
-                        "%s: TRAILING recovery unavailable; falling back to current price and trailing protection may reset "
+                        "%s: TRAILING recovery unavailable; falling back to current price and trailing protection may "
+                        "reset "
                         "(state_missing=%s, observed_holding_since=%s)",
                         symbol, state_missing, observed_holding_since,
                     )
@@ -377,6 +382,8 @@ def evaluate_sell_decisions(
                 trailing_state.setdefault(symbol, {})["activated"] = True
                 if observed_holding_since is not None:
                     trailing_state[symbol]["observed_holding_since"] = observed_holding_since.isoformat()
+                if holding_history and holding_history[0].run_id:
+                    trailing_state[symbol]["observed_holding_run_id"] = holding_history[0].run_id
                 trailing_state_modified = True
 
                 # ATR 계산

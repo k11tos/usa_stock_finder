@@ -13,6 +13,7 @@ from trailing_stop import (
     ObservedHoldingSnapshot,
     get_observed_holding_history,
     reconstruct_activated_highest_close,
+    state_matches_observed_segment,
 )
 
 HEADERS = ["run_id", "run_date", "symbol", "quantity", "avg_price", "current_price"]
@@ -92,6 +93,151 @@ def test_latest_snapshot_without_current_symbol_is_not_guessed_as_holding_start(
         ],
     )
     assert get_observed_holding_since("ABC", path) is None
+
+
+def test_same_day_repurchase_has_a_distinct_run_level_segment_boundary(tmp_path):
+    path = tmp_path / "account_snapshots.csv"
+    _write_snapshots(
+        path,
+        [
+            {"run_id": "20260827_090000", "run_date": "2026-08-27", "symbol": "REBUY", "quantity": 10},
+            {"run_id": "20260827_120000", "run_date": "2026-08-27", "symbol": "", "quantity": 0},
+            {"run_id": "20260827_150000", "run_date": "2026-08-27", "symbol": "REBUY", "quantity": 10},
+        ],
+    )
+
+    history = get_observed_holding_history("REBUY", path)
+
+    assert [(snapshot.run_id, snapshot.run_date) for snapshot in history] == [("20260827_150000", date(2026, 8, 27))]
+    assert not state_matches_observed_segment(
+        {
+            "activated": True,
+            "highest_close": 150.0,
+            "observed_holding_since": "2026-08-27",
+            "observed_holding_run_id": "20260827_090000",
+        },
+        history,
+        "REBUY",
+        path,
+    )
+
+
+def test_same_day_repurchase_does_not_reuse_previous_trailing_state(tmp_path):
+    symbol = "REBUY"
+    path = tmp_path / "account_snapshots.csv"
+    _write_snapshots(
+        path,
+        [
+            {"run_id": "20260827_090000", "run_date": "2026-08-27", "symbol": symbol, "quantity": 10},
+            {"run_id": "20260827_120000", "run_date": "2026-08-27", "symbol": "", "quantity": 0},
+            {"run_id": "20260827_150000", "run_date": "2026-08-27", "symbol": symbol, "quantity": 10},
+        ],
+    )
+    history = get_observed_holding_history(symbol, path)
+    finder = _finder(symbol, {"2026-08-27": 105.0})
+    state = {
+        symbol: {
+            "activated": True,
+            "highest_close": 150.0,
+            "observed_holding_since": "2026-08-27",
+            "observed_holding_run_id": "20260827_090000",
+        }
+    }
+
+    decisions = _evaluate_recovery(symbol, finder, history, state, current_price=105.0)
+
+    assert decisions[symbol].reason is SellReason.NONE
+    assert "activated" not in state[symbol]
+    assert "highest_close" not in state[symbol]
+    finder.get_atr.assert_not_called()
+
+
+def test_same_day_continuous_runs_keep_the_same_segment_identity(tmp_path):
+    path = tmp_path / "account_snapshots.csv"
+    _write_snapshots(
+        path,
+        [
+            {"run_id": "20260827_090000", "run_date": "2026-08-27", "symbol": "KEEP", "quantity": 10},
+            {"run_id": "20260827_120000", "run_date": "2026-08-27", "symbol": "KEEP", "quantity": 10},
+        ],
+    )
+
+    history = get_observed_holding_history("KEEP", path)
+
+    assert [snapshot.run_id for snapshot in history] == [
+        "20260827_090000",
+        "20260827_120000",
+    ]
+    assert state_matches_observed_segment(
+        {
+            "activated": True,
+            "highest_close": 120.0,
+            "observed_holding_since": "2026-08-27",
+            "observed_holding_run_id": "20260827_090000",
+        },
+        history,
+        "KEEP",
+        path,
+    )
+
+
+def test_same_day_continuous_runs_recover_valid_trailing_state(tmp_path):
+    symbol = "KEEP"
+    path = tmp_path / "account_snapshots.csv"
+    _write_snapshots(
+        path,
+        [
+            {"run_id": "20260827_090000", "run_date": "2026-08-27", "symbol": symbol, "quantity": 10},
+            {"run_id": "20260827_120000", "run_date": "2026-08-27", "symbol": symbol, "quantity": 10},
+        ],
+    )
+    history = get_observed_holding_history(symbol, path)
+    finder = _finder(symbol, {"2026-08-27": 105.0})
+    finder.get_atr.return_value = 100.0
+    state = {
+        symbol: {
+            "activated": True,
+            "highest_close": 120.0,
+            "observed_holding_since": "2026-08-27",
+            "observed_holding_run_id": "20260827_090000",
+        }
+    }
+
+    decisions = _evaluate_recovery(symbol, finder, history, state, current_price=105.0)
+
+    assert decisions[symbol].reason is SellReason.NONE
+    assert state[symbol]["highest_close"] == 120.0
+    assert state[symbol]["observed_holding_run_id"] == "20260827_090000"
+    finder.get_atr.assert_called_once()
+
+
+def test_legacy_date_only_state_is_reused_only_without_same_day_ambiguity(tmp_path):
+    path = tmp_path / "account_snapshots.csv"
+    _write_snapshots(
+        path,
+        [
+            {"run_id": "20260827_150000", "run_date": "2026-08-27", "symbol": "LEGACY", "quantity": 10},
+        ],
+    )
+    history = get_observed_holding_history("LEGACY", path)
+    assert state_matches_observed_segment({"observed_holding_since": "2026-08-27"}, history, "LEGACY", path)
+
+    ambiguous_path = tmp_path / "ambiguous_account_snapshots.csv"
+    _write_snapshots(
+        ambiguous_path,
+        [
+            {"run_id": "20260827_090000", "run_date": "2026-08-27", "symbol": "LEGACY", "quantity": 10},
+            {"run_id": "20260827_120000", "run_date": "2026-08-27", "symbol": "", "quantity": 0},
+            {"run_id": "20260827_150000", "run_date": "2026-08-27", "symbol": "LEGACY", "quantity": 10},
+        ],
+    )
+    ambiguous_history = get_observed_holding_history("LEGACY", ambiguous_path)
+    assert not state_matches_observed_segment(
+        {"observed_holding_since": "2026-08-27"},
+        ambiguous_history,
+        "LEGACY",
+        ambiguous_path,
+    )
 
 
 def test_reconstruction_excludes_prices_before_observed_holding_start():
@@ -315,7 +461,7 @@ def test_missing_contemporaneous_basis_does_not_activate(tmp_path):
 
 def test_repurchase_rejects_legacy_high_from_previous_holding_segment():
     symbol = "REBUY"
-    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0, "20260410_090000")]
     finder = _finder(symbol, {"2026-01-10": 150, "2026-04-10": 105})
     finder.get_atr.return_value = 100.0
     state = {
@@ -323,6 +469,7 @@ def test_repurchase_rejects_legacy_high_from_previous_holding_segment():
             "highest_close": 150.0,
             "last_update": "2026-01-10",
             "observed_holding_since": "2026-01-01",
+            "observed_holding_run_id": "20260110_090000",
         }
     }
 
@@ -330,12 +477,13 @@ def test_repurchase_rejects_legacy_high_from_previous_holding_segment():
 
     assert decisions[symbol].reason is SellReason.NONE
     assert "activated" not in state[symbol]
+    assert "highest_close" not in state[symbol]
     finder.get_atr.assert_not_called()
 
 
 def test_legacy_high_with_current_segment_provenance_remains_usable():
     symbol = "CURRENT"
-    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0, "20260410_090000")]
     finder = _finder(symbol, {"2026-04-10": 105})
     finder.get_atr.return_value = 100.0
     state = {
@@ -343,6 +491,7 @@ def test_legacy_high_with_current_segment_provenance_remains_usable():
             "highest_close": 120.0,
             "last_update": "2026-04-11",
             "observed_holding_since": "2026-04-10",
+            "observed_holding_run_id": "20260410_090000",
         }
     }
 
@@ -355,8 +504,8 @@ def test_legacy_high_with_current_segment_provenance_remains_usable():
 def test_persisted_activation_without_high_recovers_current_segment_maximum():
     symbol = "ACTIVE"
     history = [
-        ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0),
-        ObservedHoldingSnapshot(date(2026, 4, 20), 10, 100.0),
+        ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0, "20260410_090000"),
+        ObservedHoldingSnapshot(date(2026, 4, 20), 10, 100.0, "20260420_090000"),
     ]
     finder = _finder(symbol, {"2026-04-10": 104, "2026-04-15": 108, "2026-04-20": 105})
     finder.get_atr.return_value = 100.0
@@ -365,6 +514,7 @@ def test_persisted_activation_without_high_recovers_current_segment_maximum():
             "activated": True,
             "last_update": "2026-04-20",
             "observed_holding_since": "2026-04-10",
+            "observed_holding_run_id": "20260410_090000",
         }
     }
 
@@ -376,7 +526,7 @@ def test_persisted_activation_without_high_recovers_current_segment_maximum():
 
 def test_persisted_activation_reconstruction_excludes_old_segment_high():
     symbol = "SEGMENT"
-    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0, "20260410_090000")]
     finder = _finder(symbol, {"2026-01-10": 200, "2026-04-10": 104, "2026-04-15": 108})
     finder.get_atr.return_value = 100.0
     state = {
@@ -384,6 +534,7 @@ def test_persisted_activation_reconstruction_excludes_old_segment_high():
             "activated": True,
             "last_update": "2026-04-15",
             "observed_holding_since": "2026-04-10",
+            "observed_holding_run_id": "20260410_090000",
         }
     }
 
@@ -394,7 +545,7 @@ def test_persisted_activation_reconstruction_excludes_old_segment_high():
 
 def test_complete_persisted_state_with_current_provenance_is_unchanged():
     symbol = "COMPLETE"
-    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0, "20260410_090000")]
     finder = _finder(symbol, {"2026-04-10": 105})
     finder.get_atr.return_value = 100.0
     state = {
@@ -403,6 +554,7 @@ def test_complete_persisted_state_with_current_provenance_is_unchanged():
             "highest_close": 120.0,
             "last_update": "2026-04-10",
             "observed_holding_since": "2026-04-10",
+            "observed_holding_run_id": "20260410_090000",
         }
     }
 
