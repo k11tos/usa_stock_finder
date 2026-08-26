@@ -27,7 +27,9 @@ from trailing_stop import (
     has_constant_observed_cost_basis,
     load_trailing_state,
     reconstruct_activated_highest_close,
+    reconstruct_highest_close,
     save_trailing_state,
+    state_matches_observed_segment,
     update_highest_close,
 )
 
@@ -255,18 +257,37 @@ def evaluate_sell_decisions(
             observed_holding_since = (
                 holding_history[0].run_date if holding_history else get_observed_holding_since(symbol)
             )
-            reconstructed_highest = reconstruct_activated_highest_close(
+            activation_reconstructed_highest = reconstruct_activated_highest_close(
                 finder,
                 symbol,
                 holding_history,
                 StrategyConfig.TRAILING_MIN_PROFIT_PCT,
             )
+            state_provenance_valid = state_matches_observed_segment(
+                state_entry,
+                observed_holding_since,
+            )
+            persisted_activated = bool(state_entry.get("activated", False))
+            trailing_activated = persisted_activated and state_provenance_valid
+            reconstructed_highest = (
+                reconstruct_highest_close(finder, symbol, observed_holding_since)
+                if trailing_activated and observed_holding_since is not None
+                else activation_reconstructed_highest
+            )
             activation_threshold = avg_price * (1 + StrategyConfig.TRAILING_MIN_PROFIT_PCT)
-            trailing_activated = bool(state_entry.get("activated", False))
             activation_source = "persisted_state" if trailing_activated else "none"
+            if persisted_activated and not state_provenance_valid:
+                logger.warning(
+                    "%s: Ignoring persisted trailing activation/high with ambiguous holding-segment provenance "
+                    "(state_observed_holding_since=%s, current_observed_holding_since=%s, last_update=%s)",
+                    symbol,
+                    state_entry.get("observed_holding_since"),
+                    observed_holding_since,
+                    state_entry.get("last_update"),
+                )
             if (
                 not trailing_activated
-                and reconstructed_highest is not None
+                and activation_reconstructed_highest is not None
             ):
                 trailing_activated = True
                 activation_source = "account_snapshot_reconstruction"
@@ -274,6 +295,7 @@ def evaluate_sell_decisions(
                 not trailing_activated
                 and "activated" not in state_entry
                 and persisted_highest >= activation_threshold
+                and state_provenance_valid
                 and has_constant_observed_cost_basis(holding_history, avg_price)
             ):
                 # Legacy states tracked a holding-period high before activation was persisted.
@@ -317,13 +339,22 @@ def evaluate_sell_decisions(
 
             if trailing_activated:
                 today = date.today()
+                trusted_persisted_highest = persisted_highest if state_provenance_valid else 0.0
+                if not state_provenance_valid:
+                    trailing_state.setdefault(symbol, {}).pop("highest_close", None)
                 candidates = [
                     value
-                    for value in (persisted_highest, reconstructed_highest)
+                    for value in (
+                        trusted_persisted_highest,
+                        reconstructed_highest,
+                    )
                     if value and value > 0
                 ]
                 highest_close_source = "persisted_state"
-                if reconstructed_highest is not None and reconstructed_highest >= persisted_highest:
+                if (
+                    reconstructed_highest is not None
+                    and reconstructed_highest >= trusted_persisted_highest
+                ):
                     highest_close_source = "historical_ohlcv"
                 if candidates:
                     recovery_high = max(candidates)
@@ -335,7 +366,7 @@ def evaluate_sell_decisions(
                         "(state_missing=%s, observed_holding_since=%s)",
                         symbol, state_missing, observed_holding_since,
                     )
-                if recovery_high > persisted_highest:
+                if recovery_high > trusted_persisted_highest:
                     trailing_state.setdefault(symbol, {})["highest_close"] = recovery_high
                 highest_close = update_highest_close(
                     trailing_state,

@@ -932,7 +932,12 @@ class TestTrailingActivationPersistence(unittest.TestCase):
     def test_trailing_stays_active_after_profit_falls_below_threshold(self):
         """Case C: already-active trailing is checked even below activation profit."""
         trailing_state = {
-            self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27", "activated": True}
+            self.symbol: {
+                "highest_close": 120.0,
+                "last_update": "2026-05-27",
+                "activated": True,
+                "observed_holding_since": "2026-01-01",
+            }
         }
         decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(108.0, trailing_state)
 
@@ -946,7 +951,12 @@ class TestTrailingActivationPersistence(unittest.TestCase):
     def test_trailing_sell_after_activation_clears_state(self):
         """Case D: already-active trailing can sell below the trailing stop and clears state."""
         trailing_state = {
-            self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27", "activated": True}
+            self.symbol: {
+                "highest_close": 120.0,
+                "last_update": "2026-05-27",
+                "activated": True,
+                "observed_holding_since": "2026-01-01",
+            }
         }
         self.finder.get_atr.return_value = 2.0
         decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(108.0, trailing_state)
@@ -959,7 +969,13 @@ class TestTrailingActivationPersistence(unittest.TestCase):
 
     def test_old_state_without_activation_recovers_from_highest_close(self):
         """Legacy high proves the activation threshold was reached."""
-        trailing_state = {self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27"}}
+        trailing_state = {
+            self.symbol: {
+                "highest_close": 120.0,
+                "last_update": "2026-05-27",
+                "observed_holding_since": "2026-01-01",
+            }
+        }
         decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(108.0, trailing_state)
 
         self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)
@@ -970,7 +986,13 @@ class TestTrailingActivationPersistence(unittest.TestCase):
 
     def test_old_state_without_activation_upgrades_above_threshold(self):
         """Case E: old state without activated is upgraded when profit reaches threshold."""
-        trailing_state = {self.symbol: {"highest_close": 120.0, "last_update": "2026-05-27"}}
+        trailing_state = {
+            self.symbol: {
+                "highest_close": 120.0,
+                "last_update": "2026-05-27",
+                "observed_holding_since": "2026-01-01",
+            }
+        }
         decisions, mock_save_trailing_state, mock_record_stop_loss_event = self._evaluate(111.0, trailing_state)
 
         self.assertEqual(decisions[self.symbol].reason, SellReason.NONE)

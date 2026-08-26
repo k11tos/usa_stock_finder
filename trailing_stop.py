@@ -240,6 +240,27 @@ def has_constant_observed_cost_basis(
     )
 
 
+def state_matches_observed_segment(
+    state_entry: dict[str, Any],
+    observed_holding_since: date | None,
+) -> bool:
+    """Return whether state explicitly identifies the current holding segment.
+
+    ``last_update`` is intentionally insufficient: an old high can survive an
+    unrelated exit and receive a new update date after repurchase.  The segment
+    boundary itself is the backward-compatible provenance marker.
+    """
+    if observed_holding_since is None:
+        return False
+    try:
+        return (
+            date.fromisoformat(str(state_entry.get("observed_holding_since", "")))
+            == observed_holding_since
+        )
+    except ValueError:
+        return False
+
+
 def load_trailing_state() -> Dict[str, Dict[str, Any]]:
     """
     trailing_state.json을 로드하여 딕셔너리로 반환.

@@ -10,6 +10,7 @@ import sell_signals
 from sell_signals import SellReason, evaluate_sell_decisions
 from trailing_stop import get_observed_holding_since, reconstruct_highest_close
 from trailing_stop import (
+    ObservedHoldingSnapshot,
     get_observed_holding_history,
     reconstruct_activated_highest_close,
 )
@@ -33,6 +34,35 @@ def _finder(symbol: str, dated_closes: dict[str, float], atr: float = 0.5):
     finder.get_atr.return_value = atr
     finder.is_special_situation_price_pinned.return_value = False
     return finder
+
+
+def _evaluate_recovery(
+    symbol, finder, history, state, avg_price=100.0, current_price=105.0
+):
+    with (
+        patch("sell_signals.load_trailing_state", return_value=state),
+        patch("sell_signals.save_trailing_state"),
+        patch("sell_signals.get_observed_holding_history", return_value=history),
+        patch("sell_signals.record_stop_loss_event"),
+        patch.object(sell_signals.StrategyConfig, "TRAILING_ENABLED", True),
+        patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", 0.10),
+        patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", 5.0),
+        patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", 20),
+    ):
+        return evaluate_sell_decisions(
+            finder,
+            [
+                {
+                    "symbol": symbol,
+                    "quantity": 10,
+                    "avg_price": avg_price,
+                    "current_price": current_price,
+                }
+            ],
+            [symbol],
+            [],
+            {symbol: False},
+        )
 
 
 def test_observed_holding_since_uses_latest_segment_and_ignores_calendar_gaps(tmp_path):
@@ -281,3 +311,102 @@ def test_missing_contemporaneous_basis_does_not_activate(tmp_path):
         )
         is None
     )
+
+
+def test_repurchase_rejects_legacy_high_from_previous_holding_segment():
+    symbol = "REBUY"
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    finder = _finder(symbol, {"2026-01-10": 150, "2026-04-10": 105})
+    finder.get_atr.return_value = 100.0
+    state = {
+        symbol: {
+            "highest_close": 150.0,
+            "last_update": "2026-01-10",
+            "observed_holding_since": "2026-01-01",
+        }
+    }
+
+    decisions = _evaluate_recovery(symbol, finder, history, state)
+
+    assert decisions[symbol].reason is SellReason.NONE
+    assert "activated" not in state[symbol]
+    finder.get_atr.assert_not_called()
+
+
+def test_legacy_high_with_current_segment_provenance_remains_usable():
+    symbol = "CURRENT"
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    finder = _finder(symbol, {"2026-04-10": 105})
+    finder.get_atr.return_value = 100.0
+    state = {
+        symbol: {
+            "highest_close": 120.0,
+            "last_update": "2026-04-11",
+            "observed_holding_since": "2026-04-10",
+        }
+    }
+
+    _evaluate_recovery(symbol, finder, history, state)
+
+    assert state[symbol]["activated"] is True
+    assert state[symbol]["highest_close"] == 120.0
+
+
+def test_persisted_activation_without_high_recovers_current_segment_maximum():
+    symbol = "ACTIVE"
+    history = [
+        ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0),
+        ObservedHoldingSnapshot(date(2026, 4, 20), 10, 100.0),
+    ]
+    finder = _finder(symbol, {"2026-04-10": 104, "2026-04-15": 108, "2026-04-20": 105})
+    finder.get_atr.return_value = 100.0
+    state = {
+        symbol: {
+            "activated": True,
+            "last_update": "2026-04-20",
+            "observed_holding_since": "2026-04-10",
+        }
+    }
+
+    _evaluate_recovery(symbol, finder, history, state)
+
+    assert state[symbol]["highest_close"] == 108.0
+    assert state[symbol]["activated"] is True
+
+
+def test_persisted_activation_reconstruction_excludes_old_segment_high():
+    symbol = "SEGMENT"
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    finder = _finder(symbol, {"2026-01-10": 200, "2026-04-10": 104, "2026-04-15": 108})
+    finder.get_atr.return_value = 100.0
+    state = {
+        symbol: {
+            "activated": True,
+            "last_update": "2026-04-15",
+            "observed_holding_since": "2026-04-10",
+        }
+    }
+
+    _evaluate_recovery(symbol, finder, history, state, current_price=108.0)
+
+    assert state[symbol]["highest_close"] == 108.0
+
+
+def test_complete_persisted_state_with_current_provenance_is_unchanged():
+    symbol = "COMPLETE"
+    history = [ObservedHoldingSnapshot(date(2026, 4, 10), 10, 100.0)]
+    finder = _finder(symbol, {"2026-04-10": 105})
+    finder.get_atr.return_value = 100.0
+    state = {
+        symbol: {
+            "activated": True,
+            "highest_close": 120.0,
+            "last_update": "2026-04-10",
+            "observed_holding_since": "2026-04-10",
+        }
+    }
+
+    _evaluate_recovery(symbol, finder, history, state)
+
+    assert state[symbol]["highest_close"] == 120.0
+    assert state[symbol]["activated"] is True
