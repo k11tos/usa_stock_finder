@@ -306,7 +306,7 @@ def test_vmd_missing_state_recovers_activation_and_high_then_triggers(tmp_path, 
         patch.object(sell_signals.StrategyConfig, "TRAILING_MIN_PROFIT_PCT", 0.10),
         patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_MULTIPLIER", 5.0),
         patch.object(sell_signals.StrategyConfig, "TRAILING_ATR_PERIOD", 20),
-        caplog.at_level("DEBUG"),
+        caplog.at_level("INFO"),
     ):
         decisions = evaluate_sell_decisions(
             finder,
@@ -329,6 +329,41 @@ def test_vmd_missing_state_recovers_activation_and_high_then_triggers(tmp_path, 
     assert "reconstructed_highest_close=13.51" in caplog.text
     assert "effective_highest_close=13.5100" in caplog.text
     assert "triggered=True" in caplog.text
+
+
+def test_trailing_diagnostic_logs_at_info_when_not_triggered(caplog):
+    finder = _finder("HOLD", {"2026-08-26": 110.0})
+
+    with caplog.at_level("INFO"):
+        decisions = _evaluate_recovery(
+            "HOLD",
+            finder,
+            history=[],
+            state={},
+            avg_price=100.0,
+            current_price=110.0,
+        )
+
+    assert decisions["HOLD"].reason is SellReason.NONE
+    diagnostic = next(record for record in caplog.records if "TRAILING diagnostic" in record.message)
+    assert diagnostic.levelname == "INFO"
+    assert "HOLD: TRAILING diagnostic" in diagnostic.message
+    assert "avg_price=100.0000" in diagnostic.message
+    assert "current_price=110.0000" in diagnostic.message
+    assert "profit_pct=0.1000" in diagnostic.message
+    assert "activated=True" in diagnostic.message
+    assert "activation_source=runtime_activation" in diagnostic.message
+    assert "state_missing=True" in diagnostic.message
+    assert "holding_since=None" in diagnostic.message
+    assert "holding_since_source=unavailable" in diagnostic.message
+    assert "persisted_highest_close=0.0000" in diagnostic.message
+    assert "reconstructed_highest_close=None" in diagnostic.message
+    assert "effective_highest_close=110.0000" in diagnostic.message
+    assert "highest_close_source=fallback_current_price" in diagnostic.message
+    assert "ATR=0.5000" in diagnostic.message
+    assert "ATR_multiplier=5.00" in diagnostic.message
+    assert "trailing_stop_price=107.5000" in diagnostic.message
+    assert "triggered=False" in diagnostic.message
 
 
 def test_no_snapshot_does_not_use_unbounded_ohlcv_history():
