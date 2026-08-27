@@ -393,7 +393,7 @@ def evaluate_sell_decisions(
                     trailing_stop_price = highest_close - atr_value * StrategyConfig.TRAILING_ATR_MULTIPLIER
 
                     triggered = current_price <= trailing_stop_price
-                    logger.debug(
+                    logger.info(
                         "%s: TRAILING diagnostic avg_price=%.4f current_price=%.4f profit_pct=%.4f "
                         "activated=%s activation_source=%s state_missing=%s holding_since=%s "
                         "holding_since_source=%s persisted_highest_close=%.4f reconstructed_highest_close=%s "
