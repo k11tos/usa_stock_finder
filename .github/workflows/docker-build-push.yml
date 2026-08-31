@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # ARM 빌드를 위한 QEMU 설정 (Raspberry Pi 등 지원)
       - name: Set up QEMU
