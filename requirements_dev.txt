@@ -1,7 +1,7 @@
 -r requirements.txt
 
 # Code Quality
-pylint==3.2.1
+pylint==4.0.8
 
 # Pre-commit hooks (managed via .pre-commit-config.yaml)
 # Note: pre-commit installs its own dependencies automatically
