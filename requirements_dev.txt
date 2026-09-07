@@ -17,4 +17,4 @@ pytest>=9.1.1
 
 # Security
 # bandit>=1.7.5  # Currently disabled in .pre-commit-config.yaml
-safety>=2.3.5  # Dependency vulnerability scanning
+safety>=3.8.1  # Dependency vulnerability scanning
