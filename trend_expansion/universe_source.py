@@ -16,7 +16,7 @@ import tempfile
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -241,7 +241,7 @@ def build_snapshot(
     *,
     snapshot_date: str | None = None,
     downloader: Callable[[str], bytes] = _download,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Refresh both directories and publish one coherent snapshot generation."""
     day = snapshot_date or date.today().isoformat()
     try:
@@ -275,7 +275,7 @@ def build_snapshot(
     writer.writerows(normalized)
     csv_bytes = csv_buffer.getvalue().encode("utf-8")
 
-    metadata: dict[str, object] = {
+    metadata: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "snapshot_date": day,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -301,7 +301,7 @@ def build_snapshot(
 
 def load_snapshot(
     output_dir: str | Path,
-) -> tuple[list[dict[str, str]], dict[str, object]]:
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Load and validate an existing snapshot without accessing the network."""
     directory = Path(output_dir)
     current_path = directory / "CURRENT"
