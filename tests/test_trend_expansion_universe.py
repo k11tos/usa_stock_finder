@@ -226,7 +226,10 @@ def test_failed_generation_publication_preserves_previous_snapshot(
     build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
     old_records, old_metadata = load_snapshot(tmp_path)
     old_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+    # Exercise the private publication seam to inject a filesystem failure.
+    # pylint: disable=protected-access
     real_atomic_write = universe_source._atomic_write
+    # pylint: enable=protected-access
 
     def fail_publication(path, content):
         if path.name == failure_target:
