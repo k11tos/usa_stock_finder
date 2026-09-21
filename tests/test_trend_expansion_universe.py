@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import trend_expansion.universe_source as universe_source
+from trend_expansion import universe_source
 from trend_expansion.universe_source import (
     SOURCE_URLS,
     UniverseSourceError,
@@ -112,7 +112,7 @@ def test_parse_directory_rejects_missing_non_symbol_required_header(
     ],
 )
 def test_parse_directory_skips_truncated_rows(source, text):
-    assert parse_directory(text, source, SNAPSHOT_DATE) == []
+    assert not parse_directory(text, source, SNAPSHOT_DATE)
 
 
 def test_parse_directory_preserves_legitimately_empty_optional_values():
