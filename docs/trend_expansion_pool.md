@@ -1,8 +1,28 @@
 # Trend Expansion Pool Design (Future Data Source)
 
 ## Status
-- **Design only**.
+- **Stage A data infrastructure only**.
 - **No production behavior changes in this PR**.
+
+## Stage A symbol snapshot
+
+Build the research-only Nasdaq Trader directory snapshot explicitly:
+
+```bash
+python -m tools.build_trend_expansion_universe --refresh
+```
+
+The command writes `data/trend_expansion/universe/universe.csv` and an auditable
+`metadata.json` sidecar. Runtime data under `data/` is gitignored. Without
+`--refresh`, the command only validates and reports the existing cache and never
+uses the network; a missing or invalid cache fails with an instruction to refresh.
+Use `--output-dir` for another location and `--snapshot-date YYYY-MM-DD` when
+reproducing a dated source capture.
+
+The stable CSV schema retains symbol and security name, normalized exchange,
+market/financial status, round-lot size, ETF/test-issue/NextShares flags,
+CQS/Nasdaq aliases, source directory, and snapshot date. It intentionally does
+not filter security types yet; that deterministic filtering belongs to Stage B.
 
 ## Purpose
 The Trend Expansion Pool is intended to **supplement** (not replace) the existing Core Quant Pool.

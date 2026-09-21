@@ -1,0 +1,6 @@
+Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+ZZZ|Zeta Units|S|N|N|100|N|N
+AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N
+TEST|Nasdaq Test Issue|G|Y|N|100|N|N
+BROKEN|too|many|columns|in|this|malformed|row|ignored
+File Creation Time: 0915202618:03|||||||
