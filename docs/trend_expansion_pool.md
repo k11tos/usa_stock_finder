@@ -12,12 +12,16 @@ Build the research-only Nasdaq Trader directory snapshot explicitly:
 python -m tools.build_trend_expansion_universe --refresh
 ```
 
-The command writes `data/trend_expansion/universe/universe.csv` and an auditable
-`metadata.json` sidecar. Runtime data under `data/` is gitignored. Without
-`--refresh`, the command only validates and reports the existing cache and never
-uses the network; a missing or invalid cache fails with an instruction to refresh.
-Use `--output-dir` for another location and `--snapshot-date YYYY-MM-DD` when
-reproducing a dated source capture.
+The command writes immutable generations beneath
+`data/trend_expansion/universe/generations/`. Each generation contains
+`universe.csv` and an auditable `metadata.json` sidecar; the atomically replaced
+`data/trend_expansion/universe/CURRENT` file selects the complete active
+generation. This prevents an interrupted publication from mixing data and
+metadata from different refreshes. Runtime data under `data/` is gitignored.
+Without `--refresh`, the command only validates and reports the selected cache
+and never uses the network; a missing or invalid cache fails with an instruction
+to refresh. Use `--output-dir` for another location and
+`--snapshot-date YYYY-MM-DD` when reproducing a dated source capture.
 
 The stable CSV schema retains symbol and security name, normalized exchange,
 market/financial status, round-lot size, ETF/test-issue/NextShares flags,

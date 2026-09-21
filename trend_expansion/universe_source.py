@@ -11,7 +11,9 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import tempfile
+import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
@@ -38,6 +40,32 @@ SNAPSHOT_COLUMNS = (
     "source",
     "snapshot_date",
 )
+SOURCE_HEADERS = {
+    "nasdaqlisted": frozenset(
+        {
+            "Symbol",
+            "Security Name",
+            "Market Category",
+            "Test Issue",
+            "Financial Status",
+            "Round Lot Size",
+            "ETF",
+            "NextShares",
+        }
+    ),
+    "otherlisted": frozenset(
+        {
+            "ACT Symbol",
+            "Security Name",
+            "Exchange",
+            "CQS Symbol",
+            "ETF",
+            "Round Lot Size",
+            "Test Issue",
+            "NASDAQ Symbol",
+        }
+    ),
+}
 
 _OTHER_EXCHANGES = {
     "A": "NYSE AMERICAN",
@@ -70,15 +98,37 @@ def parse_directory(text: str, source: str, snapshot_date: str) -> list[dict[str
         raise ValueError(f"Unsupported directory source: {source}")
 
     reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")), delimiter="|")
+    expected_headers = SOURCE_HEADERS[source]
+    actual_headers = reader.fieldnames or []
+    missing_headers = expected_headers.difference(actual_headers)
+    unexpected_headers = set(actual_headers).difference(expected_headers)
+    if (
+        missing_headers
+        or unexpected_headers
+        or len(actual_headers) != len(expected_headers)
+    ):
+        details = []
+        if missing_headers:
+            details.append(f"missing {sorted(missing_headers)}")
+        if unexpected_headers:
+            details.append(f"unexpected {sorted(unexpected_headers)}")
+        if len(actual_headers) != len(set(actual_headers)):
+            details.append("duplicate header names")
+        raise UniverseSourceError(
+            f"{source}: incompatible header ({'; '.join(details)})"
+        )
+
     expected_symbol = "Symbol" if source == "nasdaqlisted" else "ACT Symbol"
-    if not reader.fieldnames or expected_symbol not in reader.fieldnames:
-        raise UniverseSourceError(f"{source}: missing or malformed header")
 
     records: list[dict[str, str]] = []
     for row in reader:
         symbol = _clean(row, expected_symbol).upper()
         # The published files end with a non-tabular "File Creation Time" row.
-        if not symbol or symbol.startswith("FILE CREATION TIME") or None in row:
+        if not symbol or symbol.startswith("FILE CREATION TIME"):
+            continue
+        # DictReader uses a None key for extra values and None values for
+        # structurally absent trailing fields. Empty strings remain legitimate.
+        if None in row or any(row[field] is None for field in expected_headers):
             continue
         if _clean(row, "Security Name") == "Security Name":
             continue
@@ -155,13 +205,44 @@ def _atomic_write(path: Path, content: bytes) -> None:
         raise
 
 
+def _publish_generation(
+    directory: Path, csv_bytes: bytes, metadata_bytes: bytes
+) -> None:
+    """Publish a complete immutable generation, then atomically select it.
+
+    The CURRENT file is the commit point. A failure before its replacement
+    leaves the loader selecting the previous complete generation. A failure at
+    the commit point can leave an unreferenced complete generation, but cannot
+    create a mixed CSV/metadata pair.
+    """
+    generations = directory / "generations"
+    generations.mkdir(parents=True, exist_ok=True)
+    generation_name = uuid.uuid4().hex
+    staging = Path(tempfile.mkdtemp(dir=generations, prefix=".staging-"))
+    generation = generations / generation_name
+    committed = False
+    try:
+        _atomic_write(staging / "universe.csv", csv_bytes)
+        _atomic_write(staging / "metadata.json", metadata_bytes)
+        os.replace(staging, generation)
+        _atomic_write(directory / "CURRENT", f"{generation_name}\n".encode("ascii"))
+        committed = True
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+        # A failed CURRENT publication leaves this complete generation orphaned.
+        # Removing it is safe because the old CURRENT was never replaced.
+        if not committed and generation.exists():
+            shutil.rmtree(generation)
+
+
 def build_snapshot(
     output_dir: str | Path,
     *,
     snapshot_date: str | None = None,
     downloader: Callable[[str], bytes] = _download,
 ) -> dict[str, object]:
-    """Refresh both directories and atomically write CSV and metadata files."""
+    """Refresh both directories and publish one coherent snapshot generation."""
     day = snapshot_date or date.today().isoformat()
     try:
         date.fromisoformat(day)
@@ -211,11 +292,10 @@ def build_snapshot(
         },
     }
     directory = Path(output_dir)
-    _atomic_write(directory / "universe.csv", csv_bytes)
-    _atomic_write(
-        directory / "metadata.json",
-        (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    metadata_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
     )
+    _publish_generation(directory, csv_bytes, metadata_bytes)
     return metadata
 
 
@@ -224,16 +304,22 @@ def load_snapshot(
 ) -> tuple[list[dict[str, str]], dict[str, object]]:
     """Load and validate an existing snapshot without accessing the network."""
     directory = Path(output_dir)
-    csv_path, metadata_path = directory / "universe.csv", directory / "metadata.json"
-    if not csv_path.is_file() or not metadata_path.is_file():
+    current_path = directory / "CURRENT"
+    if not current_path.is_file():
         raise UniverseSourceError(
             f"No complete cached snapshot in {directory}; run with --refresh"
         )
-    csv_bytes = csv_path.read_bytes()
     try:
+        generation_name = current_path.read_text(encoding="ascii").strip()
+        if not generation_name or Path(generation_name).name != generation_name:
+            raise ValueError("invalid generation name")
+        generation = directory / "generations" / generation_name
+        csv_path = generation / "universe.csv"
+        metadata_path = generation / "metadata.json"
+        csv_bytes = csv_path.read_bytes()
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        raise UniverseSourceError(f"Invalid snapshot metadata: {exc}") from exc
+    except (json.JSONDecodeError, OSError, UnicodeError, ValueError) as exc:
+        raise UniverseSourceError(f"Invalid snapshot generation: {exc}") from exc
     if metadata.get("schema_version") != SCHEMA_VERSION:
         raise UniverseSourceError(
             "Cached snapshot schema version is unsupported; refresh it"

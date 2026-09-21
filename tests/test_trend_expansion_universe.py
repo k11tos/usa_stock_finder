@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 import pytest
 
+import trend_expansion.universe_source as universe_source
 from trend_expansion.universe_source import (
     SOURCE_URLS,
     UniverseSourceError,
@@ -77,6 +77,57 @@ def test_parse_directory_rejects_malformed_header(text):
         parse_directory(text, "nasdaqlisted", SNAPSHOT_DATE)
 
 
+@pytest.mark.parametrize(
+    ("source", "fixture_name", "missing_header"),
+    [
+        ("nasdaqlisted", "nasdaqlisted", "ETF"),
+        ("otherlisted", "otherlisted", "Test Issue"),
+    ],
+)
+def test_parse_directory_rejects_missing_non_symbol_required_header(
+    source, fixture_name, missing_header
+):
+    lines = _fixture(fixture_name).decode().splitlines()
+    header = lines[0].split("|")
+    missing_index = header.index(missing_header)
+    lines[0] = "|".join(header[:missing_index] + header[missing_index + 1 :])
+
+    with pytest.raises(UniverseSourceError, match=rf"missing.*{missing_header}"):
+        parse_directory("\n".join(lines), source, SNAPSHOT_DATE)
+
+
+@pytest.mark.parametrize(
+    ("source", "text"),
+    [
+        (
+            "nasdaqlisted",
+            "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\n"
+            "SHORT|Truncated Nasdaq row|Q|N|N|100\n",
+        ),
+        (
+            "otherlisted",
+            "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\n"
+            "SHORT|Truncated other row|N|SHORT|N\n",
+        ),
+    ],
+)
+def test_parse_directory_skips_truncated_rows(source, text):
+    assert parse_directory(text, source, SNAPSHOT_DATE) == []
+
+
+def test_parse_directory_preserves_legitimately_empty_optional_values():
+    text = (
+        "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\n"
+        "EMPTY|Optional aliases omitted|N||N|100|N|\n"
+    )
+
+    records = parse_directory(text, "otherlisted", SNAPSHOT_DATE)
+
+    assert len(records) == 1
+    assert records[0]["cqs_symbol"] == ""
+    assert records[0]["nasdaq_symbol"] == ""
+
+
 def test_duplicate_symbols_use_deterministic_precedence_and_output_order():
     combined = parse_directory(
         _fixture("otherlisted").decode(), "otherlisted", SNAPSHOT_DATE
@@ -105,7 +156,10 @@ def test_build_and_load_snapshot_records_auditable_metadata(tmp_path):
     )
     records, loaded_metadata = load_snapshot(tmp_path)
 
-    snapshot_bytes = (tmp_path / "universe.csv").read_bytes()
+    generation = (tmp_path / "CURRENT").read_text(encoding="ascii").strip()
+    snapshot_bytes = (
+        tmp_path / "generations" / generation / "universe.csv"
+    ).read_bytes()
     assert metadata == loaded_metadata
     assert metadata["schema_version"] == 1
     assert metadata["snapshot_date"] == SNAPSHOT_DATE
@@ -128,8 +182,10 @@ def test_same_inputs_produce_identical_csv(tmp_path):
     build_snapshot(first, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
     build_snapshot(second, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
 
-    assert (first / "universe.csv").read_bytes() == (
-        second / "universe.csv"
+    first_generation = (first / "CURRENT").read_text(encoding="ascii").strip()
+    second_generation = (second / "CURRENT").read_text(encoding="ascii").strip()
+    assert (first / "generations" / first_generation / "universe.csv").read_bytes() == (
+        second / "generations" / second_generation / "universe.csv"
     ).read_bytes()
 
 
@@ -138,16 +194,17 @@ def test_load_rejects_missing_or_tampered_cache(tmp_path):
         load_snapshot(tmp_path)
 
     build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
-    (tmp_path / "universe.csv").write_text("tampered", encoding="utf-8")
+    generation = (tmp_path / "CURRENT").read_text(encoding="ascii").strip()
+    (tmp_path / "generations" / generation / "universe.csv").write_text(
+        "tampered", encoding="utf-8"
+    )
     with pytest.raises(UniverseSourceError, match="checksum"):
         load_snapshot(tmp_path)
 
 
 def test_refresh_network_failure_is_clear_and_does_not_fall_back_to_cache(tmp_path):
     build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
-    original_metadata = json.loads(
-        (tmp_path / "metadata.json").read_text(encoding="utf-8")
-    )
+    original_records, original_metadata = load_snapshot(tmp_path)
 
     def unavailable(_url: str) -> bytes:
         raise OSError("network unavailable")
@@ -157,5 +214,46 @@ def test_refresh_network_failure_is_clear_and_does_not_fall_back_to_cache(tmp_pa
     ):
         build_snapshot(tmp_path, snapshot_date="2026-09-16", downloader=unavailable)
 
-    _, metadata = load_snapshot(tmp_path)
+    records, metadata = load_snapshot(tmp_path)
+    assert records == original_records
     assert metadata == original_metadata
+
+
+@pytest.mark.parametrize("failure_target", ["metadata.json", "CURRENT"])
+def test_failed_generation_publication_preserves_previous_snapshot(
+    tmp_path, monkeypatch, failure_target
+):
+    build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
+    old_records, old_metadata = load_snapshot(tmp_path)
+    old_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+    real_atomic_write = universe_source._atomic_write
+
+    def fail_publication(path, content):
+        if path.name == failure_target:
+            raise OSError(f"injected {failure_target} publication failure")
+        return real_atomic_write(path, content)
+
+    monkeypatch.setattr(universe_source, "_atomic_write", fail_publication)
+
+    with pytest.raises(OSError, match="injected"):
+        build_snapshot(tmp_path, snapshot_date="2026-09-16", downloader=_downloader)
+
+    assert (tmp_path / "CURRENT").read_text(encoding="ascii") == old_current
+    records, metadata = load_snapshot(tmp_path)
+    assert records == old_records
+    assert metadata == old_metadata
+
+
+def test_successful_refresh_selects_new_complete_generation(tmp_path):
+    build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
+    old_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+
+    metadata = build_snapshot(
+        tmp_path, snapshot_date="2026-09-16", downloader=_downloader
+    )
+
+    assert (tmp_path / "CURRENT").read_text(encoding="ascii") != old_current
+    records, loaded_metadata = load_snapshot(tmp_path)
+    assert loaded_metadata == metadata
+    assert loaded_metadata["snapshot_date"] == "2026-09-16"
+    assert all(record["snapshot_date"] == "2026-09-16" for record in records)
