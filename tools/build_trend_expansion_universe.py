@@ -34,23 +34,18 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="JSON audit report path (default: <output-dir>/exclusions.json)",
     )
-    parser.add_argument(
-        "--snapshot-date", help="Snapshot date (YYYY-MM-DD); defaults to today"
-    )
+    parser.add_argument("--snapshot-date", help="Snapshot date (YYYY-MM-DD); defaults to today")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     if args.refresh:
-        metadata = build_snapshot(args.output_dir, snapshot_date=args.snapshot_date)
+        build_snapshot(args.output_dir, snapshot_date=args.snapshot_date)
         mode = "refreshed"
     else:
-        records, metadata = load_snapshot(args.output_dir)
         mode = "cached"
-
-    if args.refresh:
-        records, _ = load_snapshot(args.output_dir)
+    records, metadata = load_snapshot(args.output_dir)
 
     print(f"snapshot_mode: {mode}")
     print(f"snapshot_date: {metadata['snapshot_date']}")

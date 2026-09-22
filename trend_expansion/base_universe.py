@@ -7,12 +7,16 @@ import io
 import json
 import os
 import re
+import shutil
 import tempfile
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
 SOURCE_POOL = "trend_expansion"
+FILTER_CURRENT = "FILTER_CURRENT"
+FILTER_GENERATIONS = "filter_generations"
 OUTPUT_COLUMNS = (
     "symbol",
     "security_name",
@@ -29,8 +33,6 @@ OUTPUT_COLUMNS = (
     "snapshot_date",
     "source_pool",
 )
-REJECTION_COLUMNS = ("symbol", "security_name", "exchange", "reason")
-
 _EXCHANGE_ALIASES = {
     "NASDAQ": "NASDAQ",
     "NYSE": "NYSE",
@@ -47,13 +49,25 @@ _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bpreferred\b|\bdepositary shares?\b", re.I), "preferred"),
     (
         re.compile(
+            r"(?:\b\d+(?:\.\d+)?%\s+(?:senior\s+|subordinated\s+|convertible\s+)?"
+            r"(?:notes?|bonds?|debentures?)\b|\b(?:senior|subordinated|convertible)\s+"
+            r"(?:notes?|bonds?|debentures?)\b|\b(?:notes?|bonds?|debentures?)\s+due\b)",
+            re.I,
+        ),
+        "debt",
+    ),
+    (
+        re.compile(
             r"\b(?:blank check|spac|acquisition (?:corp(?:oration)?|co(?:mpany)?))\b",
             re.I,
         ),
         "other_non_common",
     ),
     (
-        re.compile(r"\b(?:beneficial interest|closed[- ]end|trust)\b", re.I),
+        re.compile(
+            r"\b(?:shares?|units?)\s+of\s+beneficial interest\b|" r"\btrust certificates?\b|\bclosed[- ]end\b",
+            re.I,
+        ),
         "other_non_common",
     ),
 )
@@ -147,9 +161,7 @@ def filter_base_universe(
             continue
         accepted.append(
             {
-                column: SOURCE_POOL
-                if column == "source_pool"
-                else str(record.get(column, "")).strip()
+                column: SOURCE_POOL if column == "source_pool" else str(record.get(column, "")).strip()
                 for column in OUTPUT_COLUMNS
             }
         )
@@ -164,6 +176,7 @@ def filter_base_universe(
         "unit_count": reason_counts["unit"],
         "right_count": reason_counts["right"],
         "preferred_count": reason_counts["preferred"],
+        "debt_count": reason_counts["debt"],
         "test_issue_count": reason_counts["test_issue"],
         "other_non_common_count": reason_counts["other_non_common"],
         "duplicate_symbol_count": duplicate_count,
@@ -175,9 +188,7 @@ def filter_base_universe(
 
 def _atomic_write(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}."
-    )
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(content)
@@ -187,19 +198,90 @@ def _atomic_write(path: Path, content: bytes) -> None:
         raise
 
 
+def _artifact_layout(output_path: str | Path, report_path: str | Path) -> tuple[Path, str, str]:
+    output = Path(output_path)
+    report = Path(report_path)
+    if output.parent.resolve() != report.parent.resolve():
+        raise ValueError("filtered CSV and exclusion report must share a directory")
+    if output.name == report.name:
+        raise ValueError("filtered CSV and exclusion report must have distinct names")
+    if {output.name, report.name}.intersection({FILTER_CURRENT, FILTER_GENERATIONS}):
+        raise ValueError("artifact names conflict with generation control paths")
+    return output.parent, output.name, report.name
+
+
+def _current_selects_generation(directory: Path, generation_name: str) -> bool | None:
+    """Return CURRENT's selection, or None when it cannot be observed safely."""
+    try:
+        selected = (directory / FILTER_CURRENT).read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError):
+        return None
+    return selected == generation_name
+
+
+def _publish_generation(
+    directory: Path,
+    output_name: str,
+    csv_bytes: bytes,
+    report_name: str,
+    report_bytes: bytes,
+) -> None:
+    """Publish both artifacts, using FILTER_CURRENT as the commit point."""
+    generations = directory / FILTER_GENERATIONS
+    generations.mkdir(parents=True, exist_ok=True)
+    generation_name = uuid.uuid4().hex
+    staging = Path(tempfile.mkdtemp(dir=generations, prefix=".staging-"))
+    generation = generations / generation_name
+    committed = False
+    try:
+        _atomic_write(staging / output_name, csv_bytes)
+        _atomic_write(staging / report_name, report_bytes)
+        os.replace(staging, generation)
+        _atomic_write(directory / FILTER_CURRENT, f"{generation_name}\n".encode("ascii"))
+        committed = True
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+        if not committed and generation.exists():
+            selected = _current_selects_generation(directory, generation_name)
+            if selected is False:
+                shutil.rmtree(generation)
+
+
 def write_filter_outputs(
     records: Iterable[dict[str, str]], output_path: str | Path, report_path: str | Path
 ) -> dict[str, int]:
-    """Write stable CSV output and a JSON diagnostics/rejection report."""
+    """Publish stable CSV/report bytes as one selectable generation.
+
+    The two logical paths must share a directory. Readers must use
+    :func:`load_filter_outputs`, which resolves both files through the same
+    atomic FILTER_CURRENT selector.
+    """
     accepted, rejected, diagnostics = filter_base_universe(records)
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=OUTPUT_COLUMNS, lineterminator="\n")
     writer.writeheader()
     writer.writerows(accepted)
-    _atomic_write(Path(output_path), buffer.getvalue().encode("utf-8"))
+    csv_bytes = buffer.getvalue().encode("utf-8")
     report = {"diagnostics": diagnostics, "exclusions": rejected}
-    _atomic_write(
-        Path(report_path),
-        (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-    )
+    report_bytes = (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    directory, output_name, report_name = _artifact_layout(output_path, report_path)
+    _publish_generation(directory, output_name, csv_bytes, report_name, report_bytes)
     return diagnostics
+
+
+def load_filter_outputs(output_path: str | Path, report_path: str | Path) -> tuple[bytes, dict[str, Any]]:
+    """Resolve and load a coherent filtered CSV/report generation."""
+    directory, output_name, report_name = _artifact_layout(output_path, report_path)
+    try:
+        generation_name = (directory / FILTER_CURRENT).read_text(encoding="ascii").strip()
+        if not generation_name or Path(generation_name).name != generation_name:
+            raise ValueError("invalid generation name")
+        generation = directory / FILTER_GENERATIONS / generation_name
+        csv_bytes = (generation / output_name).read_bytes()
+        report = json.loads((generation / report_name).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeError, ValueError) as exc:
+        raise RuntimeError(f"Invalid base-universe generation: {exc}") from exc
+    return csv_bytes, report

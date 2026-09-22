@@ -36,18 +36,25 @@ Filter the selected cached snapshot without making a network request:
 python -m tools.build_trend_expansion_universe --filter
 ```
 
-By default this writes `base_universe.csv` and `exclusions.json` beside the
-cache selector. `--filter-output` and `--exclusion-report` select other paths.
+By default this publishes `base_universe.csv` and `exclusions.json` as an
+immutable generation beside the snapshot cache. A single atomically replaced
+`FILTER_CURRENT` selector commits both files, so readers using
+`load_filter_outputs()` cannot observe a CSV from one generation with a report
+from another. `--filter-output` and `--exclusion-report` select the logical
+artifact names, but both must share a directory so they can use one selector.
 The filtered CSV preserves the Stage A columns and adds
 `source_pool=trend_expansion`. The JSON report contains every rejected symbol
 and its deterministic reason, plus input, allowed-exchange, exchange exclusion,
-ETF/fund, warrant, unit, right, preferred, test-issue, other-non-common,
+ETF/fund, warrant, unit, right, preferred, debt, test-issue, other-non-common,
 duplicate, total-exclusion, and final-common-equity counts.
 
 Only NASDAQ, NYSE, and NYSE American/AMEX listings pass. Reliable directory
 flags and explicit security-name evidence remove funds/ETFs, warrants, units,
-rights, preferreds, test issues, and obvious SPAC or other non-common
-instruments. Missing optional metadata alone does not reject a listing. Output
+rights, preferreds, explicit listed debt, test issues, and obvious SPAC or
+other non-common instruments. Trust-company and similar issuer names are not
+enough to reject an explicitly identified common stock; actual trust
+instruments require security-type evidence such as shares of beneficial
+interest. Missing optional metadata alone does not reject a listing. Output
 ordering and duplicate precedence are stable for a fixed input.
 
 ## Purpose
