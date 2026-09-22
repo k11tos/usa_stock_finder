@@ -1,0 +1,6 @@
+ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+IBM|International Business Machines Corporation|N|IBM|N|100|N|IBM
+SPY|SPDR S&P 500 ETF Trust|P|SPY|Y|100|N|SPY
+AMEXW|Example Warrants|A|AMEXW|N|100|N|AMEXW
+AAPL|Duplicate Apple Listing|Z|AAPL|N|100|N|AAPL
+File Creation Time: 0915202618:03||||||
