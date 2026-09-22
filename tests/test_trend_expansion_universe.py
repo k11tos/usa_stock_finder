@@ -219,6 +219,45 @@ def test_refresh_network_failure_is_clear_and_does_not_fall_back_to_cache(tmp_pa
     assert metadata == original_metadata
 
 
+@pytest.mark.parametrize("empty_source", ["nasdaqlisted", "otherlisted"])
+def test_refresh_rejects_empty_required_source_and_preserves_previous_snapshot(
+    tmp_path, empty_source
+):
+    build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
+    original_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+    original_records, original_metadata = load_snapshot(tmp_path)
+
+    def empty_source_downloader(url: str) -> bytes:
+        source = next(
+            name for name, source_url in SOURCE_URLS.items() if source_url == url
+        )
+        if source == empty_source:
+            lines = _fixture(source).decode().splitlines()
+            return f"{lines[0]}\n{lines[-1]}\n".encode()
+        return _fixture(source)
+
+    with pytest.raises(
+        UniverseSourceError,
+        match=rf"{empty_source}: source produced no usable records",
+    ):
+        build_snapshot(
+            tmp_path,
+            snapshot_date="2026-09-16",
+            downloader=empty_source_downloader,
+        )
+
+    assert (tmp_path / "CURRENT").read_text(encoding="ascii") == original_current
+    records, metadata = load_snapshot(tmp_path)
+    assert records == original_records
+    assert metadata == original_metadata
+
+
+@pytest.mark.parametrize("invalid_date", ["20260915", "2026-W38-2", "2026-02-30"])
+def test_build_snapshot_rejects_noncanonical_snapshot_dates(tmp_path, invalid_date):
+    with pytest.raises(ValueError, match="snapshot_date must use YYYY-MM-DD"):
+        build_snapshot(tmp_path, snapshot_date=invalid_date, downloader=_downloader)
+
+
 @pytest.mark.parametrize("failure_target", ["metadata.json", "CURRENT"])
 def test_failed_generation_publication_preserves_previous_snapshot(
     tmp_path, monkeypatch, failure_target

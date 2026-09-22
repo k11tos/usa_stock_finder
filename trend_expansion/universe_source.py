@@ -80,6 +80,19 @@ class UniverseSourceError(RuntimeError):
     """Raised when source download or snapshot validation fails."""
 
 
+def _validate_snapshot_date(value: str) -> str:
+    """Return a canonical calendar date or reject the documented format."""
+    if not isinstance(value, str):
+        raise ValueError("snapshot_date must use YYYY-MM-DD")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("snapshot_date must use YYYY-MM-DD") from exc
+    if parsed.isoformat() != value:
+        raise ValueError("snapshot_date must use YYYY-MM-DD")
+    return value
+
+
 def _clean(row: dict[str, str | None], field: str) -> str:
     return (row.get(field) or "").strip()
 
@@ -243,11 +256,7 @@ def build_snapshot(
     downloader: Callable[[str], bytes] = _download,
 ) -> dict[str, Any]:
     """Refresh both directories and publish one coherent snapshot generation."""
-    day = snapshot_date or date.today().isoformat()
-    try:
-        date.fromisoformat(day)
-    except ValueError as exc:
-        raise ValueError("snapshot_date must use YYYY-MM-DD") from exc
+    day = _validate_snapshot_date(snapshot_date or date.today().isoformat())
 
     raw_sources: dict[str, bytes] = {}
     records: list[dict[str, str]] = []
@@ -262,9 +271,12 @@ def build_snapshot(
             ) from exc
         raw_sources[source] = payload
         try:
-            records.extend(parse_directory(payload.decode("utf-8-sig"), source, day))
+            source_records = parse_directory(payload.decode("utf-8-sig"), source, day)
         except UnicodeDecodeError as exc:
             raise UniverseSourceError(f"{source}: response is not UTF-8 text") from exc
+        if not source_records:
+            raise UniverseSourceError(f"{source}: source produced no usable records")
+        records.extend(source_records)
 
     normalized, duplicate_count = normalize_records(records)
     csv_buffer = io.StringIO(newline="")
