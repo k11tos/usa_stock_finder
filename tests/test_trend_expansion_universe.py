@@ -281,9 +281,82 @@ def test_failed_generation_publication_preserves_previous_snapshot(
         build_snapshot(tmp_path, snapshot_date="2026-09-16", downloader=_downloader)
 
     assert (tmp_path / "CURRENT").read_text(encoding="ascii") == old_current
+    assert {path.name for path in (tmp_path / "generations").iterdir()} == {
+        old_current.strip()
+    }
     records, metadata = load_snapshot(tmp_path)
     assert records == old_records
     assert metadata == old_metadata
+
+
+def test_exception_after_current_replacement_preserves_selected_generation(
+    tmp_path, monkeypatch
+):
+    build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
+    old_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+    # Exercise the private publication seam to inject an interruption after
+    # CURRENT's replacement is visible but before the caller records success.
+    # pylint: disable=protected-access
+    real_atomic_write = universe_source._atomic_write
+    # pylint: enable=protected-access
+
+    def interrupt_after_current_replacement(path, content):
+        real_atomic_write(path, content)
+        if path.name == "CURRENT":
+            raise KeyboardInterrupt("injected post-replacement interruption")
+
+    monkeypatch.setattr(
+        universe_source, "_atomic_write", interrupt_after_current_replacement
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="post-replacement"):
+        build_snapshot(tmp_path, snapshot_date="2026-09-16", downloader=_downloader)
+
+    new_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+    assert new_current != old_current
+    assert (tmp_path / "generations" / new_current.strip()).is_dir()
+    records, metadata = load_snapshot(tmp_path)
+    assert metadata["snapshot_date"] == "2026-09-16"
+    assert all(record["snapshot_date"] == "2026-09-16" for record in records)
+
+
+def test_ambiguous_current_state_retains_complete_unselected_generation(
+    tmp_path, monkeypatch
+):
+    build_snapshot(tmp_path, snapshot_date=SNAPSHOT_DATE, downloader=_downloader)
+    old_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+    # pylint: disable=protected-access
+    real_atomic_write = universe_source._atomic_write
+    # pylint: enable=protected-access
+    real_read_text = Path.read_text
+
+    def fail_before_current_replacement(path, content):
+        if path.name == "CURRENT":
+            raise OSError("injected pre-replacement failure")
+        return real_atomic_write(path, content)
+
+    def fail_current_observation(path, *args, **kwargs):
+        if path == tmp_path / "CURRENT":
+            raise OSError("injected ambiguous CURRENT state")
+        return real_read_text(path, *args, **kwargs)
+
+    with monkeypatch.context() as publication_patch:
+        publication_patch.setattr(
+            universe_source, "_atomic_write", fail_before_current_replacement
+        )
+        publication_patch.setattr(Path, "read_text", fail_current_observation)
+        with pytest.raises(OSError, match="pre-replacement"):
+            build_snapshot(tmp_path, snapshot_date="2026-09-16", downloader=_downloader)
+
+    assert (tmp_path / "CURRENT").read_text(encoding="ascii") == old_current
+    generations = {path.name: path for path in (tmp_path / "generations").iterdir()}
+    assert len(generations) == 2
+    orphan_name = next(name for name in generations if name != old_current.strip())
+    assert (generations[orphan_name] / "universe.csv").is_file()
+    assert (generations[orphan_name] / "metadata.json").is_file()
+    records, metadata = load_snapshot(tmp_path)
+    assert metadata["snapshot_date"] == SNAPSHOT_DATE
+    assert all(record["snapshot_date"] == SNAPSHOT_DATE for record in records)
 
 
 def test_successful_refresh_selects_new_complete_generation(tmp_path):
@@ -294,7 +367,11 @@ def test_successful_refresh_selects_new_complete_generation(tmp_path):
         tmp_path, snapshot_date="2026-09-16", downloader=_downloader
     )
 
-    assert (tmp_path / "CURRENT").read_text(encoding="ascii") != old_current
+    new_current = (tmp_path / "CURRENT").read_text(encoding="ascii")
+    assert new_current != old_current
+    generation = tmp_path / "generations" / new_current.strip()
+    assert (generation / "universe.csv").is_file()
+    assert (generation / "metadata.json").is_file()
     records, loaded_metadata = load_snapshot(tmp_path)
     assert loaded_metadata == metadata
     assert loaded_metadata["snapshot_date"] == "2026-09-16"

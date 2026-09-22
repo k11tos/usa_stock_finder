@@ -218,6 +218,19 @@ def _atomic_write(path: Path, content: bytes) -> None:
         raise
 
 
+def _current_selects_generation(directory: Path, generation_name: str) -> bool | None:
+    """Return CURRENT's selection, or None when it cannot be observed safely."""
+    try:
+        selected_generation = (
+            (directory / "CURRENT").read_text(encoding="ascii").strip()
+        )
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError):
+        return None
+    return selected_generation == generation_name
+
+
 def _publish_generation(
     directory: Path, csv_bytes: bytes, metadata_bytes: bytes
 ) -> None:
@@ -226,7 +239,8 @@ def _publish_generation(
     The CURRENT file is the commit point. A failure before its replacement
     leaves the loader selecting the previous complete generation. A failure at
     the commit point can leave an unreferenced complete generation, but cannot
-    create a mixed CSV/metadata pair.
+    create a mixed CSV/metadata pair. Cleanup consults CURRENT because an
+    exception does not prove that its atomic replacement failed.
     """
     generations = directory / "generations"
     generations.mkdir(parents=True, exist_ok=True)
@@ -243,10 +257,13 @@ def _publish_generation(
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-        # A failed CURRENT publication leaves this complete generation orphaned.
-        # Removing it is safe because the old CURRENT was never replaced.
         if not committed and generation.exists():
-            shutil.rmtree(generation)
+            selected = _current_selects_generation(directory, generation_name)
+            # Delete only when persisted state positively establishes that the
+            # generation is not active. An unreadable CURRENT is ambiguous, so
+            # retaining a complete orphan is safer than deleting active data.
+            if selected is False:
+                shutil.rmtree(generation)
 
 
 def build_snapshot(
