@@ -47,7 +47,13 @@ _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bwarrants?\b", re.I), "warrant"),
     (re.compile(r"\bunits?\b", re.I), "unit"),
     (re.compile(r"\brights?\b", re.I), "right"),
-    (re.compile(r"\bpreferred\b|\bdepositary shares?\b", re.I), "preferred"),
+    (
+        re.compile(
+            r"\bpreferred\b|\bdepositary shares?\b|\bpreference (?:shares?|stock)\b",
+            re.I,
+        ),
+        "preferred",
+    ),
     (
         re.compile(
             r"(?:\b\d+(?:\.\d+)?%\s+(?:senior\s+|subordinated\s+|convertible\s+)?"

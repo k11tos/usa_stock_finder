@@ -56,6 +56,8 @@ def test_allowed_exchange_common_stocks_pass(exchange):
         (_record("U", "Example Acquisition Corp Units"), "unit"),
         (_record("R", "Example Subscription Rights"), "right"),
         (_record("P", "Example 7% Preferred Stock"), "preferred"),
+        (_record("PS", "Example Preference Shares"), "preferred"),
+        (_record("PK", "Example Preference Stock"), "preferred"),
         (_record("D", "Example Corp. 6.50% Senior Notes due 2029"), "debt"),
         (_record("ETN", "Example Index ETN"), "debt"),
         (_record("ETNS", "Example Index ETNs due 2035"), "debt"),
@@ -86,6 +88,7 @@ def test_absent_optional_metadata_does_not_reject_normal_listing():
         "Bond Street Holdings, Inc. - Common Stock",
         "Etnyre International - Common Stock",
         "Unit Corporation - Common Stock",
+        "Preference Holdings Corporation - Common Stock",
     ],
 )
 def test_issuer_name_words_do_not_override_explicit_common_stock(name):
