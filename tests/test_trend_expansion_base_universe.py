@@ -83,6 +83,56 @@ def test_absent_optional_metadata_does_not_reject_normal_listing():
 @pytest.mark.parametrize(
     "name",
     [
+        "Example plc - American Depositary Shares",
+        "Example plc - American Depositary Shares, each representing two Ordinary Shares",
+        "Example plc - American Depositary Shares, each representing ten Common Shares",
+    ],
+)
+def test_ordinary_or_common_equity_depositary_shares_pass(name):
+    accepted, rejected, _ = filter_base_universe([_record("ADR", name)])
+
+    assert [row["symbol"] for row in accepted] == ["ADR"]
+    assert not rejected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Example Depositary Shares, each representing preferred stock",
+        "Example Depositary Shares, each representing preference shares",
+        "Example 7% Pfd Shs",
+        "Example 7% Pfd Sh",
+        "Example Pfd Stock",
+        "Example Pfd Ser A",
+        "Example Pfd 3 Ordinary Shares",
+        "Example Pfd Shs - Common Stock",
+    ],
+)
+def test_explicit_preferred_security_evidence_is_rejected(name):
+    accepted, rejected, diagnostics = filter_base_universe([_record("PREF", name)])
+
+    assert not accepted
+    assert rejected[0]["reason"] == "preferred"
+    assert diagnostics["preferred_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Pfd Holdings Corporation - Common Stock",
+        "Example Pfdly Named Corporation - Common Stock",
+    ],
+)
+def test_ambiguous_or_embedded_pfd_text_does_not_reject_common_stock(name):
+    accepted, rejected, _ = filter_base_universe([_record("COMMON", name)])
+
+    assert [row["symbol"] for row in accepted] == ["COMMON"]
+    assert not rejected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
         "Northern Trust Corporation - Common Stock",
         "Community Bank Notes Company - Common Stock",
         "Bond Street Holdings, Inc. - Common Stock",

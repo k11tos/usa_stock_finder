@@ -42,18 +42,19 @@ _EXCHANGE_ALIASES = {
     "NYSE MKT": "NYSE AMERICAN",
 }
 _EXPLICIT_COMMON_STOCK_PATTERN = re.compile(r"\bcommon stock\b", re.I)
+_PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)
+_STRONG_PREFERRED_SECURITY_PATTERN = re.compile(
+    r"\bpreferred\b|\bpreference\s+(?:shares?|stock)\b|"
+    r"\bpfd\s+(?:shs?|shares?|stock|ser(?:ies)?|\d+(?:\.\d+)?%?)\b",
+    re.I,
+)
+_AMBIGUOUS_PREFERRED_ABBREVIATION_PATTERN = re.compile(r"\bpfd\b", re.I)
 _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:etf|exchange[- ]traded fund|fund)\b", re.I), "etf_fund"),
     (re.compile(r"\bwarrants?\b", re.I), "warrant"),
     (re.compile(r"\bunits?\b", re.I), "unit"),
     (re.compile(r"\brights?\b", re.I), "right"),
-    (
-        re.compile(
-            r"\bpreferred\b|\bdepositary shares?\b|\bpreference (?:shares?|stock)\b",
-            re.I,
-        ),
-        "preferred",
-    ),
+    (_PREFERRED_TERMINOLOGY_PATTERN, "preferred"),
     (
         re.compile(
             r"(?:\b\d+(?:\.\d+)?%\s+(?:senior\s+|subordinated\s+|convertible\s+)?"
@@ -92,6 +93,16 @@ def normalize_exchange(value: Any) -> str:
     return _EXCHANGE_ALIASES.get(normalized, normalized)
 
 
+def _has_preferred_security_evidence(security_name: str) -> bool:
+    """Return whether a directory name explicitly identifies preferred equity."""
+    if _STRONG_PREFERRED_SECURITY_PATTERN.search(security_name):
+        return True
+    return bool(
+        _AMBIGUOUS_PREFERRED_ABBREVIATION_PATTERN.search(security_name)
+        and not _EXPLICIT_COMMON_STOCK_PATTERN.search(security_name)
+    )
+
+
 def _rejection_reason(record: dict[str, str]) -> str | None:
     if normalize_exchange(record.get("exchange")) not in {
         "NASDAQ",
@@ -109,6 +120,10 @@ def _rejection_reason(record: dict[str, str]) -> str | None:
     for pattern, reason in _NAME_PATTERNS:
         match = pattern.search(security_name)
         if not match:
+            continue
+        if reason == "preferred" and not _has_preferred_security_evidence(
+            security_name
+        ):
             continue
         if (
             reason == "unit"
