@@ -57,6 +57,9 @@ def test_allowed_exchange_common_stocks_pass(exchange):
         (_record("R", "Example Subscription Rights"), "right"),
         (_record("P", "Example 7% Preferred Stock"), "preferred"),
         (_record("D", "Example Corp. 6.50% Senior Notes due 2029"), "debt"),
+        (_record("ETN", "Example Index ETN"), "debt"),
+        (_record("ETNS", "Example Index ETNs due 2035"), "debt"),
+        (_record("XTN", "Example Exchange-Traded Note"), "debt"),
         (_record("TEST", "Normal Common Stock", test_issue="Y"), "test_issue"),
         (_record("SPAC", "Example Acquisition Corporation Class A"), "other_non_common"),
     ],
@@ -81,6 +84,8 @@ def test_absent_optional_metadata_does_not_reject_normal_listing():
         "Northern Trust Corporation - Common Stock",
         "Community Bank Notes Company - Common Stock",
         "Bond Street Holdings, Inc. - Common Stock",
+        "Etnyre International - Common Stock",
+        "Unit Corporation - Common Stock",
     ],
 )
 def test_issuer_name_words_do_not_override_explicit_common_stock(name):
@@ -97,6 +102,22 @@ def test_genuine_trust_instrument_is_still_rejected():
 
     assert not accepted
     assert rejected[0]["reason"] == "other_non_common"
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        ("Example Corp Senior Notes due 2035 - Common Stock", "debt"),
+        ("Example Warrants - Common Stock", "warrant"),
+        ("Example Preferred Shares - Common Stock", "preferred"),
+        ("Example Acquisition Corp Units - Common Stock", "unit"),
+    ],
+)
+def test_explicit_non_common_evidence_beats_common_stock_text(name, reason):
+    accepted, rejected, _ = filter_base_universe([_record("NONCOMMON", name)])
+
+    assert not accepted
+    assert rejected[0]["reason"] == reason
 
 
 def test_duplicates_have_stable_precedence_and_auditable_rejection():

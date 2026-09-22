@@ -41,6 +41,7 @@ _EXCHANGE_ALIASES = {
     "NYSE AMERICAN": "NYSE AMERICAN",
     "NYSE MKT": "NYSE AMERICAN",
 }
+_EXPLICIT_COMMON_STOCK_PATTERN = re.compile(r"\bcommon stock\b", re.I)
 _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:etf|exchange[- ]traded fund|fund)\b", re.I), "etf_fund"),
     (re.compile(r"\bwarrants?\b", re.I), "warrant"),
@@ -51,7 +52,8 @@ _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             r"(?:\b\d+(?:\.\d+)?%\s+(?:senior\s+|subordinated\s+|convertible\s+)?"
             r"(?:notes?|bonds?|debentures?)\b|\b(?:senior|subordinated|convertible)\s+"
-            r"(?:notes?|bonds?|debentures?)\b|\b(?:notes?|bonds?|debentures?)\s+due\b)",
+            r"(?:notes?|bonds?|debentures?)\b|\b(?:notes?|bonds?|debentures?)\s+due\b|"
+            r"\betns?\b|\bexchange[- ]traded notes?\b)",
             re.I,
         ),
         "debt",
@@ -65,7 +67,7 @@ _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(
-            r"\b(?:shares?|units?)\s+of\s+beneficial interest\b|" r"\btrust certificates?\b|\bclosed[- ]end\b",
+            r"\b(?:shares?|units?)\s+of\s+beneficial interest\b|\btrust certificates?\b|\bclosed[- ]end\b",
             re.I,
         ),
         "other_non_common",
@@ -99,8 +101,16 @@ def _rejection_reason(record: dict[str, str]) -> str | None:
         return "etf_fund"
     security_name = str(record.get("security_name", "")).strip()
     for pattern, reason in _NAME_PATTERNS:
-        if pattern.search(security_name):
-            return reason
+        match = pattern.search(security_name)
+        if not match:
+            continue
+        if (
+            reason == "unit"
+            and match.group(0).lower() == "unit"
+            and _EXPLICIT_COMMON_STOCK_PATTERN.search(security_name)
+        ):
+            continue
+        return reason
     return None
 
 
