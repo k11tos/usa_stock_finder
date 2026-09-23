@@ -55,6 +55,8 @@ def test_allowed_exchange_common_stocks_pass(exchange):
         (_record("W", "Example Corp Warrants"), "warrant"),
         (_record("U", "Example Acquisition Corp Units"), "unit"),
         (_record("R", "Example Subscription Rights"), "right"),
+        (_record("PST", "Example Preferred Stock"), "preferred"),
+        (_record("PSH", "Example Preferred Shares"), "preferred"),
         (_record("P", "Example 7% Preferred Stock"), "preferred"),
         (_record("PS", "Example Preference Shares"), "preferred"),
         (_record("PK", "Example Preference Stock"), "preferred"),
@@ -100,6 +102,8 @@ def test_ordinary_or_common_equity_depositary_shares_pass(name):
     [
         "Example Depositary Shares, each representing preferred stock",
         "Example Depositary Shares, each representing preference shares",
+        "Example Depositary Shares, each representing preferred equity",
+        "Example Depositary Shares, each representing preference equity",
         "Example 7% Pfd Shs",
         "Example 7% Pfd Sh",
         "Example Pfd Stock",
@@ -138,6 +142,8 @@ def test_ambiguous_or_embedded_pfd_text_does_not_reject_common_stock(name):
         "Bond Street Holdings, Inc. - Common Stock",
         "Etnyre International - Common Stock",
         "Unit Corporation - Common Stock",
+        "Preferred Bank - Common Stock",
+        "Preferred Holdings Corporation - Common Stock",
         "Preference Holdings Corporation - Common Stock",
     ],
 )

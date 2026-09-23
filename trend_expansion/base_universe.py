@@ -44,11 +44,16 @@ _EXCHANGE_ALIASES = {
 _EXPLICIT_COMMON_STOCK_PATTERN = re.compile(r"\bcommon stock\b", re.I)
 _PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)
 _STRONG_PREFERRED_SECURITY_PATTERN = re.compile(
-    r"\bpreferred\b|\bpreference\s+(?:shares?|stock)\b|"
-    r"\bpfd\s+(?:shs?|shares?|stock|ser(?:ies)?|\d+(?:\.\d+)?%?)\b",
+    r"\bpreferred\s+(?:shares?|stock|equity)\b|"
+    r"\bpreference\s+(?:shares?|stock|equity)\b|"
+    r"\bpfd\s+(?:shs?|shares?|stock|ser(?:ies)?|\d+(?:\.\d+)?%?)\b|"
+    r"\bdepositary\s+shares?\b.*?\brepresent(?:ing|s)?\b.*?"
+    r"\b(?:preferred|preference)(?:\s+(?:shares?|stock|equity))?\b",
     re.I,
 )
-_AMBIGUOUS_PREFERRED_ABBREVIATION_PATTERN = re.compile(r"\bpfd\b", re.I)
+_AMBIGUOUS_PREFERRED_TERMINOLOGY_PATTERN = re.compile(
+    r"\b(?:preferred|preference|pfd)\b", re.I
+)
 _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:etf|exchange[- ]traded fund|fund)\b", re.I), "etf_fund"),
     (re.compile(r"\bwarrants?\b", re.I), "warrant"),
@@ -94,13 +99,12 @@ def normalize_exchange(value: Any) -> str:
 
 
 def _has_preferred_security_evidence(security_name: str) -> bool:
-    """Return whether a directory name explicitly identifies preferred equity."""
+    """Return whether a directory name identifies preferred equity conservatively."""
     if _STRONG_PREFERRED_SECURITY_PATTERN.search(security_name):
         return True
-    return bool(
-        _AMBIGUOUS_PREFERRED_ABBREVIATION_PATTERN.search(security_name)
-        and not _EXPLICIT_COMMON_STOCK_PATTERN.search(security_name)
-    )
+    if _EXPLICIT_COMMON_STOCK_PATTERN.search(security_name):
+        return False
+    return bool(_AMBIGUOUS_PREFERRED_TERMINOLOGY_PATTERN.search(security_name))
 
 
 def _rejection_reason(record: dict[str, str]) -> str | None:
