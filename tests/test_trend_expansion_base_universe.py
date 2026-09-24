@@ -10,11 +10,7 @@ import pytest
 
 from tools import build_trend_expansion_universe as cli
 from trend_expansion import base_universe
-from trend_expansion.base_universe import (
-    filter_base_universe,
-    load_filter_outputs,
-    write_filter_outputs,
-)
+from trend_expansion.base_universe import filter_base_universe, load_filter_outputs, write_filter_outputs
 
 
 def _record(symbol: str, name: str, exchange: str = "NASDAQ", **values):
@@ -192,6 +188,30 @@ def test_explicit_investment_trust_evidence_beats_common_beneficial_interest(nam
     assert not accepted
     assert rejected[0]["reason"] == "other_non_common"
     assert diagnostics["other_non_common_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "BlackRock Science and Technology Trust Common Shares of Beneficial Interest",
+        "Eaton Vance Floating Rate Income Trust Common Shares of Beneficial Interest",
+    ],
+)
+def test_manager_branded_investment_trust_beats_common_beneficial_interest(name):
+    accepted, rejected, diagnostics = filter_base_universe([_record("FUND", name, "NYSE")])
+
+    assert not accepted
+    assert rejected[0]["reason"] == "other_non_common"
+    assert diagnostics["other_non_common_count"] == 1
+
+
+def test_generic_operating_trust_common_beneficial_interest_still_passes():
+    accepted, rejected, _ = filter_base_universe(
+        [_record("TRUST", "Example Operating Trust Common Shares of Beneficial Interest", "NYSE")]
+    )
+
+    assert [row["symbol"] for row in accepted] == ["TRUST"]
+    assert not rejected
 
 
 @pytest.mark.parametrize(

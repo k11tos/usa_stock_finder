@@ -42,14 +42,15 @@ _EXCHANGE_ALIASES = {
     "NYSE MKT": "NYSE AMERICAN",
 }
 _EXPLICIT_COMMON_STOCK_PATTERN = re.compile(r"\bcommon stock\b", re.I)
-_EXPLICIT_COMMON_BENEFICIAL_INTEREST_PATTERN = re.compile(
-    r"\bcommon\s+shares?\s+of\s+beneficial interest\b", re.I
-)
-_BENEFICIAL_INTEREST_PATTERN = re.compile(
-    r"\b(?:shares?|units?)\s+of\s+beneficial interest\b", re.I
-)
+_EXPLICIT_COMMON_BENEFICIAL_INTEREST_PATTERN = re.compile(r"\bcommon\s+shares?\s+of\s+beneficial interest\b", re.I)
+_BENEFICIAL_INTEREST_PATTERN = re.compile(r"\b(?:shares?|units?)\s+of\s+beneficial interest\b", re.I)
 _TRUST_CERTIFICATE_PATTERN = re.compile(r"\btrust certificates?\b", re.I)
-_INVESTMENT_TRUST_PATTERN = re.compile(r"\b(?:closed[- ]end|term trust)\b", re.I)
+_INVESTMENT_TRUST_PATTERN = re.compile(
+    r"\b(?:closed[- ]end|term\s+(?:trust|fund))\b|"
+    r"\b(?:blackrock|eaton vance|franklin|gabelli|guggenheim|invesco|xai)\b"
+    r".*\btrust\b",
+    re.I,
+)
 _PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)
 _STRONG_PREFERRED_SECURITY_PATTERN = re.compile(
     r"\bpreferred\s+(?:shares?|stock|equity)\b|"
@@ -59,9 +60,7 @@ _STRONG_PREFERRED_SECURITY_PATTERN = re.compile(
     r"\b(?:preferred|preference)(?:\s+(?:shares?|stock|equity))?\b",
     re.I,
 )
-_AMBIGUOUS_PREFERRED_TERMINOLOGY_PATTERN = re.compile(
-    r"\b(?:preferred|preference|pfd)\b", re.I
-)
+_AMBIGUOUS_PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)
 _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:etf|exchange[- ]traded fund|fund)\b", re.I), "etf_fund"),
     (re.compile(r"\bwarrants?\b", re.I), "warrant"),
@@ -129,9 +128,7 @@ def _rejection_reason(record: dict[str, str]) -> str | None:
         match = pattern.search(security_name)
         if not match:
             continue
-        if reason == "preferred" and not _has_preferred_security_evidence(
-            security_name
-        ):
+        if reason == "preferred" and not _has_preferred_security_evidence(security_name):
             continue
         if (
             reason == "unit"
