@@ -42,6 +42,14 @@ _EXCHANGE_ALIASES = {
     "NYSE MKT": "NYSE AMERICAN",
 }
 _EXPLICIT_COMMON_STOCK_PATTERN = re.compile(r"\bcommon stock\b", re.I)
+_EXPLICIT_COMMON_BENEFICIAL_INTEREST_PATTERN = re.compile(
+    r"\bcommon\s+shares?\s+of\s+beneficial interest\b", re.I
+)
+_BENEFICIAL_INTEREST_PATTERN = re.compile(
+    r"\b(?:shares?|units?)\s+of\s+beneficial interest\b", re.I
+)
+_TRUST_CERTIFICATE_PATTERN = re.compile(r"\btrust certificates?\b", re.I)
+_CLOSED_END_PATTERN = re.compile(r"\bclosed[- ]end\b", re.I)
 _PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)
 _STRONG_PREFERRED_SECURITY_PATTERN = re.compile(
     r"\bpreferred\s+(?:shares?|stock|equity)\b|"
@@ -77,13 +85,9 @@ _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "other_non_common",
     ),
-    (
-        re.compile(
-            r"\b(?:shares?|units?)\s+of\s+beneficial interest\b|\btrust certificates?\b|\bclosed[- ]end\b",
-            re.I,
-        ),
-        "other_non_common",
-    ),
+    (_TRUST_CERTIFICATE_PATTERN, "other_non_common"),
+    (_CLOSED_END_PATTERN, "other_non_common"),
+    (_BENEFICIAL_INTEREST_PATTERN, "other_non_common"),
 )
 
 
@@ -133,6 +137,12 @@ def _rejection_reason(record: dict[str, str]) -> str | None:
             reason == "unit"
             and match.group(0).lower() == "unit"
             and _EXPLICIT_COMMON_STOCK_PATTERN.search(security_name)
+        ):
+            continue
+        if (
+            reason == "other_non_common"
+            and pattern is _BENEFICIAL_INTEREST_PATTERN
+            and _EXPLICIT_COMMON_BENEFICIAL_INTEREST_PATTERN.search(security_name)
         ):
             continue
         return reason

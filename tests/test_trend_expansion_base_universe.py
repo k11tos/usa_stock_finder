@@ -164,6 +164,37 @@ def test_genuine_trust_instrument_is_still_rejected():
 
 
 @pytest.mark.parametrize(
+    "name",
+    [
+        "Diversified Healthcare Trust - Common Shares of Beneficial Interest",
+        "Office Properties Income Trust - Common Shares of Beneficial Interest",
+        "Example Trust - Common Share of Beneficial Interest",
+    ],
+)
+def test_explicit_common_beneficial_interest_shares_pass(name):
+    accepted, rejected, _ = filter_base_universe([_record("REIT", name, "NYSE")])
+
+    assert [row["symbol"] for row in accepted] == ["REIT"]
+    assert not rejected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Example Investment Trust - Shares of Beneficial Interest",
+        "Example Trust Certificate",
+        "Example Trust Certificates",
+        "Example Trust Certificates - Common Shares of Beneficial Interest",
+    ],
+)
+def test_non_common_trust_instruments_remain_rejected(name):
+    accepted, rejected, _ = filter_base_universe([_record("TRUST", name)])
+
+    assert not accepted
+    assert rejected[0]["reason"] == "other_non_common"
+
+
+@pytest.mark.parametrize(
     ("name", "reason"),
     [
         ("Example Corp Senior Notes due 2035 - Common Stock", "debt"),
