@@ -138,6 +138,7 @@ def test_ambiguous_or_embedded_pfd_text_does_not_reject_common_stock(name):
     "name",
     [
         "Northern Trust Corporation - Common Stock",
+        "Example Operating Trust - Common Stock",
         "Community Bank Notes Company - Common Stock",
         "Bond Street Holdings, Inc. - Common Stock",
         "Etnyre International - Common Stock",
@@ -176,6 +177,21 @@ def test_explicit_common_beneficial_interest_shares_pass(name):
 
     assert [row["symbol"] for row in accepted] == ["REIT"]
     assert not rejected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "BlackRock ESG Capital Allocation Term Trust Common Shares of Beneficial Interest",
+        "Example Closed-End Investment Trust - Common Shares of Beneficial Interest",
+    ],
+)
+def test_explicit_investment_trust_evidence_beats_common_beneficial_interest(name):
+    accepted, rejected, diagnostics = filter_base_universe([_record("FUND", name, "NYSE")])
+
+    assert not accepted
+    assert rejected[0]["reason"] == "other_non_common"
+    assert diagnostics["other_non_common_count"] == 1
 
 
 @pytest.mark.parametrize(

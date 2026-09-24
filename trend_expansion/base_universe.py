@@ -49,7 +49,7 @@ _BENEFICIAL_INTEREST_PATTERN = re.compile(
     r"\b(?:shares?|units?)\s+of\s+beneficial interest\b", re.I
 )
 _TRUST_CERTIFICATE_PATTERN = re.compile(r"\btrust certificates?\b", re.I)
-_CLOSED_END_PATTERN = re.compile(r"\bclosed[- ]end\b", re.I)
+_INVESTMENT_TRUST_PATTERN = re.compile(r"\b(?:closed[- ]end|term trust)\b", re.I)
 _PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)
 _STRONG_PREFERRED_SECURITY_PATTERN = re.compile(
     r"\bpreferred\s+(?:shares?|stock|equity)\b|"
@@ -86,7 +86,7 @@ _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "other_non_common",
     ),
     (_TRUST_CERTIFICATE_PATTERN, "other_non_common"),
-    (_CLOSED_END_PATTERN, "other_non_common"),
+    (_INVESTMENT_TRUST_PATTERN, "other_non_common"),
     (_BENEFICIAL_INTEREST_PATTERN, "other_non_common"),
 )
 
