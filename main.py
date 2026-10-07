@@ -1391,12 +1391,15 @@ def _filter_buy_candidates_by_special_situation(
             excluded_symbols.append(symbol)
             logger.info(
                 "symbol=%s excluded reason=pinned_price_like_special_situation "
-                "(max_gap_up_pct=%.4f, recent_range_pct=%.4f, recent_abs_return_pct=%.4f, atr_pct=%.4f)",
+                "(max_gap_up_pct=%.4f, days_since_gap=%d, post_gap_atr_pct=%.4f, "
+                "recent_range_pct=%.4f, recent_abs_return_pct=%.4f, plateau_deviation_pct=%.4f)",
                 symbol,
                 metrics["max_gap_up_pct"],
+                int(metrics.get("days_since_gap", -1.0)),
+                metrics.get("post_gap_atr_pct", metrics["atr_pct"]),
                 metrics["recent_range_pct"],
                 metrics["recent_abs_return_pct"],
-                metrics["atr_pct"],
+                metrics.get("plateau_deviation_pct", 0.0),
             )
         else:
             filtered_buy_items.append(symbol)

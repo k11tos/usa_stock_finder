@@ -351,8 +351,8 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(filtered, ["AAPL"])
         self.assertEqual(excluded, ["EWCZ"])
 
-    def test_prth_like_synthetic_candidate_passes_both_buy_filters(self):
-        """The stale-gap pinned series currently reaches the post-filter candidates.
+    def test_prth_like_synthetic_candidate_is_excluded_by_pinned_price_filter(self):
+        """The stale-gap pinned series is excluded after quarantine expires.
 
         Fifty ordinary closes trend from 99.50 to 100.00, followed by a 130.00
         close (+30%), then ten sessions pinned within 0.07 of 130.00. This puts
@@ -391,8 +391,8 @@ class TestMainFunctions(unittest.TestCase):
 
         self.assertEqual(after_event_filter, [symbol])
         self.assertEqual(event_excluded, [])
-        self.assertEqual(after_pinned_filter, [symbol])
-        self.assertEqual(pinned_excluded, [])
+        self.assertEqual(after_pinned_filter, [])
+        self.assertEqual(pinned_excluded, [symbol])
 
     def test_is_tradable_common_stock_rejects_non_common_types(self):
         metadata = {"exchange": "NASDAQ", "quoteType": "EQUITY", "longName": "XYZ Warrant"}
