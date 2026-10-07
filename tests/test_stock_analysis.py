@@ -404,6 +404,65 @@ class TestUsaStockFinder(unittest.TestCase):
             self.assertEqual(metrics["post_gap_atr_pct"], 0.0)
             self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
 
+    def test_is_special_situation_price_pinned_ignores_irrelevant_pre_gap_high(self):
+        """A missing pre-event High must not invalidate a complete post-gap plateau."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            pre = np.linspace(10.0, 11.0, 60)
+            close = np.concatenate([pre, np.array([14.3]), np.full(29, 14.35)])
+            high = close + 0.03
+            low = close - 0.03
+            # This row is inside the 30-session lookback, but precedes the gap
+            # and is not used by either gap detection or post-gap True Range.
+            high[len(pre) - 1] = np.nan
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "PRENAN"): high,
+                    ("Low", "PRENAN"): low,
+                    ("Close", "PRENAN"): close,
+                    ("Volume", "PRENAN"): np.full(periods, 1000.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["PRENAN"])
+            metrics = finder.get_special_situation_price_pinned_metrics("PRENAN")
+
+            self.assertGreaterEqual(metrics["max_gap_up_pct"], 0.15)
+            self.assertEqual(metrics["post_gap_observation_count"], 29.0)
+            self.assertGreater(metrics["post_gap_atr_pct"], 0.0)
+            self.assertTrue(metrics["is_special_situation"])
+            self.assertTrue(finder.is_special_situation_price_pinned("PRENAN"))
+
+    def test_is_special_situation_price_pinned_false_when_post_gap_high_is_below_low(self):
+        """Structurally invalid OHLC in the post-gap plateau must be rejected."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            close = np.concatenate([np.linspace(10.0, 11.0, 60), np.array([14.3]), np.full(29, 14.35)])
+            high = close + 0.03
+            low = close - 0.03
+            high[-1] = low[-1] - 0.01
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "BADBAR"): high,
+                    ("Low", "BADBAR"): low,
+                    ("Close", "BADBAR"): close,
+                    ("Volume", "BADBAR"): np.full(periods, 1000.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=periods, freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["BADBAR"])
+            metrics = finder.get_special_situation_price_pinned_metrics("BADBAR")
+
+            self.assertEqual(metrics["post_gap_atr_pct"], 0.0)
+            self.assertFalse(metrics["is_special_situation"])
+
     def test_is_special_situation_price_pinned_detects_prth_like_plateau_inside_atr_window(self):
         """The event gap must not mask a tight plateau while it remains in ATR(14)."""
         with patch("yfinance.download") as mock_download:

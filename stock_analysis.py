@@ -190,25 +190,44 @@ class UsaStockFinder:
         observation is therefore the following trading day, whose True Range is
         measured against the event-day close.  This deliberately keeps the
         event jump out of the volatility measure used to judge a later plateau.
+
+        Only observations consumed by those True Range calculations are
+        validated: each post-gap day's High and Low, plus the close immediately
+        preceding that day.  In particular, the event-day High and Low are not
+        part of the post-gap volatility measurement.
         """
+        if gap_close_pos < 0 or gap_close_pos >= len(ohlc):
+            return 0.0, 0
+
         post_gap = ohlc.iloc[gap_close_pos + 1 :]
         observation_count = len(post_gap)
         if observation_count < min_observations:
             return 0.0, observation_count
 
-        previous_close = ohlc["Close"].shift(1).iloc[gap_close_pos + 1 :]
-        tr = pd.concat(
-            [
-                post_gap["High"] - post_gap["Low"],
-                (post_gap["High"] - previous_close).abs(),
-                (post_gap["Low"] - previous_close).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
-        if tr.empty or not np.isfinite(tr.to_numpy(dtype=float)).all():
+        try:
+            high = post_gap["High"].to_numpy(dtype=float)
+            low = post_gap["Low"].to_numpy(dtype=float)
+            previous_close = ohlc["Close"].iloc[gap_close_pos:-1].to_numpy(dtype=float)
+        except (KeyError, TypeError, ValueError):
             return 0.0, observation_count
 
-        post_gap_atr = float(tr.mean())
+        if (
+            len(previous_close) != observation_count
+            or not np.isfinite(high).all()
+            or not np.isfinite(low).all()
+            or not np.isfinite(previous_close).all()
+            or (high <= 0.0).any()
+            or (low <= 0.0).any()
+            or (previous_close <= 0.0).any()
+            or (high < low).any()
+        ):
+            return 0.0, observation_count
+
+        tr = np.maximum.reduce([high - low, np.abs(high - previous_close), np.abs(low - previous_close)])
+        if not np.isfinite(tr).all():
+            return 0.0, observation_count
+
+        post_gap_atr = float(np.mean(tr))
         if post_gap_atr <= 0.0:
             return 0.0, observation_count
         return post_gap_atr, observation_count
@@ -245,14 +264,14 @@ class UsaStockFinder:
             return defaults
 
         lookback_ohlc = df.iloc[-(lookback_days + 1) :].copy()
-        if not np.isfinite(lookback_ohlc[["High", "Low", "Close"]].to_numpy(dtype=float)).all():
+        close = lookback_ohlc["Close"]
+        try:
+            close_values = close.to_numpy(dtype=float)
+        except (TypeError, ValueError):
             return defaults
-        if (lookback_ohlc[["High", "Low", "Close"]] <= 0.0).any().any():
-            return defaults
-        if (lookback_ohlc["High"] < lookback_ohlc["Low"]).any():
+        if not np.isfinite(close_values).all() or (close_values <= 0.0).any():
             return defaults
 
-        close = lookback_ohlc["Close"]
         recent_close = close.iloc[-post_window_days:]
         current_close = float(close.iloc[-1])
         close_to_close_returns = close.pct_change().dropna()
