@@ -180,6 +180,54 @@ class UsaStockFinder:
             logger.debug("Error calculating ATR for %s: %s", symbol, str(e))
             return 0.0
 
+    @staticmethod
+    def _get_post_gap_atr(ohlc: pd.DataFrame, gap_close_pos: int, min_observations: int = 5) -> tuple[float, int, bool]:
+        """Return post-gap True Range, its count, and whether the calculation is valid.
+
+        ``gap_close_pos`` is the close on the event day.  The first eligible
+        observation is therefore the following trading day, whose True Range is
+        measured against the event-day close.  This deliberately keeps the
+        event jump out of the volatility measure used to judge a later plateau.
+
+        Only observations consumed by those True Range calculations are
+        validated: each post-gap day's High and Low, plus the close immediately
+        preceding that day.  In particular, the event-day High and Low are not
+        part of the post-gap volatility measurement.
+        """
+        if gap_close_pos < 0 or gap_close_pos >= len(ohlc):
+            return 0.0, 0, False
+
+        post_gap = ohlc.iloc[slice(gap_close_pos + 1, None)]
+        observation_count = len(post_gap)
+        if observation_count < min_observations:
+            return 0.0, observation_count, False
+
+        try:
+            high = post_gap["High"].to_numpy(dtype=float)
+            low = post_gap["Low"].to_numpy(dtype=float)
+            previous_close = ohlc["Close"].iloc[gap_close_pos:-1].to_numpy(dtype=float)
+        except (KeyError, TypeError, ValueError):
+            return 0.0, observation_count, False
+
+        if (
+            len(previous_close) != observation_count
+            or not np.isfinite(high).all()
+            or not np.isfinite(low).all()
+            or not np.isfinite(previous_close).all()
+            or (high <= 0.0).any()
+            or (low <= 0.0).any()
+            or (previous_close <= 0.0).any()
+            or (high < low).any()
+        ):
+            return 0.0, observation_count, False
+
+        tr = np.maximum.reduce([high - low, np.abs(high - previous_close), np.abs(low - previous_close)])
+        if not np.isfinite(tr).all():
+            return 0.0, observation_count, False
+
+        post_gap_atr = float(np.mean(tr))
+        return post_gap_atr, observation_count, True
+
     def get_special_situation_price_pinned_metrics(
         self,
         symbol: str,
@@ -190,63 +238,76 @@ class UsaStockFinder:
         max_recent_abs_return_pct: float = 0.02,
         max_atr_pct: float = 0.015,
     ) -> dict[str, float | bool]:
-        """Compute conservative pinned-price special-situation metrics from OHLC data."""
+        """Compute conservative pinned-price special-situation metrics from OHLC data.
+
+        ``atr_pct`` is retained as a compatibility key, but now means post-gap
+        True Range / current close rather than ordinary ATR(14).  The explicit
+        ``post_gap_atr_pct`` key carries the same value for new consumers.
+        """
         defaults: dict[str, float | bool] = {
             "is_special_situation": False,
             "max_gap_up_pct": 0.0,
+            "days_since_gap": float(lookback_days + 1),
+            "post_gap_observation_count": 0.0,
+            "is_post_gap_atr_valid": False,
             "recent_range_pct": 0.0,
             "recent_abs_return_pct": 0.0,
             "atr_pct": 0.0,
+            "post_gap_atr_pct": 0.0,
             "plateau_deviation_pct": 0.0,
         }
         df = self._get_symbol_df(symbol)
-        if df is None or len(df) < max(lookback_days + 1, post_window_days + 1, StrategyConfig.TRAILING_ATR_PERIOD + 1):
+        if df is None or len(df) < max(lookback_days + 1, post_window_days + 1):
             return defaults
 
-        close = df["Close"].dropna()
-        if len(close) < max(lookback_days + 1, post_window_days + 1):
+        lookback_ohlc = df.iloc[slice(-(lookback_days + 1), None)].copy()
+        close = lookback_ohlc["Close"]
+        try:
+            close_values = close.to_numpy(dtype=float)
+        except (TypeError, ValueError):
+            return defaults
+        if not np.isfinite(close_values).all() or (close_values <= 0.0).any():
             return defaults
 
         recent_close = close.iloc[-post_window_days:]
         current_close = float(close.iloc[-1])
-        if current_close <= 0:
-            return defaults
-
-        lookback_close = close.iloc[-(lookback_days + 1) :]
-        close_to_close_returns = lookback_close.pct_change().dropna()
+        close_to_close_returns = close.pct_change().dropna()
         if close_to_close_returns.empty:
             return defaults
 
         max_gap_up_pct = float(close_to_close_returns.max())
+        event_return_pos = int(np.argmax(close_to_close_returns.to_numpy()))
+        # pct_change aligns to close positions beginning at index 1.
+        gap_close_pos = event_return_pos + 1
+        days_since_gap = int(len(close) - 1 - gap_close_pos)
         recent_range_pct = float((recent_close.max() - recent_close.min()) / current_close)
         recent_abs_return_pct = float(abs((recent_close.iloc[-1] - recent_close.iloc[0]) / recent_close.iloc[0]))
         plateau_price = float(recent_close.mean())
         plateau_deviation_pct = float(abs(current_close - plateau_price) / plateau_price) if plateau_price > 0 else 0.0
-        atr = self.get_atr(symbol, period=14)
-        if atr is None or not np.isfinite(atr) or atr <= 0.0:
-            return {
-                "is_special_situation": False,
-                "max_gap_up_pct": max_gap_up_pct,
-                "recent_range_pct": recent_range_pct,
-                "recent_abs_return_pct": recent_abs_return_pct,
-                "atr_pct": 0.0,
-                "plateau_deviation_pct": plateau_deviation_pct,
-            }
-        atr_pct = float(atr / current_close) if current_close > 0 else 0.0
+        post_gap_atr, post_gap_observation_count, is_post_gap_atr_valid = self._get_post_gap_atr(
+            lookback_ohlc, gap_close_pos
+        )
+        post_gap_atr_pct = float(post_gap_atr / current_close) if current_close > 0 else 0.0
 
         is_special_situation = bool(
             max_gap_up_pct >= min_gap_up_pct
+            and post_gap_observation_count >= 5
             and recent_range_pct <= max_recent_range_pct
             and recent_abs_return_pct <= max_recent_abs_return_pct
-            and atr_pct <= max_atr_pct
+            and is_post_gap_atr_valid
+            and post_gap_atr_pct <= max_atr_pct
             and plateau_deviation_pct <= max_recent_range_pct
         )
         return {
             "is_special_situation": is_special_situation,
             "max_gap_up_pct": max_gap_up_pct,
+            "days_since_gap": float(days_since_gap),
+            "post_gap_observation_count": float(post_gap_observation_count),
+            "is_post_gap_atr_valid": is_post_gap_atr_valid,
             "recent_range_pct": recent_range_pct,
             "recent_abs_return_pct": recent_abs_return_pct,
-            "atr_pct": atr_pct,
+            "atr_pct": post_gap_atr_pct,
+            "post_gap_atr_pct": post_gap_atr_pct,
             "plateau_deviation_pct": plateau_deviation_pct,
         }
 
@@ -274,7 +335,7 @@ class UsaStockFinder:
         if len(close) < lookback_days + 1:
             return defaults
 
-        lookback_close = close.iloc[-(lookback_days + 1) :]
+        lookback_close = close.iloc[slice(-(lookback_days + 1), None)]
         returns = lookback_close.pct_change().dropna()
         if returns.empty:
             return defaults

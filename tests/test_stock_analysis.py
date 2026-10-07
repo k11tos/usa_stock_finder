@@ -19,10 +19,7 @@ def _deterministic_ohlcv(periods: int = 100, symbol: str = "TEST") -> pd.DataFra
     close = trend + wave
     high = close + 1.0
     low = close - 1.0
-    volume = (
-        np.linspace(1000.0, 1800.0, periods)
-        + np.cos(np.linspace(0.0, 6.0, periods)) * 50.0
-    )
+    volume = np.linspace(1000.0, 1800.0, periods) + np.cos(np.linspace(0.0, 6.0, periods)) * 50.0
     data = pd.DataFrame(
         {
             ("High", symbol): high,
@@ -368,10 +365,12 @@ class TestUsaStockFinder(unittest.TestCase):
             mock_download.return_value = mock_data
 
             finder = UsaStockFinder(["VOLGAP"])
-            self.assertFalse(finder.is_special_situation_price_pinned("VOLGAP"))
+            metrics = finder.get_special_situation_price_pinned_metrics("VOLGAP")
+            self.assertGreater(metrics["post_gap_atr_pct"], 0.015)
+            self.assertFalse(metrics["is_special_situation"])
 
-    def test_is_special_situation_price_pinned_false_when_atr_invalid_zero(self):
-        """ATR calc failure (0.0) must not trigger special-situation exclusion."""
+    def test_is_special_situation_price_pinned_false_when_post_gap_volatility_is_invalid(self):
+        """Invalid post-gap OHLC must not trigger special-situation exclusion."""
         with patch("yfinance.download") as mock_download:
             periods = 90
             index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
@@ -392,29 +391,200 @@ class TestUsaStockFinder(unittest.TestCase):
                 index=index,
             )
             mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_data.loc[mock_data.index[-1], ("High", "EWCZ")] = np.nan
             mock_download.return_value = mock_data
 
             finder = UsaStockFinder(["EWCZ"])
-            with patch.object(finder, "get_atr", return_value=0.0):
-                metrics = finder.get_special_situation_price_pinned_metrics("EWCZ")
-                self.assertFalse(metrics["is_special_situation"])
-                self.assertEqual(metrics["atr_pct"], 0.0)
-                self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
+            metrics = finder.get_special_situation_price_pinned_metrics("EWCZ")
+            self.assertFalse(metrics["is_special_situation"])
+            self.assertFalse(metrics["is_post_gap_atr_valid"])
+            self.assertEqual(metrics["atr_pct"], 0.0)
+            self.assertEqual(metrics["post_gap_atr_pct"], 0.0)
+            self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
 
-    def test_prth_like_gap_quarantine_expires_while_atr_blocks_pinned_detection(self):
-        """A 30% gap ten sessions ago exposes the gap between the two detectors.
+    def test_is_special_situation_price_pinned_detects_valid_zero_range_plateau(self):
+        """A complete post-gap plateau with zero True Range is still a pinned price."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            pre = np.linspace(10.0, 11.0, 60)
+            gap_close = 14.3
+            close = np.concatenate([pre, np.array([gap_close]), np.full(29, gap_close)])
+            high = close + 0.03
+            low = close - 0.03
+            # Every post-gap bar equals its preceding close, so all post-gap
+            # True Ranges are valid and exactly zero.
+            post_gap_slice = slice(len(pre) + 1, None)
+            high[post_gap_slice] = gap_close
+            low[post_gap_slice] = gap_close
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "ZEROATR"): high,
+                    ("Low", "ZEROATR"): low,
+                    ("Close", "ZEROATR"): close,
+                    ("Volume", "ZEROATR"): np.full(periods, 1000.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=periods, freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
 
-        The 14-bar ATR still contains the event day's true range, while the
-        5-session event quarantine can no longer see the event. Ten tiny,
-        tightly clustered closes otherwise satisfy every pinned-price check.
-        This test records the current false negative so a later fix can change
-        the expectation to a detected special situation.
+            finder = UsaStockFinder(["ZEROATR"])
+            metrics = finder.get_special_situation_price_pinned_metrics("ZEROATR")
+
+            self.assertTrue(metrics["is_post_gap_atr_valid"])
+            self.assertEqual(metrics["post_gap_atr_pct"], 0.0)
+            self.assertEqual(metrics["recent_range_pct"], 0.0)
+            self.assertTrue(metrics["is_special_situation"])
+            self.assertTrue(finder.is_special_situation_price_pinned("ZEROATR"))
+
+    def test_is_special_situation_price_pinned_ignores_irrelevant_pre_gap_high(self):
+        """A missing pre-event High must not invalidate a complete post-gap plateau."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            index = pd.date_range(start="2024-01-01", periods=periods, freq="D")
+            pre = np.linspace(10.0, 11.0, 60)
+            close = np.concatenate([pre, np.array([14.3]), np.full(29, 14.35)])
+            high = close + 0.03
+            low = close - 0.03
+            # This row is inside the 30-session lookback, but precedes the gap
+            # and is not used by either gap detection or post-gap True Range.
+            high[len(pre) - 1] = np.nan
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "PRENAN"): high,
+                    ("Low", "PRENAN"): low,
+                    ("Close", "PRENAN"): close,
+                    ("Volume", "PRENAN"): np.full(periods, 1000.0),
+                },
+                index=index,
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["PRENAN"])
+            metrics = finder.get_special_situation_price_pinned_metrics("PRENAN")
+
+            self.assertGreaterEqual(metrics["max_gap_up_pct"], 0.15)
+            self.assertEqual(metrics["post_gap_observation_count"], 29.0)
+            self.assertGreater(metrics["post_gap_atr_pct"], 0.0)
+            self.assertTrue(metrics["is_special_situation"])
+            self.assertTrue(finder.is_special_situation_price_pinned("PRENAN"))
+
+    def test_is_special_situation_price_pinned_false_when_post_gap_high_is_below_low(self):
+        """Structurally invalid OHLC in the post-gap plateau must be rejected."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            close = np.concatenate([np.linspace(10.0, 11.0, 60), np.array([14.3]), np.full(29, 14.35)])
+            high = close + 0.03
+            low = close - 0.03
+            high[-1] = low[-1] - 0.01
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "BADBAR"): high,
+                    ("Low", "BADBAR"): low,
+                    ("Close", "BADBAR"): close,
+                    ("Volume", "BADBAR"): np.full(periods, 1000.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=periods, freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["BADBAR"])
+            metrics = finder.get_special_situation_price_pinned_metrics("BADBAR")
+
+            self.assertEqual(metrics["post_gap_atr_pct"], 0.0)
+            self.assertFalse(metrics["is_special_situation"])
+
+    def test_is_special_situation_price_pinned_detects_prth_like_plateau_inside_atr_window(self):
+        """The event gap must not mask a tight plateau while it remains in ATR(14)."""
+        with patch("yfinance.download") as mock_download:
+            pre = np.linspace(10.0, 11.0, 60)
+            gap = np.array([14.3])
+            post = np.full(10, 14.35)
+            close = np.concatenate([pre, gap, post])
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "PRTH"): close + 0.03,
+                    ("Low", "PRTH"): close - 0.03,
+                    ("Close", "PRTH"): close,
+                    ("Volume", "PRTH"): np.full(len(close), 1000.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=len(close), freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["PRTH"])
+            ordinary_atr_pct = finder.get_atr("PRTH", period=14) / close[-1]
+            metrics = finder.get_special_situation_price_pinned_metrics("PRTH")
+
+            self.assertFalse(finder.is_event_quarantine("PRTH"))
+            self.assertGreater(ordinary_atr_pct, 0.015)
+            self.assertTrue(metrics["is_special_situation"])
+            self.assertEqual(metrics["days_since_gap"], 10.0)
+            self.assertEqual(metrics["post_gap_observation_count"], 10.0)
+            self.assertLess(metrics["post_gap_atr_pct"], 0.015)
+
+    def test_is_special_situation_price_pinned_false_with_insufficient_post_gap_history(self):
+        """A large gap with fewer than five post-event observations is not enough."""
+        with patch("yfinance.download") as mock_download:
+            pre = np.linspace(10.0, 11.0, 60)
+            close = np.concatenate([pre, np.array([14.3]), np.full(4, 14.35)])
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "SHORT"): close + 0.03,
+                    ("Low", "SHORT"): close - 0.03,
+                    ("Close", "SHORT"): close,
+                    ("Volume", "SHORT"): np.full(len(close), 1000.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=len(close), freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["SHORT"])
+            metrics = finder.get_special_situation_price_pinned_metrics("SHORT")
+
+            self.assertEqual(metrics["post_gap_observation_count"], 4.0)
+            self.assertFalse(metrics["is_special_situation"])
+
+    def test_is_special_situation_price_pinned_when_event_has_left_ordinary_atr_window(self):
+        """The detector remains correct after the event has naturally left ATR(14)."""
+        with patch("yfinance.download") as mock_download:
+            pre = np.linspace(10.0, 11.0, 60)
+            close = np.concatenate([pre, np.array([14.3]), np.full(15, 14.35)])
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "OLDER"): close + 0.03,
+                    ("Low", "OLDER"): close - 0.03,
+                    ("Close", "OLDER"): close,
+                    ("Volume", "OLDER"): np.full(len(close), 1000.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=len(close), freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["OLDER"])
+            ordinary_atr_pct = finder.get_atr("OLDER", period=14) / close[-1]
+            metrics = finder.get_special_situation_price_pinned_metrics("OLDER")
+
+            self.assertFalse(finder.is_event_quarantine("OLDER"))
+            self.assertLess(ordinary_atr_pct, 0.015)
+            self.assertTrue(metrics["is_special_situation"])
+
+    def test_prth_like_gap_quarantine_expiry_still_detects_pinned_price(self):
+        """A 30% gap ten sessions ago is detected once its plateau is proven.
+
+        Ordinary ATR(14) still contains the event-day True Range, while the
+        5-session event quarantine can no longer see the event. The
+        special-situation metric must instead measure the ten tightly clustered
+        post-gap sessions.
         """
         symbol = "SYNTH"
         pre_event_close = np.linspace(99.5, 100.0, 50)
-        post_gap_close = np.array(
-            [130.00, 130.05, 129.98, 130.02, 130.04, 129.99, 130.01, 130.03, 130.00, 130.02]
-        )
+        post_gap_close = np.array([130.00, 130.05, 129.98, 130.02, 130.04, 129.99, 130.01, 130.03, 130.00, 130.02])
         close = np.concatenate([pre_event_close, [130.0], post_gap_close])
         high = close * 1.001
         low = close * 0.999
@@ -442,9 +612,7 @@ class TestUsaStockFinder(unittest.TestCase):
         self.assertAlmostEqual(gap_pct, 0.30)
         self.assertGreaterEqual(pinned_metrics["max_gap_up_pct"], 0.15)
         self.assertEqual(len(post_gap_close), 10)
-        self.assertGreater(
-            len(post_gap_close), 5
-        )  # ten sessions old is outside the configured 5-session window
+        self.assertGreater(len(post_gap_close), 5)  # ten sessions old is outside the configured 5-session window
         self.assertFalse(event_metrics["is_event_quarantine"])
 
         # Pinning shape is within all current non-ATR thresholds.
@@ -452,10 +620,11 @@ class TestUsaStockFinder(unittest.TestCase):
         self.assertLessEqual(pinned_metrics["recent_range_pct"], 0.015)
         self.assertLessEqual(pinned_metrics["recent_abs_return_pct"], 0.02)
         self.assertLessEqual(pinned_metrics["plateau_deviation_pct"], 0.015)
-        self.assertGreater(pinned_metrics["atr_pct"], 0.015)
-        self.assertFalse(pinned_metrics["is_special_situation"])
-        self.assertFalse(finder.is_special_situation_price_pinned(symbol))
-
+        self.assertGreater(finder.get_atr(symbol, period=14) / close[-1], 0.015)
+        self.assertLessEqual(pinned_metrics["post_gap_atr_pct"], 0.015)
+        self.assertEqual(pinned_metrics["atr_pct"], pinned_metrics["post_gap_atr_pct"])
+        self.assertTrue(pinned_metrics["is_special_situation"])
+        self.assertTrue(finder.is_special_situation_price_pinned(symbol))
 
     def test_is_event_quarantine_true_for_recent_gap_and_flat_price(self):
         """Recent 20% gap-up with flat post-gap action should be quarantined."""
@@ -501,6 +670,30 @@ class TestUsaStockFinder(unittest.TestCase):
 
             finder = UsaStockFinder(["OLDG"])
             self.assertFalse(finder.is_event_quarantine("OLDG", lookback_days=5))
+
+    def test_event_quarantine_expires_at_lookback_boundary(self):
+        """A five-day quarantine sees a gap four days ago, but not five days ago."""
+        with patch("yfinance.download") as mock_download:
+            pre = np.linspace(10.0, 10.5, 70)
+            gap = np.array([12.6])
+            close = np.concatenate([pre, gap, np.full(5, 12.6)])
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "BOUND"): close * 1.01,
+                    ("Low", "BOUND"): close * 0.99,
+                    ("Close", "BOUND"): close,
+                    ("Volume", "BOUND"): np.full(len(close), 1200.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=len(close), freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["BOUND"])
+            self.assertFalse(finder.is_event_quarantine("BOUND", lookback_days=5))
+
+            finder.stock_data = finder.stock_data.iloc[:-1]
+            self.assertTrue(finder.is_event_quarantine("BOUND", lookback_days=5))
 
     def test_is_event_quarantine_false_when_recent_gap_has_large_pullback(self):
         """Recent gap with large drawdown should not be quarantined."""
