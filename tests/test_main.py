@@ -11,8 +11,10 @@ from contextlib import ExitStack
 from datetime import datetime
 from unittest.mock import MagicMock, patch, mock_open
 
+import numpy as np
 import pandas as pd
 import main as main_module
+from stock_analysis import UsaStockFinder
 from main import (
     _filter_buy_candidates_by_event_quarantine,
     _filter_buy_candidates_by_special_situation,
@@ -348,6 +350,49 @@ class TestMainFunctions(unittest.TestCase):
         filtered, excluded = _filter_buy_candidates_by_special_situation(["EWCZ", "AAPL"], mock_finder)
         self.assertEqual(filtered, ["AAPL"])
         self.assertEqual(excluded, ["EWCZ"])
+
+    def test_prth_like_synthetic_candidate_passes_both_buy_filters(self):
+        """The stale-gap pinned series currently reaches the post-filter candidates.
+
+        Fifty ordinary closes trend from 99.50 to 100.00, followed by a 130.00
+        close (+30%), then ten sessions pinned within 0.07 of 130.00. This puts
+        the gap outside the 5-session quarantine while retaining it in ATR(14).
+        """
+        symbol = "SYNTH"
+        pre_event_close = np.linspace(99.5, 100.0, 50)
+        post_gap_close = np.array(
+            [130.00, 130.05, 129.98, 130.02, 130.04, 129.99, 130.01, 130.03, 130.00, 130.02]
+        )
+        close = np.concatenate([pre_event_close, [130.0], post_gap_close])
+        high = close * 1.001
+        low = close * 0.999
+        high[len(pre_event_close)] = 130.2
+        low[len(pre_event_close)] = 129.8
+        synthetic_data = pd.DataFrame(
+            {
+                ("High", symbol): high,
+                ("Low", symbol): low,
+                ("Close", symbol): close,
+                ("Volume", symbol): np.full(len(close), 1000.0),
+            },
+            index=pd.date_range("2024-01-01", periods=len(close), freq="B"),
+        )
+        synthetic_data.columns = pd.MultiIndex.from_tuples(synthetic_data.columns)
+
+        with patch("yfinance.download", return_value=synthetic_data):
+            finder = UsaStockFinder([symbol])
+            with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+                after_event_filter, event_excluded = _filter_buy_candidates_by_event_quarantine(
+                    [symbol], finder
+                )
+            after_pinned_filter, pinned_excluded = _filter_buy_candidates_by_special_situation(
+                after_event_filter, finder
+            )
+
+        self.assertEqual(after_event_filter, [symbol])
+        self.assertEqual(event_excluded, [])
+        self.assertEqual(after_pinned_filter, [symbol])
+        self.assertEqual(pinned_excluded, [])
 
     def test_is_tradable_common_stock_rejects_non_common_types(self):
         metadata = {"exchange": "NASDAQ", "quoteType": "EQUITY", "longName": "XYZ Warrant"}
