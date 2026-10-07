@@ -401,6 +401,61 @@ class TestUsaStockFinder(unittest.TestCase):
                 self.assertEqual(metrics["atr_pct"], 0.0)
                 self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
 
+    def test_prth_like_gap_quarantine_expires_while_atr_blocks_pinned_detection(self):
+        """A 30% gap ten sessions ago exposes the gap between the two detectors.
+
+        The 14-bar ATR still contains the event day's true range, while the
+        5-session event quarantine can no longer see the event. Ten tiny,
+        tightly clustered closes otherwise satisfy every pinned-price check.
+        This test records the current false negative so a later fix can change
+        the expectation to a detected special situation.
+        """
+        symbol = "SYNTH"
+        pre_event_close = np.linspace(99.5, 100.0, 50)
+        post_gap_close = np.array(
+            [130.00, 130.05, 129.98, 130.02, 130.04, 129.99, 130.01, 130.03, 130.00, 130.02]
+        )
+        close = np.concatenate([pre_event_close, [130.0], post_gap_close])
+        high = close * 1.001
+        low = close * 0.999
+        # The event close is 30% above the prior close; keep its OHLC range tight.
+        high[len(pre_event_close)] = 130.2
+        low[len(pre_event_close)] = 129.8
+        synthetic_data = pd.DataFrame(
+            {
+                ("High", symbol): high,
+                ("Low", symbol): low,
+                ("Close", symbol): close,
+                ("Volume", symbol): np.full(len(close), 1000.0),
+            },
+            index=pd.date_range("2024-01-01", periods=len(close), freq="B"),
+        )
+        synthetic_data.columns = pd.MultiIndex.from_tuples(synthetic_data.columns)
+
+        with patch("yfinance.download", return_value=synthetic_data):
+            finder = UsaStockFinder([symbol])
+            event_metrics = finder.get_event_quarantine_metrics(symbol, lookback_days=5)
+            pinned_metrics = finder.get_special_situation_price_pinned_metrics(symbol)
+
+        # Construction facts: 10 completed sessions since a 30% close-to-close gap.
+        gap_pct = close[len(pre_event_close)] / pre_event_close[-1] - 1.0
+        self.assertAlmostEqual(gap_pct, 0.30)
+        self.assertGreaterEqual(pinned_metrics["max_gap_up_pct"], 0.15)
+        self.assertEqual(len(post_gap_close), 10)
+        self.assertGreater(
+            len(post_gap_close), 5
+        )  # ten sessions old is outside the configured 5-session window
+        self.assertFalse(event_metrics["is_event_quarantine"])
+
+        # Pinning shape is within all current non-ATR thresholds.
+        self.assertAlmostEqual(pinned_metrics["max_gap_up_pct"], gap_pct)
+        self.assertLessEqual(pinned_metrics["recent_range_pct"], 0.015)
+        self.assertLessEqual(pinned_metrics["recent_abs_return_pct"], 0.02)
+        self.assertLessEqual(pinned_metrics["plateau_deviation_pct"], 0.015)
+        self.assertGreater(pinned_metrics["atr_pct"], 0.015)
+        self.assertFalse(pinned_metrics["is_special_situation"])
+        self.assertFalse(finder.is_special_situation_price_pinned(symbol))
+
 
     def test_is_event_quarantine_true_for_recent_gap_and_flat_price(self):
         """Recent 20% gap-up with flat post-gap action should be quarantined."""
