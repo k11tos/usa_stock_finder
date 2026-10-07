@@ -19,10 +19,7 @@ def _deterministic_ohlcv(periods: int = 100, symbol: str = "TEST") -> pd.DataFra
     close = trend + wave
     high = close + 1.0
     low = close - 1.0
-    volume = (
-        np.linspace(1000.0, 1800.0, periods)
-        + np.cos(np.linspace(0.0, 6.0, periods)) * 50.0
-    )
+    volume = np.linspace(1000.0, 1800.0, periods) + np.cos(np.linspace(0.0, 6.0, periods)) * 50.0
     data = pd.DataFrame(
         {
             ("High", symbol): high,
@@ -400,9 +397,45 @@ class TestUsaStockFinder(unittest.TestCase):
             finder = UsaStockFinder(["EWCZ"])
             metrics = finder.get_special_situation_price_pinned_metrics("EWCZ")
             self.assertFalse(metrics["is_special_situation"])
+            self.assertFalse(metrics["is_post_gap_atr_valid"])
             self.assertEqual(metrics["atr_pct"], 0.0)
             self.assertEqual(metrics["post_gap_atr_pct"], 0.0)
             self.assertFalse(finder.is_special_situation_price_pinned("EWCZ"))
+
+    def test_is_special_situation_price_pinned_detects_valid_zero_range_plateau(self):
+        """A complete post-gap plateau with zero True Range is still a pinned price."""
+        with patch("yfinance.download") as mock_download:
+            periods = 90
+            pre = np.linspace(10.0, 11.0, 60)
+            gap_close = 14.3
+            close = np.concatenate([pre, np.array([gap_close]), np.full(29, gap_close)])
+            high = close + 0.03
+            low = close - 0.03
+            # Every post-gap bar equals its preceding close, so all post-gap
+            # True Ranges are valid and exactly zero.
+            post_gap_slice = slice(len(pre) + 1, None)
+            high[post_gap_slice] = gap_close
+            low[post_gap_slice] = gap_close
+            mock_data = pd.DataFrame(
+                {
+                    ("High", "ZEROATR"): high,
+                    ("Low", "ZEROATR"): low,
+                    ("Close", "ZEROATR"): close,
+                    ("Volume", "ZEROATR"): np.full(periods, 1000.0),
+                },
+                index=pd.date_range(start="2024-01-01", periods=periods, freq="D"),
+            )
+            mock_data.columns = pd.MultiIndex.from_tuples(mock_data.columns)
+            mock_download.return_value = mock_data
+
+            finder = UsaStockFinder(["ZEROATR"])
+            metrics = finder.get_special_situation_price_pinned_metrics("ZEROATR")
+
+            self.assertTrue(metrics["is_post_gap_atr_valid"])
+            self.assertEqual(metrics["post_gap_atr_pct"], 0.0)
+            self.assertEqual(metrics["recent_range_pct"], 0.0)
+            self.assertTrue(metrics["is_special_situation"])
+            self.assertTrue(finder.is_special_situation_price_pinned("ZEROATR"))
 
     def test_is_special_situation_price_pinned_ignores_irrelevant_pre_gap_high(self):
         """A missing pre-event High must not invalidate a complete post-gap plateau."""
@@ -551,9 +584,7 @@ class TestUsaStockFinder(unittest.TestCase):
         """
         symbol = "SYNTH"
         pre_event_close = np.linspace(99.5, 100.0, 50)
-        post_gap_close = np.array(
-            [130.00, 130.05, 129.98, 130.02, 130.04, 129.99, 130.01, 130.03, 130.00, 130.02]
-        )
+        post_gap_close = np.array([130.00, 130.05, 129.98, 130.02, 130.04, 129.99, 130.01, 130.03, 130.00, 130.02])
         close = np.concatenate([pre_event_close, [130.0], post_gap_close])
         high = close * 1.001
         low = close * 0.999
@@ -581,9 +612,7 @@ class TestUsaStockFinder(unittest.TestCase):
         self.assertAlmostEqual(gap_pct, 0.30)
         self.assertGreaterEqual(pinned_metrics["max_gap_up_pct"], 0.15)
         self.assertEqual(len(post_gap_close), 10)
-        self.assertGreater(
-            len(post_gap_close), 5
-        )  # ten sessions old is outside the configured 5-session window
+        self.assertGreater(len(post_gap_close), 5)  # ten sessions old is outside the configured 5-session window
         self.assertFalse(event_metrics["is_event_quarantine"])
 
         # Pinning shape is within all current non-ATR thresholds.
@@ -596,7 +625,6 @@ class TestUsaStockFinder(unittest.TestCase):
         self.assertEqual(pinned_metrics["atr_pct"], pinned_metrics["post_gap_atr_pct"])
         self.assertTrue(pinned_metrics["is_special_situation"])
         self.assertTrue(finder.is_special_situation_price_pinned(symbol))
-
 
     def test_is_event_quarantine_true_for_recent_gap_and_flat_price(self):
         """Recent 20% gap-up with flat post-gap action should be quarantined."""

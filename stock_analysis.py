@@ -181,10 +181,8 @@ class UsaStockFinder:
             return 0.0
 
     @staticmethod
-    def _get_post_gap_atr(
-        ohlc: pd.DataFrame, gap_close_pos: int, min_observations: int = 5
-    ) -> tuple[float, int]:
-        """Return mean post-gap True Range, excluding the gap transition itself.
+    def _get_post_gap_atr(ohlc: pd.DataFrame, gap_close_pos: int, min_observations: int = 5) -> tuple[float, int, bool]:
+        """Return post-gap True Range, its count, and whether the calculation is valid.
 
         ``gap_close_pos`` is the close on the event day.  The first eligible
         observation is therefore the following trading day, whose True Range is
@@ -197,19 +195,19 @@ class UsaStockFinder:
         part of the post-gap volatility measurement.
         """
         if gap_close_pos < 0 or gap_close_pos >= len(ohlc):
-            return 0.0, 0
+            return 0.0, 0, False
 
-        post_gap = ohlc.iloc[gap_close_pos + 1 :]
+        post_gap = ohlc.iloc[slice(gap_close_pos + 1, None)]
         observation_count = len(post_gap)
         if observation_count < min_observations:
-            return 0.0, observation_count
+            return 0.0, observation_count, False
 
         try:
             high = post_gap["High"].to_numpy(dtype=float)
             low = post_gap["Low"].to_numpy(dtype=float)
             previous_close = ohlc["Close"].iloc[gap_close_pos:-1].to_numpy(dtype=float)
         except (KeyError, TypeError, ValueError):
-            return 0.0, observation_count
+            return 0.0, observation_count, False
 
         if (
             len(previous_close) != observation_count
@@ -221,16 +219,14 @@ class UsaStockFinder:
             or (previous_close <= 0.0).any()
             or (high < low).any()
         ):
-            return 0.0, observation_count
+            return 0.0, observation_count, False
 
         tr = np.maximum.reduce([high - low, np.abs(high - previous_close), np.abs(low - previous_close)])
         if not np.isfinite(tr).all():
-            return 0.0, observation_count
+            return 0.0, observation_count, False
 
         post_gap_atr = float(np.mean(tr))
-        if post_gap_atr <= 0.0:
-            return 0.0, observation_count
-        return post_gap_atr, observation_count
+        return post_gap_atr, observation_count, True
 
     def get_special_situation_price_pinned_metrics(
         self,
@@ -253,6 +249,7 @@ class UsaStockFinder:
             "max_gap_up_pct": 0.0,
             "days_since_gap": float(lookback_days + 1),
             "post_gap_observation_count": 0.0,
+            "is_post_gap_atr_valid": False,
             "recent_range_pct": 0.0,
             "recent_abs_return_pct": 0.0,
             "atr_pct": 0.0,
@@ -263,7 +260,7 @@ class UsaStockFinder:
         if df is None or len(df) < max(lookback_days + 1, post_window_days + 1):
             return defaults
 
-        lookback_ohlc = df.iloc[-(lookback_days + 1) :].copy()
+        lookback_ohlc = df.iloc[slice(-(lookback_days + 1), None)].copy()
         close = lookback_ohlc["Close"]
         try:
             close_values = close.to_numpy(dtype=float)
@@ -287,7 +284,9 @@ class UsaStockFinder:
         recent_abs_return_pct = float(abs((recent_close.iloc[-1] - recent_close.iloc[0]) / recent_close.iloc[0]))
         plateau_price = float(recent_close.mean())
         plateau_deviation_pct = float(abs(current_close - plateau_price) / plateau_price) if plateau_price > 0 else 0.0
-        post_gap_atr, post_gap_observation_count = self._get_post_gap_atr(lookback_ohlc, gap_close_pos)
+        post_gap_atr, post_gap_observation_count, is_post_gap_atr_valid = self._get_post_gap_atr(
+            lookback_ohlc, gap_close_pos
+        )
         post_gap_atr_pct = float(post_gap_atr / current_close) if current_close > 0 else 0.0
 
         is_special_situation = bool(
@@ -295,7 +294,8 @@ class UsaStockFinder:
             and post_gap_observation_count >= 5
             and recent_range_pct <= max_recent_range_pct
             and recent_abs_return_pct <= max_recent_abs_return_pct
-            and 0.0 < post_gap_atr_pct <= max_atr_pct
+            and is_post_gap_atr_valid
+            and post_gap_atr_pct <= max_atr_pct
             and plateau_deviation_pct <= max_recent_range_pct
         )
         return {
@@ -303,6 +303,7 @@ class UsaStockFinder:
             "max_gap_up_pct": max_gap_up_pct,
             "days_since_gap": float(days_since_gap),
             "post_gap_observation_count": float(post_gap_observation_count),
+            "is_post_gap_atr_valid": is_post_gap_atr_valid,
             "recent_range_pct": recent_range_pct,
             "recent_abs_return_pct": recent_abs_return_pct,
             "atr_pct": post_gap_atr_pct,
@@ -334,7 +335,7 @@ class UsaStockFinder:
         if len(close) < lookback_days + 1:
             return defaults
 
-        lookback_close = close.iloc[-(lookback_days + 1) :]
+        lookback_close = close.iloc[slice(-(lookback_days + 1), None)]
         returns = lookback_close.pct_change().dropna()
         if returns.empty:
             return defaults
