@@ -1445,7 +1445,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             stack.enter_context(patch("main.append_trade_signals"))
             stack.enter_context(patch("main.append_account_snapshots"))
             stack.enter_context(patch("main.run_performance_report_safely", return_value=False))
-            stack.enter_context(patch("main._send_performance_report_telegram_if_enabled"))
+            stack.enter_context(patch("main._load_performance_summary_if_enabled", return_value=None))
             stack.enter_context(patch("main.save_json"))
 
             mock_finder = MagicMock()
@@ -1556,7 +1556,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
                 stack.enter_context(patch("main.append_trade_signals"))
                 stack.enter_context(patch("main.append_account_snapshots"))
                 stack.enter_context(patch("main.run_performance_report_safely", return_value=False))
-                stack.enter_context(patch("main._send_performance_report_telegram_if_enabled"))
+                stack.enter_context(patch("main._load_performance_summary_if_enabled", return_value=None))
                 stack.enter_context(patch("main.save_json"))
 
                 main()
@@ -1643,7 +1643,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
                 stack.enter_context(patch("main.append_trade_signals"))
                 stack.enter_context(patch("main.append_account_snapshots"))
                 stack.enter_context(patch("main.run_performance_report_safely", return_value=False))
-                stack.enter_context(patch("main._send_performance_report_telegram_if_enabled"))
+                stack.enter_context(patch("main._load_performance_summary_if_enabled", return_value=None))
                 stack.enter_context(patch("main.save_json"))
 
                 main()
@@ -2024,7 +2024,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         mock_build_report.assert_not_called()
 
     def test_performance_telegram_skips_without_url(self):
-        """Performance Telegram should skip when URL is not configured."""
+        """The performance section should skip when URL is not configured."""
         summary_payload = {
             "start_date": "2026-05-26",
             "end_date": "2026-08-26",
@@ -2038,10 +2038,11 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             {
                 "PERFORMANCE_REPORT_OUTPUT_DIR": "outputs/performance",
                 "PERFORMANCE_REPORT_TELEGRAM_ENABLED": "true",
+                "PERFORMANCE_REPORT_URL": "",
             },
             clear=False,
         ), patch("main.logger.warning") as mock_warning, patch("main.send_telegram_message") as mock_send:
-            main_module._send_performance_report_telegram_if_enabled(True)  # pylint: disable=protected-access
+            main_module._load_performance_summary_if_enabled(True)  # pylint: disable=protected-access
 
         mock_send.assert_not_called()
         self.assertTrue(mock_warning.called)
@@ -2053,12 +2054,13 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             {
                 "PERFORMANCE_REPORT_OUTPUT_DIR": "outputs/performance",
                 "PERFORMANCE_REPORT_TELEGRAM_ENABLED": "true",
+                "PERFORMANCE_REPORT_URL": "http://example/latest/",
             },
             clear=False,
         ), patch("main.open", side_effect=FileNotFoundError("missing")), patch(
             "main.logger.warning"
         ) as mock_warning, patch("main.send_telegram_message") as mock_send:
-            main_module._send_performance_report_telegram_if_enabled(True)  # pylint: disable=protected-access
+            main_module._load_performance_summary_if_enabled(True)  # pylint: disable=protected-access
 
         mock_send.assert_not_called()
         self.assertTrue(mock_warning.called)
@@ -2082,7 +2084,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         ), patch("main.open", mock_open(read_data=json.dumps(summary_payload))), patch(
             "main.send_telegram_message"
         ) as mock_send:
-            main_module._send_performance_report_telegram_if_enabled(False)  # pylint: disable=protected-access
+            main_module._load_performance_summary_if_enabled(False)  # pylint: disable=protected-access
 
         mock_send.assert_not_called()
 
