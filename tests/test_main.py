@@ -327,6 +327,54 @@ class TestMainFunctions(unittest.TestCase):
             ),
         )
 
+    def test_data_json_only_symbol_bypasses_quarantine_and_can_become_new_buy(self):
+        """Document the data.json-only bypass path for follow-up semantics review.
+
+        main passes persisted data/data.json entries into existing_symbols, while
+        sizing and Telegram use broker holdings. A persisted-only symbol is
+        therefore treated as protected by quarantine but as a new broker buy.
+        """
+        symbol = "TRACKONLY"
+        mock_finder = MagicMock()
+        mock_finder.current_price = {symbol: 50.0}
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(
+                [symbol], mock_finder, existing_symbols={symbol}
+            )
+
+        shares = calculate_share_quantities({symbol: 500.0}, mock_finder, current_holdings=[])
+        message = generate_telegram_message([], filtered, [], shares)
+
+        self.assertEqual(filtered, [symbol])
+        self.assertEqual(excluded, [])
+        mock_finder.get_event_quarantine_metrics.assert_not_called()
+        self.assertEqual(shares[symbol]["current_quantity"], 0)
+        self.assertIn(f"신규 매수: {symbol}", "\n".join(message or []))
+
+    def test_actual_holding_bypasses_quarantine_for_sizing_but_not_new_buy_telegram(self):
+        """Actual holdings may be sized for an addition but are not Telegram NEW BUYs."""
+        symbol = "HELD"
+        mock_finder = MagicMock()
+        mock_finder.current_price = {symbol: 50.0}
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(
+                [symbol], mock_finder, existing_symbols={symbol}
+            )
+
+        shares = calculate_share_quantities(
+            {symbol: 500.0}, mock_finder, current_holdings=[{"symbol": symbol, "quantity": 1.0}]
+        )
+        message = generate_telegram_message([symbol], filtered, [], shares)
+
+        self.assertEqual(filtered, [symbol])
+        self.assertEqual(excluded, [])
+        mock_finder.get_event_quarantine_metrics.assert_not_called()
+        self.assertEqual(shares[symbol]["current_quantity"], 1)
+        self.assertGreater(shares[symbol]["shares_to_buy"], 0)
+        self.assertIsNone(message)
+
     def test_filter_buy_candidates_by_special_situation(self):
         """Special-situation symbols should be removed from buy candidates."""
         mock_finder = MagicMock()
@@ -1316,6 +1364,89 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_generate_message.assert_called_once()
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
+
+    def test_main_blocks_prth_like_candidate_before_sizing_and_telegram(self):
+        """The complete buy funnel must remove stale-gap pinned symbols before sizing."""
+        with ExitStack() as stack:
+            stack.enter_context(patch("main.setup_logging"))
+            stack.enter_context(patch("main.load_dotenv"))
+            stack.enter_context(patch("main.is_within_execution_window", return_value=True))
+            stack.enter_context(patch("main.EnvironmentConfig.validate"))
+            stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
+            stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=[]))
+            stack.enter_context(patch("main.read_csv_first_column", return_value=["PRTH", "MOMO"]))
+            stack.enter_context(patch("main.load_json", return_value=[]))
+            stack.enter_context(
+                patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols)
+            )
+            mock_finder_cls = stack.enter_context(patch("main.UsaStockFinder"))
+            stack.enter_context(
+                patch(
+                    "main.calculate_correlations",
+                    return_value={
+                        "200": {"PRTH": 60.0, "MOMO": 60.0},
+                        "100": {"PRTH": 60.0, "MOMO": 60.0},
+                        "50": {"PRTH": 60.0, "MOMO": 60.0},
+                    },
+                )
+            )
+            stack.enter_context(patch("main.is_in_cooldown", return_value=False))
+            stack.enter_context(patch("main.fetch_holdings_detail", return_value=[]))
+            stack.enter_context(patch("main.evaluate_sell_decisions", return_value={}))
+            stack.enter_context(patch("main.calculate_sell_quantities", return_value=None))
+            stack.enter_context(patch("main.fetch_account_balance", return_value=None))
+            mock_calculate_investment = stack.enter_context(
+                patch("main.calculate_investment_per_stock", return_value={"MOMO": 500.0})
+            )
+            mock_calculate_shares = stack.enter_context(
+                patch("main.calculate_share_quantities", return_value={"MOMO": {"shares_to_buy": 5}})
+            )
+            mock_generate_message = stack.enter_context(
+                patch("main.generate_telegram_message", wraps=main_module.generate_telegram_message)
+            )
+            mock_log_funnel = stack.enter_context(patch("main.log_buy_funnel", wraps=main_module.log_buy_funnel))
+            stack.enter_context(patch("main.append_trade_signals"))
+            stack.enter_context(patch("main.append_account_snapshots"))
+            stack.enter_context(patch("main.run_performance_report_safely", return_value=False))
+            stack.enter_context(patch("main._send_performance_report_telegram_if_enabled"))
+            stack.enter_context(patch("main.save_json"))
+
+            mock_finder = MagicMock()
+            mock_finder.symbols = ["PRTH", "MOMO"]
+            mock_finder.is_data_valid.return_value = True
+            mock_finder.current_price = {"PRTH": 130.0, "MOMO": 100.0}
+            mock_finder.has_valid_trend_template.side_effect = [
+                {"PRTH": True, "MOMO": True},
+                {"PRTH": True, "MOMO": True},
+            ]
+            mock_finder.get_event_quarantine_metrics.return_value = {"is_event_quarantine": False}
+            mock_finder.get_special_situation_price_pinned_metrics.side_effect = lambda symbol: {
+                "is_special_situation": symbol == "PRTH",
+                "max_gap_up_pct": 0.30 if symbol == "PRTH" else 0.05,
+                "recent_range_pct": 0.001 if symbol == "PRTH" else 0.04,
+                "recent_abs_return_pct": 0.001 if symbol == "PRTH" else 0.03,
+                "atr_pct": 0.022 if symbol == "PRTH" else 0.01,
+            }
+            mock_finder_cls.return_value = mock_finder
+
+            main()
+
+        self.assertEqual(mock_finder.has_valid_trend_template.call_count, 2)
+        mock_calculate_investment.assert_called_once_with(["MOMO"], additional_cash=0.0)
+        mock_calculate_shares.assert_called_once()
+        self.assertEqual(mock_calculate_shares.call_args.args[0], {"MOMO": 500.0})
+        telegram_args = mock_generate_message.call_args.args
+        self.assertEqual(telegram_args[0], [])
+        self.assertEqual(telegram_args[1], ["MOMO"])
+        self.assertEqual(telegram_args[3], {"MOMO": {"shares_to_buy": 5}})
+        self.assertNotIn("PRTH", "\n".join(main_module.generate_telegram_message(*telegram_args)))
+
+        funnel_counts = mock_log_funnel.call_args.args[0]
+        self.assertEqual(funnel_counts["trend_eligible_symbols"], 2)
+        self.assertEqual(funnel_counts["event_quarantine_excluded_symbols"], 0)
+        self.assertEqual(funnel_counts["special_situation_excluded_symbols"], 1)
+        self.assertEqual(funnel_counts["special_situation_excluded_symbol_list"], "PRTH")
+        self.assertEqual(funnel_counts["final_buy_candidates"], 1)
 
 
     def test_main_event_quarantine_uses_previous_tracking_and_holdings_as_protected_set(self):
