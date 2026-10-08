@@ -99,11 +99,8 @@ def daily_run(monkeypatch, tmp_path):
     monkeypatch.setenv("PERFORMANCE_REPORT_OUTPUT_DIR", str(tmp_path / "report"))
     monkeypatch.setenv("PERFORMANCE_REPORT_URL", REPORT_URL)
     monkeypatch.setenv("PERFORMANCE_REPORT_BENCHMARKS", "SPY,IWM")
-    monkeypatch.setattr(
-        main.EnvironmentConfig,
-        "get",
-        lambda name: {"TELEGRAM_BOT_TOKEN": "fake-token", "TELEGRAM_CHAT_ID": "fake-chat"}.get(name),
-    )
+    env_values = {"TELEGRAM_BOT_TOKEN": "fake-token", "TELEGRAM_CHAT_ID": "fake-chat"}
+    monkeypatch.setattr(main.EnvironmentConfig, "get", env_values.get)
     bot = MagicMock()
     bot.sendMessage = AsyncMock()
     monkeypatch.setattr("telegram_utils.telegram.Bot", lambda *_args: bot)

@@ -640,7 +640,7 @@ def generate_telegram_message(
     sell_decisions: dict[str, SellDecision] | None = None,
     finder: UsaStockFinder | None = None,
     entry_symbol_set: set[str] | None = None,
-    buy_funnel_lines: list[str] | None = None,  # retained for caller compatibility; logs only
+    buy_funnel_lines: list[str] | None = None,  # pylint: disable=unused-argument
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
@@ -1938,15 +1938,15 @@ def main() -> None:
 def _load_performance_summary_if_enabled(report_generated: bool) -> str | None:
     """Read only this run's optional performance section; daily trades are independent."""
     if os.getenv("PERFORMANCE_REPORT_TELEGRAM_ENABLED", "false").strip().lower() != "true":
-        return
+        return None
     if not report_generated:
         logger.info("Performance Telegram notification skipped because report generation did not succeed.")
-        return
+        return None
 
     report_url = os.getenv("PERFORMANCE_REPORT_URL", "").strip()
     if not report_url:
         logger.warning("Performance Telegram notification skipped: PERFORMANCE_REPORT_URL is not configured.")
-        return
+        return None
 
     summary_path = os.path.join(
         os.getenv("PERFORMANCE_REPORT_OUTPUT_DIR", "outputs/performance"),
@@ -1959,7 +1959,7 @@ def _load_performance_summary_if_enabled(report_generated: bool) -> str | None:
             raise ValueError("summary payload is not an object")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("Performance Telegram notification skipped: invalid summary file (%s).", str(exc))
-        return
+        return None
 
     return build_performance_summary_message(summary, report_url)
 
