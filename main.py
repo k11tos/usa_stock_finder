@@ -1332,7 +1332,13 @@ def _filter_buy_candidates_by_event_quarantine(
     finder: UsaStockFinder,
     existing_symbols: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Filter recent suspicious gap-up symbols from new buy candidates."""
+    """Filter recent suspicious gap-up symbols from fresh buy candidates.
+
+    ``existing_symbols`` must contain actual broker holdings only.  Those
+    holdings intentionally bypass quarantine so the established additional-buy
+    sizing behavior remains unchanged; persisted ``data/data.json`` tracking
+    state must not grant that exemption to an otherwise new position.
+    """
     if not StrategyConfig.EVENT_QUARANTINE_ENABLED:
         return buy_items, []
 
@@ -1700,7 +1706,7 @@ def _prepare_buy_side_orchestration(
 
 
 def _load_previous_tracked_items(file_path: str = "data/data.json") -> list[str]:
-    """Load previously saved final/tracking symbols for NEW BUY protection."""
+    """Load persisted portfolio/tracking symbols for run-state diagnostics."""
     try:
         loaded = load_json(file_path)
         if isinstance(loaded, list):
@@ -1790,6 +1796,10 @@ def main() -> None:
 
     finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts = finder_and_candidates
     prev_tracked_items = _load_previous_tracked_items("data/data.json")
+    logger.info(
+        "Loaded %d persisted tracking symbols; event-quarantine exemptions use broker holdings only.",
+        len(prev_tracked_items),
+    )
     buy_items = _filter_buy_candidates_by_cooldown(buy_items)
     funnel_stage_counts["cooldown_eligible_symbols"] = len(buy_items)
 
@@ -1797,7 +1807,9 @@ def main() -> None:
     buy_items, event_quarantine_excluded_symbols = _filter_buy_candidates_by_event_quarantine(
         buy_items,
         finder,
-        existing_symbols=set(prev_tracked_items) | set(us_stock_holdings),
+        # Only confirmed broker holdings are exempt: data/data.json is
+        # persistence for portfolio state, not proof of a live holding.
+        existing_symbols=set(us_stock_holdings),
     )
     funnel_stage_counts["event_quarantine_excluded_symbols"] = pre_event_quarantine_count - len(buy_items)
     if event_quarantine_excluded_symbols:

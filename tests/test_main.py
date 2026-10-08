@@ -9,7 +9,7 @@ import unittest
 import json
 from contextlib import ExitStack
 from datetime import datetime
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import ANY, MagicMock, patch, mock_open
 
 import numpy as np
 import pandas as pd
@@ -267,8 +267,8 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(result, ["AAPL", "OLD1", "MSFT"])
 
 
-    def test_filter_buy_candidates_by_event_quarantine(self):
-        """Event-quarantine symbols should be removed from buy candidates."""
+    def test_entirely_new_quarantined_symbol_is_excluded(self):
+        """An entirely new symbol is excluded when it is in event quarantine."""
         mock_finder = MagicMock()
         mock_finder.get_event_quarantine_metrics.side_effect = [
             {
@@ -327,33 +327,50 @@ class TestMainFunctions(unittest.TestCase):
             ),
         )
 
-    def test_data_json_only_symbol_bypasses_quarantine_and_can_become_new_buy(self):
-        """Document the data.json-only bypass path for follow-up semantics review.
-
-        main passes persisted data/data.json entries into existing_symbols, while
-        sizing and Telegram use broker holdings. A persisted-only symbol is
-        therefore treated as protected by quarantine but as a new broker buy.
-        """
+    def test_tracked_only_quarantined_symbol_is_excluded(self):
+        """Persisted tracking alone must not exempt a fresh buy from quarantine."""
         symbol = "TRACKONLY"
         mock_finder = MagicMock()
         mock_finder.current_price = {symbol: 50.0}
+        mock_finder.get_event_quarantine_metrics.return_value = {
+            "is_event_quarantine": True,
+            "max_gap_up_pct": 0.20,
+            "days_since_gap": 1.0,
+            "current_vs_gap_close_pct": 0.01,
+            "drawdown_from_post_gap_high_pct": 0.02,
+        }
 
         with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
             filtered, excluded = _filter_buy_candidates_by_event_quarantine(
-                [symbol], mock_finder, existing_symbols={symbol}
+                [symbol], mock_finder, existing_symbols=set()
             )
 
-        shares = calculate_share_quantities({symbol: 500.0}, mock_finder, current_holdings=[])
-        message = generate_telegram_message([], filtered, [], shares)
+        self.assertEqual(filtered, [])
+        self.assertEqual(excluded, [symbol])
+        mock_finder.get_event_quarantine_metrics.assert_called_once()
+
+    def test_tracked_only_non_quarantined_symbol_remains_eligible(self):
+        """Persisted-only symbols remain eligible when the event check is clear."""
+        symbol = "TRACKONLY"
+        mock_finder = MagicMock()
+        mock_finder.get_event_quarantine_metrics.return_value = {
+            "is_event_quarantine": False,
+            "max_gap_up_pct": 0.03,
+            "days_since_gap": 1.0,
+            "current_vs_gap_close_pct": 0.08,
+            "drawdown_from_post_gap_high_pct": 0.10,
+        }
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(
+                [symbol], mock_finder, existing_symbols=set()
+            )
 
         self.assertEqual(filtered, [symbol])
         self.assertEqual(excluded, [])
-        mock_finder.get_event_quarantine_metrics.assert_not_called()
-        self.assertEqual(shares[symbol]["current_quantity"], 0)
-        self.assertIn(f"신규 매수: {symbol}", "\n".join(message or []))
 
     def test_actual_holding_bypasses_quarantine_for_sizing_but_not_new_buy_telegram(self):
-        """Actual holdings may be sized for an addition but are not Telegram NEW BUYs."""
+        """Actual holdings intentionally bypass quarantine for additional-buy sizing."""
         symbol = "HELD"
         mock_finder = MagicMock()
         mock_finder.current_price = {symbol: 50.0}
@@ -374,6 +391,26 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(shares[symbol]["current_quantity"], 1)
         self.assertGreater(shares[symbol]["shares_to_buy"], 0)
         self.assertIsNone(message)
+
+    def test_normal_momentum_candidate_remains_eligible_after_event_quarantine(self):
+        """A normal momentum candidate with no recent event remains a buy candidate."""
+        symbol = "MOMO"
+        mock_finder = MagicMock()
+        mock_finder.get_event_quarantine_metrics.return_value = {
+            "is_event_quarantine": False,
+            "max_gap_up_pct": 0.04,
+            "days_since_gap": 6.0,
+            "current_vs_gap_close_pct": 0.02,
+            "drawdown_from_post_gap_high_pct": 0.01,
+        }
+
+        with patch.object(main_module.StrategyConfig, "EVENT_QUARANTINE_ENABLED", True):
+            filtered, excluded = _filter_buy_candidates_by_event_quarantine(
+                [symbol], mock_finder, existing_symbols=set()
+            )
+
+        self.assertEqual(filtered, [symbol])
+        self.assertEqual(excluded, [])
 
     def test_filter_buy_candidates_by_special_situation(self):
         """Special-situation symbols should be removed from buy candidates."""
@@ -1448,9 +1485,190 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         self.assertEqual(funnel_counts["special_situation_excluded_symbol_list"], "PRTH")
         self.assertEqual(funnel_counts["final_buy_candidates"], 1)
 
+    def test_main_real_finder_excludes_prth_like_candidate_before_buy_output(self):
+        """Real OHLC detection must keep a stale-gap pinned symbol out of the buy funnel."""
+        prth = "PRTH"
+        momentum = "MOMO"
+        pre_event_close = np.linspace(50.0, 100.0, 249)
+        pinned_close = np.array(
+            [130.00, 130.05, 129.98, 130.02, 130.04, 129.99, 130.01, 130.03, 130.00, 130.02]
+        )
+        close_by_symbol = {
+            prth: np.concatenate([pre_event_close, [130.0], pinned_close]),
+            momentum: np.linspace(50.0, 150.0, 260),
+        }
+        ohlc_data: dict[tuple[str, str], np.ndarray] = {}
+        for symbol, close in close_by_symbol.items():
+            ohlc_data[("High", symbol)] = close * 1.001
+            ohlc_data[("Low", symbol)] = close * 0.999
+            ohlc_data[("Close", symbol)] = close
+            ohlc_data[("Volume", symbol)] = np.linspace(1000.0, 2000.0, len(close))
+        synthetic_data = pd.DataFrame(
+            ohlc_data,
+            index=pd.date_range("2024-01-01", periods=260, freq="B"),
+        )
+        synthetic_data.columns = pd.MultiIndex.from_tuples(synthetic_data.columns)
 
-    def test_main_event_quarantine_uses_previous_tracking_and_holdings_as_protected_set(self):
-        """main should protect both previous tracked symbols and current holdings from event quarantine."""
+        with patch("stock_analysis.yf.download", return_value=synthetic_data):
+            finder = UsaStockFinder([prth, momentum])
+            correlations = calculate_correlations(finder)
+            trend_buy_items, _ = select_stocks(finder, correlations)
+            event_metrics = finder.get_event_quarantine_metrics(prth)
+            pinned_metrics = finder.get_special_situation_price_pinned_metrics(prth)
+
+            self.assertEqual(set(trend_buy_items), {prth, momentum})
+            self.assertFalse(event_metrics["is_event_quarantine"])
+            self.assertTrue(pinned_metrics["is_special_situation"])
+            self.assertTrue(pinned_metrics["is_post_gap_atr_valid"])
+            self.assertLessEqual(pinned_metrics["post_gap_atr_pct"], 0.015)
+
+            with ExitStack() as stack:
+                stack.enter_context(patch("main.setup_logging"))
+                stack.enter_context(patch("main.load_dotenv"))
+                stack.enter_context(patch("main.is_within_execution_window", return_value=True))
+                stack.enter_context(patch("main.EnvironmentConfig.validate"))
+                stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
+                stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=[]))
+                stack.enter_context(patch("main.read_csv_first_column", return_value=[prth, momentum]))
+                stack.enter_context(
+                    patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols)
+                )
+                stack.enter_context(patch("main.is_in_cooldown", return_value=False))
+                stack.enter_context(patch("main.fetch_holdings_detail", return_value=[]))
+                stack.enter_context(
+                    patch(
+                        "main.fetch_account_balance",
+                        return_value={"available_cash": 1000.0, "buyable_cash": 1000.0, "total_balance": 1000.0},
+                    )
+                )
+                mock_calculate_investment = stack.enter_context(
+                    patch("main.calculate_investment_per_stock", wraps=main_module.calculate_investment_per_stock)
+                )
+                mock_calculate_shares = stack.enter_context(
+                    patch("main.calculate_share_quantities", wraps=main_module.calculate_share_quantities)
+                )
+                mock_generate_message = stack.enter_context(
+                    patch("main.generate_telegram_message", wraps=main_module.generate_telegram_message)
+                )
+                mock_log_funnel = stack.enter_context(
+                    patch("main.log_buy_funnel", wraps=main_module.log_buy_funnel)
+                )
+                stack.enter_context(patch("main.append_trade_signals"))
+                stack.enter_context(patch("main.append_account_snapshots"))
+                stack.enter_context(patch("main.run_performance_report_safely", return_value=False))
+                stack.enter_context(patch("main._send_performance_report_telegram_if_enabled"))
+                stack.enter_context(patch("main.save_json"))
+
+                main()
+
+        mock_calculate_investment.assert_called_once_with([momentum], additional_cash=0.0, account_balance=ANY)
+        mock_calculate_shares.assert_called_once()
+        self.assertEqual(set(mock_calculate_shares.call_args.args[0]), {momentum})
+        share_quantities = mock_generate_message.call_args.args[3]
+        self.assertIn(momentum, share_quantities)
+        self.assertNotIn(prth, share_quantities)
+        telegram_message = "\n".join(
+            main_module.generate_telegram_message(
+                *mock_generate_message.call_args.args,
+                **mock_generate_message.call_args.kwargs,
+            )
+            or []
+        )
+        self.assertIn(f"신규 매수: {momentum}", telegram_message)
+        self.assertNotIn(f"신규 매수: {prth}", telegram_message)
+
+        funnel_counts = mock_log_funnel.call_args.args[0]
+        self.assertEqual(funnel_counts["trend_eligible_symbols"], 2)
+        self.assertEqual(funnel_counts["event_quarantine_excluded_symbols"], 0)
+        self.assertEqual(funnel_counts["special_situation_excluded_symbols"], 1)
+        self.assertEqual(funnel_counts["special_situation_excluded_symbol_list"], prth)
+        self.assertEqual(funnel_counts["final_buy_candidates"], 1)
+
+    def test_real_finder_quarantines_tracked_only_recent_gap_before_pinned_filter_matures(self):
+        """A data.json-only recent gap remains quarantined before mature pinned detection applies."""
+        symbol = "TRACKONLY"
+        close = np.concatenate([np.linspace(50.0, 100.0, 256), [120.0, 120.02, 119.99, 120.01]])
+        synthetic_data = pd.DataFrame(
+            {
+                ("High", symbol): close * 1.001,
+                ("Low", symbol): close * 0.999,
+                ("Close", symbol): close,
+                ("Volume", symbol): np.linspace(1000.0, 2000.0, len(close)),
+            },
+            index=pd.date_range("2024-01-01", periods=len(close), freq="B"),
+        )
+        synthetic_data.columns = pd.MultiIndex.from_tuples(synthetic_data.columns)
+        persisted_only_symbols = {symbol}
+        broker_holding_symbols: set[str] = set()
+
+        with patch("stock_analysis.yf.download", return_value=synthetic_data):
+            finder = UsaStockFinder([symbol])
+            correlations = calculate_correlations(finder)
+            event_metrics = finder.get_event_quarantine_metrics(symbol)
+            pinned_metrics = finder.get_special_situation_price_pinned_metrics(symbol)
+            after_event_filter, event_excluded = _filter_buy_candidates_by_event_quarantine(
+                [symbol], finder, existing_symbols=broker_holding_symbols
+            )
+
+            self.assertIn(symbol, select_stocks(finder, correlations)[0])
+
+            with ExitStack() as stack:
+                stack.enter_context(patch("main.setup_logging"))
+                stack.enter_context(patch("main.load_dotenv"))
+                stack.enter_context(patch("main.is_within_execution_window", return_value=True))
+                stack.enter_context(patch("main.EnvironmentConfig.validate"))
+                stack.enter_context(patch("main.EnvironmentConfig.get", return_value=None))
+                stack.enter_context(patch("main.fetch_us_stock_holdings", return_value=[]))
+                stack.enter_context(patch("main.read_csv_first_column", return_value=[symbol]))
+                stack.enter_context(patch("main.load_json", return_value=[symbol]))
+                stack.enter_context(
+                    patch("main._filter_entry_symbols_by_exchange", side_effect=lambda symbols: symbols)
+                )
+                stack.enter_context(patch("main.is_in_cooldown", return_value=False))
+                stack.enter_context(patch("main.fetch_holdings_detail", return_value=[]))
+                stack.enter_context(
+                    patch(
+                        "main.fetch_account_balance",
+                        return_value={"available_cash": 1000.0, "buyable_cash": 1000.0, "total_balance": 1000.0},
+                    )
+                )
+                mock_calculate_investment = stack.enter_context(patch("main.calculate_investment_per_stock"))
+                mock_calculate_shares = stack.enter_context(patch("main.calculate_share_quantities"))
+                mock_generate_message = stack.enter_context(
+                    patch("main.generate_telegram_message", wraps=main_module.generate_telegram_message)
+                )
+                mock_log_funnel = stack.enter_context(
+                    patch("main.log_buy_funnel", wraps=main_module.log_buy_funnel)
+                )
+                stack.enter_context(patch("main.append_trade_signals"))
+                stack.enter_context(patch("main.append_account_snapshots"))
+                stack.enter_context(patch("main.run_performance_report_safely", return_value=False))
+                stack.enter_context(patch("main._send_performance_report_telegram_if_enabled"))
+                stack.enter_context(patch("main.save_json"))
+
+                main()
+
+        self.assertIn(symbol, persisted_only_symbols)
+        self.assertTrue(event_metrics["is_event_quarantine"])
+        self.assertFalse(pinned_metrics["is_special_situation"])
+        self.assertLess(pinned_metrics["post_gap_observation_count"], 5)
+        self.assertEqual(after_event_filter, [])
+        self.assertEqual(event_excluded, [symbol])
+        mock_calculate_investment.assert_not_called()
+        mock_calculate_shares.assert_not_called()
+        funnel_counts = mock_log_funnel.call_args.args[0]
+        self.assertEqual(funnel_counts["event_quarantine_excluded_symbols"], 1)
+        self.assertEqual(funnel_counts["event_quarantine_excluded_symbol_list"], symbol)
+        self.assertEqual(funnel_counts["final_buy_candidates"], 0)
+        telegram_message = main_module.generate_telegram_message(
+            *mock_generate_message.call_args.args,
+            **mock_generate_message.call_args.kwargs,
+        )
+        self.assertNotIn(f"신규 매수: {symbol}", "\n".join(telegram_message or []))
+
+
+    def test_main_event_quarantine_uses_only_actual_holdings_as_protected_set(self):
+        """Persisted tracking state must not join the broker-holding exemption set."""
         with ExitStack() as stack:
             stack.enter_context(patch("main.setup_logging"))
             stack.enter_context(patch("main.load_dotenv"))
@@ -1489,7 +1707,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             self.assertTrue(mock_event_filter.called)
             self.assertEqual(
                 mock_event_filter.call_args.kwargs["existing_symbols"],
-                {"TRACK1", "AAPL"},
+                {"AAPL"},
             )
 
     def test_prepare_finder_candidates_filters_not_sell_to_entry_universe(self):
