@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import date
+from threading import Event, Thread
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -123,6 +124,9 @@ def daily_run(monkeypatch, tmp_path):
         "sizing": sizing,
         "shares": shares,
         "decisions": decisions,
+        "trades": trades,
+        "snapshots": snapshots,
+        "save": save,
         "builder": builder,
         "summary_path": tmp_path / "report" / "performance_summary.json",
     }
@@ -159,8 +163,9 @@ def test_successful_daily_run_combines_metrics_candidates_and_trades(daily_run, 
     assert "최종 매수 후보: 2종목" in message
     assert len(daily_run["shares"]) == 1
     assert_trade_details(message)
-    assert build_performance_summary_message(SUMMARY, REPORT_URL) in message
-    assert message.count("2026-08-26") == 2  # header and performance period only
+    # Actionable details are delivered before optional benchmark/report work.
+    assert "전략 성과" not in message
+    assert message.count("2026-08-26") == 1
     assert len(message) < 4096
     assert "[Buy Funnel]" not in message
     for line in main.build_buy_funnel_lines(daily_run["stages"]):
@@ -185,13 +190,58 @@ def test_no_trade_day_still_sends_one_compact_daily_report(daily_run, candidates
     assert "매수 신호" not in message
     assert "매도 신호" not in message
     assert "[Buy Funnel]" not in message
+    assert daily_run["bot"].sendMessage.await_count == 1
+
+
+def test_json_persistence_failure_still_attempts_trade_alert_and_preserves_failure(daily_run, caplog):
+    persistence_error = OSError("read-only filesystem")
+    daily_run["save"].side_effect = persistence_error
+
+    with pytest.raises(OSError, match="read-only filesystem"), caplog.at_level(logging.ERROR, logger="main"):
+        main.main()
+
+    assert_trade_details(sent_message(daily_run))
+    daily_run["save"].assert_called_once_with(["HELD", "OLD", "MOMO"], "data/data.json")
+    daily_run["builder"].assert_not_called()
+    assert "Failed to persist final symbol state to data/data.json" in caplog.text
+    assert "sending the daily trade alert before aborting" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("persistence_mock", "expected_log"),
+    [
+        ("trades", "Failed to append trade signals CSV: disk full"),
+        ("snapshots", "Failed to append account snapshots CSV: disk full"),
+    ],
+)
+def test_csv_persistence_failures_do_not_suppress_trade_alerts(
+    daily_run, caplog, persistence_mock, expected_log
+):
+    daily_run[persistence_mock].side_effect = OSError("disk full")
+
+    with caplog.at_level(logging.WARNING, logger="main"):
+        main.main()
+
+    assert_trade_details(sent_message(daily_run))
+    assert expected_log in caplog.text
+    daily_run["builder"].assert_called_once()
+
+
+def test_unexpected_json_persistence_error_is_not_converted_into_success(daily_run, caplog):
+    daily_run["save"].side_effect = TypeError("not serializable")
+
+    with pytest.raises(TypeError, match="not serializable"), caplog.at_level(logging.ERROR, logger="main"):
+        main.main()
+
+    daily_run["bot"].sendMessage.assert_not_awaited()
+    daily_run["builder"].assert_not_called()
+    assert "Failed to persist final symbol state" not in caplog.text
 
 
 @pytest.mark.parametrize(
     "failure",
     [
-        "disabled", "telegram_disabled", "builder_error", "missing", "malformed",
-        "non_object", "missing_url", "unexpected_error", "format_error",
+        "disabled", "telegram_disabled", "builder_error", "unexpected_error",
     ],
 )
 def test_optional_performance_failures_never_suppress_trade_alerts(daily_run, monkeypatch, caplog, failure):
@@ -208,18 +258,6 @@ def test_optional_performance_failures_never_suppress_trade_alerts(daily_run, mo
         monkeypatch.setenv("PERFORMANCE_REPORT_URL", "")
     elif failure == "unexpected_error":
         monkeypatch.setattr(main, "run_performance_report_safely", MagicMock(side_effect=RuntimeError("unexpected")))
-    elif failure == "format_error":
-        monkeypatch.setattr(main, "build_performance_summary_message", MagicMock(side_effect=RuntimeError("format")))
-    else:
-
-        def build_bad_report(_args):
-            if failure == "missing":
-                return
-            daily_run["summary_path"].parent.mkdir()
-            daily_run["summary_path"].write_text("[1, 2]" if failure == "non_object" else "{broken", encoding="utf-8")
-
-        daily_run["builder"].side_effect = build_bad_report
-
     with caplog.at_level(logging.INFO):
         main.main()
     message = sent_message(daily_run)
@@ -229,10 +267,28 @@ def test_optional_performance_failures_never_suppress_trade_alerts(daily_run, mo
     assert "전략: +7.20%" not in message
     if failure == "builder_error":
         assert "Performance report generation failed" in caplog.text
-    elif failure in {"missing", "malformed", "non_object"}:
-        assert "invalid summary file" in caplog.text
-    elif failure in {"unexpected_error", "format_error"}:
+    elif failure == "unexpected_error":
         assert "notification preparation failed" in caplog.text
+
+
+def test_slow_performance_generation_starts_after_trade_delivery(daily_run, monkeypatch):
+    report_started = Event()
+    allow_report_finish = Event()
+
+    def slow_report() -> bool:
+        report_started.set()
+        assert allow_report_finish.wait(timeout=1)
+        return False
+
+    monkeypatch.setattr(main, "run_performance_report_safely", slow_report)
+    worker = Thread(target=main.main)
+    worker.start()
+    assert report_started.wait(timeout=1)
+    assert_trade_details(sent_message(daily_run))
+    assert daily_run["bot"].sendMessage.await_count == 1
+    allow_report_finish.set()
+    worker.join(timeout=1)
+    assert not worker.is_alive()
 
 
 def test_all_excluded_symbols_remain_in_diagnostic_logs(daily_run, caplog):
@@ -256,6 +312,10 @@ def test_all_excluded_symbols_remain_in_diagnostic_logs(daily_run, caplog):
 
 def test_configured_benchmarks_are_forwarded_and_available_metrics_shown(daily_run, monkeypatch):
     monkeypatch.setenv("PERFORMANCE_REPORT_BENCHMARKS", "QQQ,DIA")
+    finder, _, _, _, stages = daily_run["prepare"].return_value
+    daily_run["prepare"].return_value = finder, [], [], set(), stages
+    daily_run["shares"].clear()
+    daily_run["decisions"].clear()
     summary = {
         "start_date": "2026-05-26",
         "end_date": "2026-08-26",
@@ -278,7 +338,8 @@ def test_configured_benchmarks_are_forwarded_and_available_metrics_shown(daily_r
     assert "DIA:" not in message
     assert "SPY:" not in message
     assert "IWM:" not in message
-    assert_trade_details(message)
+    assert "매수 신호" not in message
+    assert "매도 신호" not in message
 
 
 def test_telegram_failure_remains_observable_without_duplicate_sends(daily_run, caplog):

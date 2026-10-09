@@ -19,6 +19,7 @@ DEFAULT_CASH_FLOWS = "data/live/cash_flows.csv"
 DEFAULT_TRADES = "data/live/trade_signals.csv"
 DEFAULT_BENCHMARKS = ["SPY", "IWM"]
 DEFAULT_OUTPUT = "outputs/performance"
+BENCHMARK_DOWNLOAD_TIMEOUT_SECONDS = 10.0
 REQUIRED_CASH_FLOW_COLUMNS = {"date", "amount", "currency", "type", "memo"}
 VALID_CASH_FLOW_TYPES = {"deposit", "withdrawal", "dividend", "fee", "tax", "adjustment"}
 
@@ -389,6 +390,7 @@ def _extract_benchmark_price_series(data: pd.DataFrame, symbol: str) -> pd.Serie
 
 
 def fetch_benchmark_prices(symbols: list[str], start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    """Fetch each benchmark with a bounded network request."""
     prices = pd.DataFrame()
     for symbol in symbols:
         data = yf.download(
@@ -397,6 +399,7 @@ def fetch_benchmark_prices(symbols: list[str], start: pd.Timestamp, end: pd.Time
             end=(end + pd.Timedelta(days=1)).date(),
             progress=False,
             auto_adjust=False,
+            timeout=BENCHMARK_DOWNLOAD_TIMEOUT_SECONDS,
         )
         benchmark_series = _extract_benchmark_price_series(data, symbol)
         if benchmark_series.empty:

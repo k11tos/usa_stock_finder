@@ -28,28 +28,22 @@ Date: 2024.05.19
 """
 
 import asyncio
-import math
-import logging
-import os.path
 import json
+import logging
+import math
+import os.path
 import re
-from pathlib import Path
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 import pandas as pd
 import yfinance as yf
+from dotenv import load_dotenv
 
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
 from file_utils import load_json, read_csv_first_column, save_json
-from logging_setup import setup_logging
-from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
-from stock_analysis import UsaStockFinder
-from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
-from stop_loss_cooldown import is_in_cooldown
-from telegram_utils import build_daily_report_message, build_performance_summary_message, send_telegram_message
 from live_performance_logger import (
     append_account_snapshots,
     append_trade_signals,
@@ -58,8 +52,13 @@ from live_performance_logger import (
     build_sell_signal_rows,
     generate_run_metadata,
 )
-
+from logging_setup import setup_logging
 from performance_report_runner import run_performance_report_safely
+from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
+from stock_analysis import UsaStockFinder
+from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
+from stop_loss_cooldown import is_in_cooldown
+from telegram_utils import build_daily_report_message, build_performance_summary_message, send_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -1766,7 +1765,7 @@ def main() -> None:
     5. Calculates buy sizing (investment map/share quantities)
     6. Formats actionable Telegram trade notifications
     7. Saves the final symbol state to `data/data.json`
-    8. Sends one daily report with optional performance and actionable trades
+    8. Sends actionable daily reports before optional performance reporting
 
     Note:
         - Requires environment variables for Telegram API and account information
@@ -1898,20 +1897,59 @@ def main() -> None:
         logger.warning("Failed to append account snapshots CSV: %s", str(exc))
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items, sell_decisions)
-    save_json(final_items, "data/data.json")
-    performance_message = None
-    try:
-        report_generated = run_performance_report_safely()
-        performance_message = _load_performance_summary_if_enabled(report_generated)
-    except Exception as exc:  # optional reporting must never suppress trade alerts
-        logger.warning("Performance report notification preparation failed (continuing main flow): %s", str(exc))
-
     daily_message = build_daily_report_message(
         report_date=str(date.today()),
         final_buy_candidates=funnel_stage_counts["final_buy_candidates"],
         trade_lines=telegram_message,
-        performance_message=performance_message,
     )
+    try:
+        save_json(final_items, "data/data.json")
+    except OSError as exc:
+        # A full or read-only filesystem must not hide already-computed trades.
+        # Preserve the previous failure semantics once their alert was attempted.
+        logger.error(
+            "Failed to persist final symbol state to data/data.json; "
+            "sending the daily trade alert before aborting: %s",
+            str(exc),
+        )
+        _send_daily_report(daily_message)
+        raise
+
+    if telegram_message:
+        # Report generation downloads benchmark data and writes artifacts. It is
+        # optional, so never put it on the actionable-trade delivery path.
+        _send_daily_report(daily_message)
+        _run_performance_report_after_trade_alert()
+    else:
+        performance_message = None
+        try:
+            report_generated = run_performance_report_safely()
+            performance_message = _load_performance_summary_if_enabled(report_generated)
+        except Exception as exc:  # optional reporting must never suppress daily reports
+            logger.warning("Performance report notification preparation failed (continuing main flow): %s", str(exc))
+
+        daily_message = build_daily_report_message(
+            report_date=str(date.today()),
+            final_buy_candidates=funnel_stage_counts["final_buy_candidates"],
+            trade_lines=telegram_message,
+            performance_message=performance_message,
+        )
+        _send_daily_report(daily_message)
+
+    _log_execution_summary(
+        prev_items=us_stock_holdings,
+        buy_items=buy_items,
+        not_sell_items=not_sell_items,
+        sell_decisions=sell_decisions,
+        sell_quantities=sell_quantities,
+        additional_cash_from_sell=additional_cash_from_sell,
+        final_items=final_items,
+        entry_symbol_set=entry_symbol_set,
+    )
+
+
+def _send_daily_report(daily_message: str) -> None:
+    """Send exactly one already-composed daily Telegram report."""
     bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
     chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
     if bot_token and chat_id:
@@ -1923,16 +1961,14 @@ def main() -> None:
         logger.debug(daily_message)
     else:
         logger.error("Missing Telegram API credentials")
-    _log_execution_summary(
-        prev_items=us_stock_holdings,
-        buy_items=buy_items,
-        not_sell_items=not_sell_items,
-        sell_decisions=sell_decisions,
-        sell_quantities=sell_quantities,
-        additional_cash_from_sell=additional_cash_from_sell,
-        final_items=final_items,
-        entry_symbol_set=entry_symbol_set,
-    )
+
+
+def _run_performance_report_after_trade_alert() -> None:
+    """Run the optional report after delivering an actionable daily report."""
+    try:
+        run_performance_report_safely()
+    except Exception as exc:  # optional reporting must never suppress a sent trade alert
+        logger.warning("Performance report notification preparation failed (continuing main flow): %s", str(exc))
 
 
 def _load_performance_summary_if_enabled(report_generated: bool) -> str | None:
