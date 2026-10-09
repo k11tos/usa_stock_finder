@@ -1964,9 +1964,11 @@ def _send_daily_report(daily_message: str) -> None:
 
 
 def _run_performance_report_after_trade_alert() -> None:
-    """Run the optional report after delivering an actionable daily report."""
+    """Deliver a metrics-only follow-up after the actionable trade report."""
     try:
-        run_performance_report_safely()
+        performance_message = _load_performance_summary_if_enabled(run_performance_report_safely())
+        if performance_message:
+            _send_daily_report(performance_message)
     except Exception as exc:  # optional reporting must never suppress a sent trade alert
         logger.warning("Performance report notification preparation failed (continuing main flow): %s", str(exc))
 
