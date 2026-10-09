@@ -254,7 +254,13 @@ def test_unexpected_json_persistence_error_is_not_converted_into_success(daily_r
 @pytest.mark.parametrize(
     "failure",
     [
-        "disabled", "telegram_disabled", "builder_error", "missing_url", "missing_summary", "malformed_summary", "unexpected_error",
+        "disabled",
+        "telegram_disabled",
+        "builder_error",
+        "missing_url",
+        "missing_summary",
+        "malformed_summary",
+        "unexpected_error",
     ],
 )
 def test_optional_performance_failures_never_suppress_trade_alerts(daily_run, monkeypatch, caplog, failure):
