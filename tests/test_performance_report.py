@@ -1,17 +1,20 @@
 import argparse
 import json
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
 
 from tools.performance_report import (
+    BENCHMARK_DOWNLOAD_TIMEOUT_SECONDS,
     _calculate_modified_dietz_return_pct,
     _extract_benchmark_price_series,
     align_benchmarks_to_strategy_dates,
-    build_report,
     build_chart_data,
+    build_report,
     calculate_drawdown_series,
     cumulative_return_pct,
+    fetch_benchmark_prices,
     load_strategy_equity_curve,
     max_drawdown_pct,
     normalize_series,
@@ -21,6 +24,15 @@ from tools.performance_report import (
 def test_cumulative_return_calculation() -> None:
     series = pd.Series([100, 110, 120])
     assert cumulative_return_pct(series) == pytest.approx(20.0)
+
+
+def test_benchmark_download_uses_bounded_network_timeout(monkeypatch) -> None:
+    download = MagicMock(return_value=pd.DataFrame())
+    monkeypatch.setattr("tools.performance_report.yf.download", download)
+
+    fetch_benchmark_prices(["SPY"], pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-02"))
+
+    assert download.call_args.kwargs["timeout"] == BENCHMARK_DOWNLOAD_TIMEOUT_SECONDS
 
 
 def test_max_drawdown_calculation() -> None:

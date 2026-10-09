@@ -172,6 +172,23 @@ python tools/performance_report.py \
 - `charts/drawdown.png`
 - `charts/excess_return.png`
 
+### 일일 Telegram 리포트
+
+정상 일일 실행은 최종 매수 후보 수와 매매 신호를 하나의 Telegram 메시지로 보냅니다.
+최종 매수 후보 수는 필터 통과 종목 수이며, 실제 매수 가능 주문 수와 다를 수 있습니다.
+신규 매수 수량·금액, 매도 수량·사유, B-Plan 보유 유지 경고는 기존 상세 내용을 유지합니다.
+매매가 없는 날에도 후보 현황을 보냅니다. `[Buy Funnel]` 단계별 카운터와 제외 종목 진단은
+애플리케이션 로그에 계속 기록하며 일일 Telegram 메시지에는 포함하지 않습니다.
+
+`PERFORMANCE_REPORT_ENABLED=true`와 `PERFORMANCE_REPORT_TELEGRAM_ENABLED=true`이면
+성공적으로 생성된 `performance_summary.json`의 성과를 일일 메시지에 함께 표시합니다.
+`PERFORMANCE_REPORT_OUTPUT_DIR`(기본 `outputs/performance`)와 `PERFORMANCE_REPORT_URL`을
+기존처럼 사용합니다. `PERFORMANCE_REPORT_BENCHMARKS`(기본 `SPY,IWM`)에 따른 사용 가능한
+벤치마크 수익률·초과수익을 표시하고, 없는 데이터로 수익률을 만들지 않습니다.
+성과 생성 비활성화·실패, 요약 파일 누락·손상, URL 미설정 시에도 후보 현황과 매매 신호를 보냅니다.
+상세 HTML/Markdown/CSV/JSON 리포트와 latest/history 발행은 그대로 유지합니다.
+매매 상세가 Telegram의 4096자 제한을 넘는 경우에만 여러 메시지로 나누며 내용을 생략하지 않습니다.
+
 ## Backtesting
 
 `run_backtest.py`로 CSV 기반 백테스트를 실행할 수 있습니다.

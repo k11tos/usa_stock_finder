@@ -180,13 +180,13 @@ class TestTelegramUtils(unittest.TestCase):
             "max_drawdown_pct": -6.8,
         }
         message = build_performance_summary_message(summary, "http://breadpig:8091/latest/")
-        self.assertIn("기간: 2026-05-26 ~ 2026-08-26", message)
+        self.assertIn("전략 성과 (2026-05-26 ~ 2026-08-26)", message)
         self.assertIn("전략: +7.20%", message)
         self.assertIn("SPY: +4.10%", message)
         self.assertIn("IWM: +3.30%", message)
-        self.assertIn("vs SPY: +3.10p", message)
-        self.assertIn("vs IWM: +3.90p", message)
-        self.assertIn("전략: -6.80%", message)
+        self.assertIn("SPY 대비 +3.10%p", message)
+        self.assertIn("IWM 대비 +3.90%p", message)
+        self.assertIn("최대 낙폭(MDD): -6.80%", message)
         self.assertIn("http://breadpig:8091/latest/", message)
 
     def test_build_performance_summary_message_missing_benchmarks(self):
@@ -214,7 +214,7 @@ class TestTelegramUtils(unittest.TestCase):
         }
         message = build_performance_summary_message(summary, "http://example/latest/")
         self.assertIn("QQQ: +5.00%", message)
-        self.assertIn("vs QQQ: +2.20p", message)
+        self.assertIn("QQQ 대비 +2.20%p", message)
 
 
 if __name__ == "__main__":

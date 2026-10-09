@@ -28,28 +28,22 @@ Date: 2024.05.19
 """
 
 import asyncio
-import math
-import logging
-import os.path
 import json
+import logging
+import math
+import os.path
 import re
-from pathlib import Path
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 import pandas as pd
 import yfinance as yf
+from dotenv import load_dotenv
 
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
 from file_utils import load_json, read_csv_first_column, save_json
-from logging_setup import setup_logging
-from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
-from stock_analysis import UsaStockFinder
-from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
-from stop_loss_cooldown import is_in_cooldown
-from telegram_utils import build_performance_summary_message, send_telegram_message
 from live_performance_logger import (
     append_account_snapshots,
     append_trade_signals,
@@ -58,8 +52,13 @@ from live_performance_logger import (
     build_sell_signal_rows,
     generate_run_metadata,
 )
-
+from logging_setup import setup_logging
 from performance_report_runner import run_performance_report_safely
+from sell_signals import SellDecision, SellReason, evaluate_sell_decisions, select_current_price
+from stock_analysis import UsaStockFinder
+from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
+from stop_loss_cooldown import is_in_cooldown
+from telegram_utils import build_daily_report_message, build_performance_summary_message, send_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -624,11 +623,13 @@ def build_buy_funnel_lines(stage_counts: dict[str, Any]) -> list[str]:
 
 
 def log_buy_funnel(stage_counts: dict[str, Any]) -> list[str]:
-    """Log and return buy-funnel lines for telegram/reporting."""
+    """Log and return buy-funnel diagnostics for operational reporting."""
     lines = build_buy_funnel_lines(stage_counts)
     for line in lines:
         logger.info(line)
     return lines
+
+
 def generate_telegram_message(
     prev_items: list[str],
     buy_items: list[str],
@@ -638,7 +639,7 @@ def generate_telegram_message(
     sell_decisions: dict[str, SellDecision] | None = None,
     finder: UsaStockFinder | None = None,
     entry_symbol_set: set[str] | None = None,
-    buy_funnel_lines: list[str] | None = None,
+    buy_funnel_lines: list[str] | None = None,  # pylint: disable=unused-argument
 ) -> list[str] | None:
     """
     Generate a Telegram message with buy and sell recommendations.
@@ -657,6 +658,8 @@ def generate_telegram_message(
         sell_quantities (dict[str, dict[str, Any]] | None): Dictionary containing share
             quantity information for sell signals
         sell_decisions (dict[str, SellDecision] | None): Dictionary of sell decisions with reasons
+        buy_funnel_lines (list[str] | None): Legacy argument, ignored. Funnel diagnostics
+            are recorded separately by log_buy_funnel().
 
     Returns:
         list[str] | None: A list of strings containing the date and buy/sell recommendations
@@ -736,11 +739,6 @@ def generate_telegram_message(
     if stale_holdings:
         message.append("\n🧾 보유 유지:")
         message.append(_format_stale_holdings_line(stale_holdings))
-        has_changes = True
-
-    if buy_funnel_lines:
-        message.append("")
-        message.extend(buy_funnel_lines)
         has_changes = True
 
     if has_changes:
@@ -1765,8 +1763,9 @@ def main() -> None:
     3. Loads holdings and candidate symbols, then computes buy/hold candidates
     4. Evaluates sell decisions and estimates sell proceeds
     5. Calculates buy sizing (investment map/share quantities)
-    6. Sends Telegram notifications when there are portfolio changes
+    6. Formats actionable Telegram trade notifications
     7. Saves the final symbol state to `data/data.json`
+    8. Sends actionable daily reports before optional performance reporting
 
     Note:
         - Requires environment variables for Telegram API and account information
@@ -1839,7 +1838,7 @@ def main() -> None:
         current_holdings_detail=current_holdings_detail,
     )
     funnel_stage_counts["final_buy_candidates"] = len(buy_items)
-    buy_funnel_lines = log_buy_funnel(funnel_stage_counts)
+    log_buy_funnel(funnel_stage_counts)
     buy_candidate_records = _build_buy_candidate_records(
         buy_items, getattr(finder, "source_pool_by_symbol", None)
     )
@@ -1855,25 +1854,7 @@ def main() -> None:
         sell_decisions,
         finder,
         entry_symbol_set,
-        buy_funnel_lines=buy_funnel_lines,
     )
-
-    if telegram_message:
-        bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
-        chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
-
-        if bot_token and chat_id:
-            asyncio.run(
-                send_telegram_message(
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    message="\n".join(telegram_message),
-                )
-            )
-            logger.debug(telegram_message)
-        else:
-            logger.error("Missing Telegram API credentials")
-
 
     sell_reason_map = {symbol: decision.reason.value for symbol, decision in sell_decisions.items()}
     trade_signal_rows = []
@@ -1916,9 +1897,45 @@ def main() -> None:
         logger.warning("Failed to append account snapshots CSV: %s", str(exc))
 
     final_items = update_final_items(us_stock_holdings, buy_items, not_sell_items, sell_decisions)
-    save_json(final_items, "data/data.json")
-    report_attempted = run_performance_report_safely()
-    _send_performance_report_telegram_if_enabled(report_attempted)
+    daily_message = build_daily_report_message(
+        report_date=str(date.today()),
+        final_buy_candidates=funnel_stage_counts["final_buy_candidates"],
+        trade_lines=telegram_message,
+    )
+    try:
+        save_json(final_items, "data/data.json")
+    except OSError as exc:
+        # A full or read-only filesystem must not hide already-computed trades.
+        # Preserve the previous failure semantics once their alert was attempted.
+        logger.error(
+            "Failed to persist final symbol state to data/data.json; "
+            "sending the daily trade alert before aborting: %s",
+            str(exc),
+        )
+        _send_daily_report(daily_message)
+        raise
+
+    if telegram_message:
+        # Report generation downloads benchmark data and writes artifacts. It is
+        # optional, so never put it on the actionable-trade delivery path.
+        _send_daily_report(daily_message)
+        _run_performance_report_after_trade_alert()
+    else:
+        performance_message = None
+        try:
+            report_generated = run_performance_report_safely()
+            performance_message = _load_performance_summary_if_enabled(report_generated)
+        except Exception as exc:  # optional reporting must never suppress daily reports
+            logger.warning("Performance report notification preparation failed (continuing main flow): %s", str(exc))
+
+        daily_message = build_daily_report_message(
+            report_date=str(date.today()),
+            final_buy_candidates=funnel_stage_counts["final_buy_candidates"],
+            trade_lines=telegram_message,
+            performance_message=performance_message,
+        )
+        _send_daily_report(daily_message)
+
     _log_execution_summary(
         prev_items=us_stock_holdings,
         buy_items=buy_items,
@@ -1931,17 +1948,43 @@ def main() -> None:
     )
 
 
-def _send_performance_report_telegram_if_enabled(report_generated: bool) -> None:
+def _send_daily_report(daily_message: str) -> None:
+    """Send exactly one already-composed daily Telegram report."""
+    bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
+    chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
+    if bot_token and chat_id:
+        try:
+            asyncio.run(send_telegram_message(bot_token=bot_token, chat_id=chat_id, message=daily_message))
+        except Exception as exc:
+            logger.warning("Daily Telegram notification failed: %s", str(exc))
+            raise
+        logger.debug(daily_message)
+    else:
+        logger.error("Missing Telegram API credentials")
+
+
+def _run_performance_report_after_trade_alert() -> None:
+    """Deliver a metrics-only follow-up after the actionable trade report."""
+    try:
+        performance_message = _load_performance_summary_if_enabled(run_performance_report_safely())
+        if performance_message:
+            _send_daily_report(performance_message)
+    except Exception as exc:  # optional reporting must never suppress a sent trade alert
+        logger.warning("Performance report notification preparation failed (continuing main flow): %s", str(exc))
+
+
+def _load_performance_summary_if_enabled(report_generated: bool) -> str | None:
+    """Read only this run's optional performance section; daily trades are independent."""
     if os.getenv("PERFORMANCE_REPORT_TELEGRAM_ENABLED", "false").strip().lower() != "true":
-        return
+        return None
     if not report_generated:
         logger.info("Performance Telegram notification skipped because report generation did not succeed.")
-        return
+        return None
 
     report_url = os.getenv("PERFORMANCE_REPORT_URL", "").strip()
     if not report_url:
         logger.warning("Performance Telegram notification skipped: PERFORMANCE_REPORT_URL is not configured.")
-        return
+        return None
 
     summary_path = os.path.join(
         os.getenv("PERFORMANCE_REPORT_OUTPUT_DIR", "outputs/performance"),
@@ -1954,19 +1997,9 @@ def _send_performance_report_telegram_if_enabled(report_generated: bool) -> None
             raise ValueError("summary payload is not an object")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("Performance Telegram notification skipped: invalid summary file (%s).", str(exc))
-        return
+        return None
 
-    bot_token = EnvironmentConfig.get("TELEGRAM_BOT_TOKEN")
-    chat_id = EnvironmentConfig.get("TELEGRAM_CHAT_ID")
-    if not bot_token or not chat_id:
-        logger.warning("Performance Telegram notification skipped: missing Telegram credentials.")
-        return
-
-    message = build_performance_summary_message(summary, report_url)
-    try:
-        asyncio.run(send_telegram_message(bot_token=bot_token, chat_id=chat_id, message=message))
-    except Exception as exc:  # pragma: no cover - defensive runtime protection
-        logger.warning("Performance Telegram notification failed: %s", str(exc))
+    return build_performance_summary_message(summary, report_url)
 
 
 if __name__ == "__main__":
