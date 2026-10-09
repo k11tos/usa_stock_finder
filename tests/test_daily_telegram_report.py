@@ -154,20 +154,32 @@ def sent_message(daily_run):
     return daily_run["bot"].sendMessage.call_args.kwargs["text"]
 
 
-def test_successful_daily_run_combines_metrics_candidates_and_trades(daily_run, caplog):
+def sent_messages(daily_run):
+    return [call.kwargs["text"] for call in daily_run["bot"].sendMessage.call_args_list]
+
+
+def test_trade_day_sends_immediate_trade_alert_then_performance_follow_up(daily_run, caplog):
     with caplog.at_level(logging.INFO, logger="main"):
         main.main()
-    message = sent_message(daily_run)
-    assert message.startswith("usa_stock_finder 일일 리포트\n2026-08-26\n\n매수 현황")
+    trade_message, performance_message = sent_messages(daily_run)
+    assert daily_run["bot"].sendMessage.await_count == 2
+    assert trade_message.startswith("usa_stock_finder 일일 리포트\n2026-08-26\n\n매수 현황")
     # Two screened candidates, even though only one has an executable sized buy.
-    assert "최종 매수 후보: 2종목" in message
+    assert "최종 매수 후보: 2종목" in trade_message
     assert len(daily_run["shares"]) == 1
-    assert_trade_details(message)
+    assert_trade_details(trade_message)
     # Actionable details are delivered before optional benchmark/report work.
-    assert "전략 성과" not in message
-    assert message.count("2026-08-26") == 1
-    assert len(message) < 4096
-    assert "[Buy Funnel]" not in message
+    assert "전략 성과" not in trade_message
+    assert trade_message.count("2026-08-26") == 1
+    assert len(trade_message) < 4096
+    assert "[Buy Funnel]" not in trade_message
+    assert "전략 성과 (2026-05-26 ~ 2026-08-26)" in performance_message
+    assert "SPY: +4.10%" in performance_message
+    assert "IWM: -3.30%" in performance_message
+    assert "상세: https://reports.example/latest/" in performance_message
+    assert "최종 매수 후보" not in performance_message
+    for detail in ("신규 매수: MOMO", "매도 (절대 손절): TSLA", "B-Plan 유지"):
+        assert detail not in performance_message
     for line in main.build_buy_funnel_lines(daily_run["stages"]):
         assert line in caplog.messages
     assert daily_run["stages"]["event_quarantine_excluded_symbol_list"] == "EVENT"
@@ -222,9 +234,10 @@ def test_csv_persistence_failures_do_not_suppress_trade_alerts(
     with caplog.at_level(logging.WARNING, logger="main"):
         main.main()
 
-    assert_trade_details(sent_message(daily_run))
+    assert_trade_details(sent_messages(daily_run)[0])
     assert expected_log in caplog.text
     daily_run["builder"].assert_called_once()
+    assert daily_run["bot"].sendMessage.await_count == 2
 
 
 def test_unexpected_json_persistence_error_is_not_converted_into_success(daily_run, caplog):
@@ -241,7 +254,7 @@ def test_unexpected_json_persistence_error_is_not_converted_into_success(daily_r
 @pytest.mark.parametrize(
     "failure",
     [
-        "disabled", "telegram_disabled", "builder_error", "unexpected_error",
+        "disabled", "telegram_disabled", "builder_error", "missing_url", "missing_summary", "malformed_summary", "unexpected_error",
     ],
 )
 def test_optional_performance_failures_never_suppress_trade_alerts(daily_run, monkeypatch, caplog, failure):
@@ -256,6 +269,13 @@ def test_optional_performance_failures_never_suppress_trade_alerts(daily_run, mo
         daily_run["builder"].side_effect = RuntimeError("builder failed")
     elif failure == "missing_url":
         monkeypatch.setenv("PERFORMANCE_REPORT_URL", "")
+    elif failure == "missing_summary":
+        daily_run["builder"].side_effect = lambda _args: None
+    elif failure == "malformed_summary":
+        daily_run["builder"].side_effect = lambda _args: (
+            daily_run["summary_path"].parent.mkdir(exist_ok=True),
+            daily_run["summary_path"].write_text("not-json", encoding="utf-8"),
+        )
     elif failure == "unexpected_error":
         monkeypatch.setattr(main, "run_performance_report_safely", MagicMock(side_effect=RuntimeError("unexpected")))
     with caplog.at_level(logging.INFO):
@@ -265,6 +285,7 @@ def test_optional_performance_failures_never_suppress_trade_alerts(daily_run, mo
     assert_trade_details(message)
     assert "전략 성과" not in message
     assert "전략: +7.20%" not in message
+    assert daily_run["bot"].sendMessage.await_count == 1
     if failure == "builder_error":
         assert "Performance report generation failed" in caplog.text
     elif failure == "unexpected_error":
@@ -299,7 +320,7 @@ def test_all_excluded_symbols_remain_in_diagnostic_logs(daily_run, caplog):
     daily_run["prepare"].return_value = finder, candidates, [], set(candidates), stages
     with caplog.at_level(logging.INFO, logger="main"):
         main.main()
-    message = sent_message(daily_run)
+    message = sent_messages(daily_run)[0]
     assert "최종 매수 후보: 2종목" in message
     assert stages["event_quarantine_excluded_symbol_list"] == ", ".join(event_symbols)
     assert stages["special_situation_excluded_symbol_list"] == ", ".join(special_symbols)
