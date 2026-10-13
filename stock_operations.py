@@ -24,11 +24,17 @@ Main Functions:
 """
 
 import logging
+import math
 import os
+import pickle
+import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import jmespath
 import mojito
+import requests
 from dotenv import load_dotenv
 
 from config import APIConfig
@@ -126,12 +132,36 @@ def fetch_us_stock_holdings():
     raise APIError(error_msg)
 
 
-def _get_broker(exchange: str) -> mojito.KoreaInvestment:
+class _EquityBroker(mojito.KoreaInvestment):
+    """Retain Mojito's token cache/configuration with bounded token issuance."""
+
+    def issue_access_token(self):
+        # Mojito 0.1.6 provides no timeout/transport hook for this request.
+        response = requests.post(
+            f"{self.base_url}/oauth2/tokenP",
+            headers={"content-type": "application/json"},
+            json={"grant_type": "client_credentials", "appkey": self.api_key, "appsecret": self.api_secret},
+            timeout=(5, 10),
+        )
+        response.raise_for_status()
+        data = response.json()
+        self.access_token = f'Bearer {data["access_token"]}'
+        data.update({
+            "timestamp": int(datetime.now().timestamp()) + data["expires_in"],
+            "api_key": self.api_key,
+            "api_secret": self.api_secret,
+        })
+        with open("token.dat", "wb") as token_file:
+            pickle.dump(data, token_file)
+
+
+def _get_broker(exchange: str, *, broker_class=None) -> mojito.KoreaInvestment:
     """
     Create and return a KoreaInvestment broker instance for the given exchange.
 
     Args:
         exchange (str): Stock exchange name ("나스닥" for NASDAQ, "뉴욕" for NYSE)
+        broker_class: Optional Mojito subclass; existing callers use Mojito unchanged.
 
     Returns:
         mojito.KoreaInvestment: Broker instance
@@ -141,12 +171,110 @@ def _get_broker(exchange: str) -> mojito.KoreaInvestment:
         - Uses credentials from environment variables
     """
     load_dotenv()
-    return mojito.KoreaInvestment(
+    broker_class = broker_class or mojito.KoreaInvestment
+    return broker_class(
         api_key=os.getenv("ki_app_key"),
         api_secret=os.getenv("ki_app_secret_key"),
         acc_no=os.getenv("account_number"),
         exchange=exchange,
     )
+
+
+def _parse_equity_amount(value: Any, field: str) -> float:
+    """Parse a required finite KIS amount without substituting missing data."""
+    error = f"Invalid overseas equity field: {field}"
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise APIError(error)
+    if isinstance(value, str):
+        value = value.strip()
+        if "," in value and not re.fullmatch(r"[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?", value):
+            raise APIError(error)
+        value = value.replace(",", "")
+    try:
+        amount = float(value)
+    except (ValueError, OverflowError):
+        raise APIError(error) from None
+    if not math.isfinite(amount):
+        raise APIError(error)
+    return amount
+
+
+def fetch_overseas_portfolio_equity() -> dict[str, Any]:
+    """Read the confirmed US/all-market KIS total assets in KRW.
+
+    Reuses Mojito authentication/account configuration; balance and token
+    requests have 5-second connect and 10-second read timeouts. Authentication
+    retains Mojito's token-cache format. Transport/HTTP/API failures
+    use APIConfig.MAX_RETRIES; malformed successful responses fail immediately.
+
+    All six output3 amounts must be present and finite. A reported zero total
+    is valid; negative totals fail. No accounting identity is assumed. Metadata
+    contains only the non-sensitive query parameters, never account identifiers.
+    Raises APIError with sanitized diagnostics on failure.
+    """
+    endpoint = "/uapi/overseas-stock/v1/trading/inquire-present-balance"
+    query_parameters = {
+        "WCRC_FRCR_DVSN_CD": "01",
+        "NATN_CD": "840",
+        "TR_MKET_CD": "00",
+        "INQR_DVSN_CD": "00",
+    }
+    balance = None
+    for attempt in range(APIConfig.MAX_RETRIES):
+        try:
+            broker = _get_broker("나스닥", broker_class=_EquityBroker)
+            response = requests.get(
+                f"{broker.base_url}{endpoint}",
+                headers={
+                    "content-type": "application/json",
+                    "authorization": broker.access_token,
+                    "appKey": broker.api_key,
+                    "appSecret": broker.api_secret,
+                    "tr_id": "CTRP6504R",
+                },
+                params={
+                    "CANO": broker.acc_no_prefix,
+                    "ACNT_PRDT_CD": broker.acc_no_postfix,
+                    **query_parameters,
+                },
+                timeout=(5, 10),
+            )
+            response.raise_for_status()
+            balance = response.json()
+        except Exception:  # Includes existing Mojito authentication failures.
+            # Request exceptions can contain account URLs or token payloads.
+            logger.warning("Overseas equity request failed (attempt %d/%d)", attempt + 1, APIConfig.MAX_RETRIES)
+            continue
+        if not isinstance(balance, dict):
+            raise APIError("Invalid overseas equity response shape")
+        if balance.get("rt_cd") == "0":
+            break
+        logger.warning("Overseas equity API unsuccessful (attempt %d/%d)", attempt + 1, APIConfig.MAX_RETRIES)
+    else:
+        raise APIError("Failed to fetch overseas portfolio equity after configured attempts") from None
+
+    aggregate = balance.get("output3")
+    if isinstance(aggregate, list) and len(aggregate) == 1:
+        aggregate = aggregate[0]
+    if not isinstance(aggregate, dict) or not aggregate:
+        raise APIError("Invalid or missing overseas equity output3")
+    fields = {
+        "total_asset_krw": "tot_asst_amt",
+        "stock_evaluation_krw": "evlu_amt_smtl_amt",
+        "cash_krw": "tot_dncl_amt",
+        "foreign_cash_krw": "frcr_evlu_tota",
+        "unsettled_buy_krw": "ustl_buy_amt_smtl",
+        "unsettled_sell_krw": "ustl_sll_amt_smtl",
+    }
+    result = {name: _parse_equity_amount(aggregate.get(field), field) for name, field in fields.items()}
+    if result["total_asset_krw"] < 0:
+        raise APIError("Negative overseas equity total assets")
+    result.update({
+        "fetched_at_kst": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+        "source": {"provider": "KIS", "endpoint": endpoint, "tr_id": "CTRP6504R"},
+        "query_parameters": query_parameters,
+    })
+    return result
 
 
 def fetch_account_balance() -> dict[str, Any] | None:
