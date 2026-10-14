@@ -59,12 +59,20 @@ with an invalid record. Superseded, duplicate and rejected input remains in the
 original diagnostic CSV. Invalid records are described with row numbers and
 sanitized warnings rather than private raw values.
 
+Filesystem failures while checking, opening, locking or reading the snapshot
+produce an empty diagnostic with a sanitized unavailable-input warning. An
+original-input artifact is published only when bytes were captured successfully;
+otherwise stale copies and links are removed from refreshed bundles. Invalid
+UTF-8 is rejected as a whole, with its original bytes retained unchanged.
+
 Diagnostics flag missing **calendar dates**, including requested period
 boundaries; they do not assume a US trading calendar or fill weekends. Latest
 selected observations older than three calendar days are flagged stale but
 retained. Timestamp/date mismatch is rejected as stale. Absolute changes of
 at least 10% between selected observations are flagged as discontinuities and
 retained unchanged. These thresholds are diagnostic policies, not trading rules.
+The 10% comparison uses exact fractions of the selected floats' decimal
+representations, matching Stage 2's persisted format without a widened tolerance.
 
 ## Outputs and publishing
 
@@ -74,7 +82,7 @@ available. `PERFORMANCE_REPORT_URL` and hosting are unchanged. KRW bundles conta
 - `equity_curve.csv`: selected account observations in raw KRW, including run ID,
   date, timestamp and source. This CSV is not a normalized return curve.
 - `broker_equity_observations.csv`: original input CSV, including all dates,
-  superseded and rejected records; it is not a validated equity curve.
+  superseded and rejected records, when available; it is not a validated equity curve.
 - `charts/raw_equity_krw.png`: selected raw KRW equity for diagnosis, preserving
   spikes without smoothing, interpolation or currency conversion.
 - `performance_summary.json`: source/currency metadata,

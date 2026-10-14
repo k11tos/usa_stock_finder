@@ -566,7 +566,17 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None
         loaded.warnings.append("No valid broker KRW observations found for the selected period.")
     daily.to_csv(output_dir / "equity_curve.csv", index=False, index_label="date")
     # Includes invalid, superseded and duplicate records for diagnosis; never rewrite the source.
-    (output_dir / "broker_equity_observations.csv").write_bytes(loaded.original_csv_bytes)
+    original_path = output_dir / "broker_equity_observations.csv"
+    if loaded.original_csv_bytes is None:
+        original_path.unlink(missing_ok=True)
+        original_description = "Original snapshot input unavailable; no original-input artifact was retained."
+        original_link = "Original snapshot input unavailable"
+    else:
+        original_path.write_bytes(loaded.original_csv_bytes)
+        original_description = (
+            "Original records, including rejected and superseded rows, are preserved in broker_equity_observations.csv."
+        )
+        original_link = '<a href="broker_equity_observations.csv">Original observations (includes rejected records)</a>'
     summary = {
         "data_source": "broker_krw",
         "valuation_currency": "KRW",
@@ -612,7 +622,7 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None
         "- Max drawdown: N/A", "- Annualized volatility: N/A", "- Benchmark / excess returns: N/A",
         "", KRW_RETURN_CAVEAT, "", "## Raw Equity", "",
         f"![Raw broker equity in KRW](charts/{RAW_KRW_CHART})", "",
-        "Original records, including rejected and superseded rows, are preserved in broker_equity_observations.csv.",
+        original_description,
         "No interpolation, smoothing, currency conversion or spike removal is performed.",
         "", "## Data Quality Warnings", "", *(f"- {warning}" for warning in warnings),
     ]
@@ -629,7 +639,7 @@ Annualized volatility: N/A · Benchmark / excess returns: N/A</p>
 <figure><img src="charts/{RAW_KRW_CHART}" alt="Raw broker equity in KRW" style="max-width:100%;height:auto"></figure>
 <p>No interpolation, smoothing, currency conversion or spike removal is performed.</p>
 <p><a href="equity_curve.csv">Selected observations</a> ·
-<a href="broker_equity_observations.csv">Original observations (includes rejected records)</a></p>
+{original_link}</p>
 <h2>Data Quality Warnings</h2><ul>{warning_html}</ul></body></html>'''
     (output_dir / "index.html").write_text(html, encoding="utf-8")
     _publish_report_bundles(output_dir, args)

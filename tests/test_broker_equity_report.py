@@ -7,7 +7,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, mock_open
 
 import pandas as pd
 import pytest
@@ -112,6 +112,73 @@ def test_valid_snapshot_corrupted_with_invalid_utf8_selects_nothing(broker_path)
     assert any("Invalid UTF-8" in warning for warning in result.warnings)
 
 
+@pytest.fixture
+def fail_snapshot_read():
+    """Inject failures only at the input boundary, leaving report output usable."""
+    def fail(stage, patcher):
+        path = MagicMock(wraps=broker_equity.BROKER_EQUITY_PATH)
+        error = OSError("private/account/path and sensitive contents")
+        if stage in {"exists", "stat"}:
+            getattr(path, stage).side_effect = error
+        elif stage in {"open", "permission", "disappeared"}:
+            errors = {"open": error, "permission": PermissionError(str(error)),
+                      "disappeared": FileNotFoundError(str(error))}
+            path.open.side_effect = errors[stage]
+        elif stage == "lock":
+            patcher.setattr(broker_equity.fcntl, "flock", MagicMock(side_effect=error))
+        elif stage == "read":
+            opener = mock_open(read_data=b"")
+            opener.return_value.read.side_effect = error
+            path.open = opener
+            patcher.setattr(broker_equity.fcntl, "flock", MagicMock())
+        else:
+            raise AssertionError("Unknown failure stage")
+        patcher.setattr(broker_equity, "BROKER_EQUITY_PATH", path)
+        return path
+    return fail
+
+
+@pytest.mark.parametrize("stage", ["exists", "stat", "open", "permission", "disappeared", "lock", "read"])
+def test_snapshot_filesystem_failure_is_sanitized_and_recovers(broker_path, monkeypatch, fail_snapshot_read, stage):
+    write_records(broker_path, [record()])
+    original = broker_path.read_bytes()
+    with monkeypatch.context() as scoped:
+        path = fail_snapshot_read(stage, scoped)
+        result = load_broker_equity(as_of=AS_OF)
+        assert result.daily.empty
+        assert result.original_csv == "" and result.original_csv_bytes is None
+        assert result.warnings == [
+            "Broker KRW snapshot CSV is unavailable or unreadable; no fallback source used."]
+        if stage == "read":
+            path.open.assert_called_once_with("rb")
+            broker_equity.fcntl.flock.assert_called_once_with(path.open.return_value, broker_equity.fcntl.LOCK_SH)
+
+    recovered = load_broker_equity(as_of=AS_OF)
+    assert recovered.daily["total_asset_krw"].tolist() == [1000000.0]
+    assert recovered.original_csv_bytes == original == broker_path.read_bytes()
+
+
+def test_snapshot_programming_errors_propagate(broker_path, monkeypatch):
+    write_records(broker_path, [record()])
+    path = MagicMock(wraps=broker_equity.BROKER_EQUITY_PATH)
+    path.open.side_effect = RuntimeError("programming error")
+    monkeypatch.setattr(broker_equity, "BROKER_EQUITY_PATH", path)
+    with pytest.raises(RuntimeError, match="programming error"):
+        load_broker_equity(as_of=AS_OF)
+
+
+@pytest.mark.parametrize("boundary", ["output", "publication"])
+def test_report_filesystem_errors_propagate(broker_path, tmp_path, monkeypatch, boundary):
+    write_records(broker_path, [record()])
+    failure = MagicMock(side_effect=OSError("output failure"))
+    if boundary == "output":
+        monkeypatch.setattr(Path, "write_bytes", failure)
+    else:
+        monkeypatch.setattr(performance_report.shutil, "copy2", failure)
+    with pytest.raises(OSError, match="output failure"):
+        performance_report.build_report(report_args(tmp_path))
+
+
 def test_duplicate_run_ids_and_conflicts_are_reported(broker_path):
     row = record()
     write_records(broker_path, [row, row, record("2026-01-02")])
@@ -194,16 +261,20 @@ def test_staleness_threshold(broker_path, age, stale):
     assert any("Stale observations" in warning for warning in warnings) == stale
 
 
-@pytest.mark.parametrize(("equity", "expected_warning"), [
-    ("900000", True), ("1100000", True), ("900001", False), ("1099999", False),
-    ("899999", True), ("1100001", True),
+@pytest.mark.parametrize(("previous", "equity", "expected_warning"), [
+    ("1000000", "900000", True), ("1000000", "1100000", True),
+    ("1000000", "900001", False), ("1000000", "1099999", False),
+    ("1000000", "899999", True), ("1000000", "1100001", True),
+    ("100.1", "90.09", True), ("100.1", "110.11", True),
+    ("100.1", "90.09000000000002", False), ("100.1", "110.10999999999999", False),
+    ("100.1", "90.08", True), ("100.1", "110.12", True),
 ])
-def test_discontinuity_threshold_uses_raw_amount_boundary(broker_path, equity, expected_warning):
-    write_records(broker_path, [record("2026-01-01", "1000000"), record("2026-01-02", equity)])
+def test_discontinuity_threshold_uses_raw_amount_boundary(broker_path, previous, equity, expected_warning):
+    write_records(broker_path, [record("2026-01-01", previous), record("2026-01-02", equity)])
 
     result = load_broker_equity(as_of=AS_OF)
 
-    assert result.daily["total_asset_krw"].tolist() == [1000000.0, float(equity)]
+    assert result.daily["total_asset_krw"].tolist() == [float(previous), float(equity)]
     assert any("raw equity discontinuity" in warning for warning in result.warnings) is expected_warning
 
 
@@ -298,7 +369,9 @@ def test_no_valid_krw_data_never_falls_back(broker_path, tmp_path, monkeypatch, 
     assert pd.read_csv(Path(args.output) / "equity_curve.csv").empty
 
 
-def test_invalid_utf8_publishes_empty_krw_latest_and_history(broker_path, tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["utf8", "filesystem"])
+def test_unusable_input_publishes_empty_krw_latest_and_history(
+        broker_path, tmp_path, monkeypatch, fail_snapshot_read, failure):
     write_records(broker_path, [record(), record("2026-01-02", "1100000")])
     for path, content in [
         (broker_path.with_name("account_snapshots.csv"), "run_date,total_equity_usd\n2026-01-01,999\n"),
@@ -316,9 +389,14 @@ def test_invalid_utf8_publishes_empty_krw_latest_and_history(broker_path, tmp_pa
     performance_report.build_report(args)
     assert json.loads((Path(args.output) / "latest/performance_summary.json").read_text())["num_days"] == 2
 
-    corrupted = broker_path.read_bytes() + b"\xff"
-    broker_path.write_bytes(corrupted)
-    performance_report.build_report(args)
+    original = broker_path.read_bytes()
+    corrupted = original + b"\xff"
+    with monkeypatch.context() as scoped:
+        if failure == "utf8":
+            broker_path.write_bytes(corrupted)
+        else:
+            fail_snapshot_read("permission", scoped)
+        performance_report.build_report(args)
 
     output = Path(args.output)
     for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
@@ -333,12 +411,26 @@ def test_invalid_utf8_publishes_empty_krw_latest_and_history(broker_path, tmp_pa
         assert summary["annualized_volatility_pct"] is None
         assert summary["cumulative_return_SPY_pct"] is None
         assert summary["excess_return_vs_SPY"] is None
-        assert any("Invalid UTF-8" in warning for warning in summary["data_quality_warnings"])
+        expected_warning = "Invalid UTF-8" if failure == "utf8" else "unavailable or unreadable"
+        assert any(expected_warning in warning for warning in summary["data_quality_warnings"])
         assert pd.read_csv(bundle / "equity_curve.csv").empty
-        assert (bundle / "broker_equity_observations.csv").read_bytes() == corrupted
+        artifact = bundle / "broker_equity_observations.csv"
+        if failure == "utf8":
+            assert artifact.read_bytes() == corrupted
+        else:
+            assert not artifact.exists()
+            assert 'href="broker_equity_observations.csv"' not in (bundle / "index.html").read_text()
         report = (bundle / "performance_report.md").read_text()
         assert "Investment returns: N/A" in report
-        assert "Invalid UTF-8" in report
+        assert expected_warning in report
+        if failure == "filesystem":
+            assert "Original snapshot input unavailable" in report
+            assert "are preserved in broker_equity_observations.csv" not in report
+
+    if failure == "filesystem":
+        performance_report.build_report(args)
+        assert (output / "latest/broker_equity_observations.csv").read_bytes() == original
+        assert json.loads((output / "latest/performance_summary.json").read_text())["num_days"] == 2
 
 
 def test_mode_switch_replaces_old_artifacts_without_stale_returns(broker_path, tmp_path, monkeypatch):
