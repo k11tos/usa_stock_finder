@@ -73,14 +73,17 @@ def _validate_record(row: dict, as_of: datetime) -> None:
 def _diagnose_dates(daily: pd.DataFrame, start_date: str | None, end_date: str | None,
                     as_of: datetime) -> list[str]:
     warnings = []
-    if daily.empty:
+    if daily.empty and not (start_date and end_date):
         return warnings
-    first, last = daily["run_date"].iloc[0], daily["run_date"].iloc[-1]
+    first = daily["run_date"].iloc[0] if not daily.empty else None
+    last = daily["run_date"].iloc[-1] if not daily.empty else None
     expected = pd.date_range(start_date or first, end_date or last, freq="D")
     missing = expected.difference(pd.DatetimeIndex(daily["run_date"]))
     if len(missing):
         warnings.append("Missing calendar observation dates (no interpolation): " +
                         ", ".join(missing.strftime("%Y-%m-%d")))
+    if daily.empty:
+        return warnings
     age = (as_of.astimezone(KST).date() - last.date()).days
     if age > STALE_AFTER_DAYS:
         warnings.append(f"Stale observations: latest selected observation is {age} calendar days old "

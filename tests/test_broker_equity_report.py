@@ -105,11 +105,12 @@ def test_valid_snapshot_corrupted_with_invalid_utf8_selects_nothing(broker_path)
     original = valid_snapshot.read_bytes() + b"\xff"
     broker_path.write_bytes(original)
 
-    result = load_broker_equity(as_of=AS_OF)
+    result = load_broker_equity("2026-01-02", "2026-01-04", as_of=AS_OF)
 
     assert result.daily.empty
     assert result.original_csv_bytes == original
     assert any("Invalid UTF-8" in warning for warning in result.warnings)
+    assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
 
 
 @pytest.fixture
@@ -144,11 +145,12 @@ def test_snapshot_filesystem_failure_is_sanitized_and_recovers(broker_path, monk
     original = broker_path.read_bytes()
     with monkeypatch.context() as scoped:
         path = fail_snapshot_read(stage, scoped)
-        result = load_broker_equity(as_of=AS_OF)
+        result = load_broker_equity("2026-01-02", "2026-01-04", as_of=AS_OF)
         assert result.daily.empty
         assert result.original_csv == "" and result.original_csv_bytes is None
         assert result.warnings == [
             "Broker KRW snapshot CSV is unavailable or unreadable; no fallback source used."]
+        assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
         if stage == "read":
             path.open.assert_called_once_with("rb")
             broker_equity.fcntl.flock.assert_called_once_with(path.open.return_value, broker_equity.fcntl.LOCK_SH)
@@ -293,9 +295,10 @@ def test_malformed_records_preserve_input_and_warn(broker_path, suffix):
 
 def test_wrong_header_fails_closed(broker_path):
     broker_path.write_text("run_id,run_date,total_equity_usd,broker_total_asset_krw\nrun,2026-01-01,10,1000\n")
-    result = load_broker_equity(as_of=AS_OF)
+    result = load_broker_equity("2026-01-02", "2026-01-04", as_of=AS_OF)
     assert result.daily.empty
     assert any("header" in warning for warning in result.warnings)
+    assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
 
 
 def test_period_filter_missing_boundaries_and_no_interpolation(broker_path):
@@ -304,6 +307,62 @@ def test_period_filter_missing_boundaries_and_no_interpolation(broker_path):
     assert result.daily["run_date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-01-03"]
     assert any("2026-01-02, 2026-01-04" in warning for warning in result.warnings)
     assert "2026-01-05" in result.original_csv
+
+
+def test_empty_selected_period_reports_all_requested_dates_and_preserves_input(broker_path):
+    write_records(broker_path, [record("2026-01-01"), record("2026-01-05")])
+    original = broker_path.read_bytes()
+
+    result = load_broker_equity("2026-01-02", "2026-01-04", as_of=AS_OF)
+
+    assert result.daily.empty
+    assert any("2026-01-02, 2026-01-03, 2026-01-04" in warning
+               for warning in result.warnings)
+    assert result.original_csv_bytes == original == broker_path.read_bytes()
+
+
+@pytest.mark.parametrize(("start_date", "end_date", "rows", "missing"), [
+    ("2026-01-02", "2026-01-04", [record("2026-01-03"), record("2026-01-04")], "2026-01-02"),
+    ("2026-01-01", "2026-01-03", [record("2026-01-01"), record("2026-01-02")], "2026-01-03"),
+])
+def test_only_missing_requested_boundary_is_reported(broker_path, start_date, end_date, rows, missing):
+    write_records(broker_path, rows)
+
+    result = load_broker_equity(start_date, end_date, as_of=AS_OF)
+
+    assert len(result.daily) == len(rows)
+    assert any(f"Missing calendar observation dates (no interpolation): {missing}" == warning
+               for warning in result.warnings)
+
+
+def test_requested_interval_keeps_observations_and_reports_internal_and_end_gaps(broker_path):
+    write_records(broker_path, [record("2026-01-01"), record("2026-01-03"), record("2026-01-05")])
+
+    result = load_broker_equity("2026-01-01", "2026-01-06", as_of=AS_OF)
+
+    assert result.daily["run_date"].dt.strftime("%Y-%m-%d").tolist() == [
+        "2026-01-01", "2026-01-03", "2026-01-05",
+    ]
+    assert any("2026-01-02, 2026-01-04, 2026-01-06" in warning for warning in result.warnings)
+
+
+def test_all_requested_dates_present_have_no_missing_date_warning(broker_path):
+    write_records(broker_path, [record(f"2026-01-0{day}") for day in range(1, 4)])
+
+    result = load_broker_equity("2026-01-01", "2026-01-03", as_of=AS_OF)
+
+    assert len(result.daily) == 3
+    assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
+
+
+def test_default_date_range_remains_bounded_by_selected_observations(broker_path):
+    write_records(broker_path, [record("2026-01-01"), record("2026-01-03")])
+
+    result = load_broker_equity(as_of=AS_OF)
+
+    assert len(result.daily) == 2
+    assert any("2026-01-02" in warning for warning in result.warnings)
+    assert not any("2026-01-04" in warning for warning in result.warnings)
 
 
 def test_krw_report_source_isolation_publication_and_raw_chart(broker_path, tmp_path, monkeypatch):
@@ -361,12 +420,45 @@ def test_no_valid_krw_data_never_falls_back(broker_path, tmp_path, monkeypatch, 
     broker_path.with_name("account_snapshots.csv").write_text("run_date,total_equity_usd\n2026-01-01,123\n")
     monkeypatch.setattr(performance_report, "fetch_benchmark_prices", MagicMock(side_effect=AssertionError))
     args = report_args(tmp_path)
+    args.start_date, args.end_date = "2026-01-02", "2026-01-04"
     performance_report.build_report(args)
     summary = json.loads((Path(args.output) / "latest/performance_summary.json").read_text())
     assert summary["num_days"] == 0 and summary["latest_equity_krw"] is None
     assert summary["cumulative_return_pct"] is None
     assert any("No valid broker KRW" in warning for warning in summary["data_quality_warnings"])
+    assert not any("Missing calendar observation dates" in warning
+                   for warning in summary["data_quality_warnings"])
     assert pd.read_csv(Path(args.output) / "equity_curve.csv").empty
+
+
+def test_absent_requested_period_publishes_empty_diagnostic_and_missing_dates(
+        broker_path, tmp_path, monkeypatch):
+    write_records(broker_path, [record("2026-01-01"), record("2026-01-05")])
+    original = broker_path.read_bytes()
+    monkeypatch.setattr(performance_report, "fetch_benchmark_prices", MagicMock(side_effect=AssertionError))
+    args = report_args(tmp_path)
+    args.start_date, args.end_date = "2026-01-02", "2026-01-04"
+
+    performance_report.build_report(args)
+
+    output = Path(args.output)
+    for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
+        summary = json.loads((bundle / "performance_summary.json").read_text())
+        assert summary["num_days"] == 0 and summary["latest_equity_krw"] is None
+        assert summary["cumulative_return_pct"] is None
+        warning = next(w for w in summary["data_quality_warnings"]
+                       if "Missing calendar observation dates" in w)
+        assert "2026-01-02, 2026-01-03, 2026-01-04" in warning
+        assert any("No valid broker KRW observations" in w
+                   for w in summary["data_quality_warnings"])
+        for metric in ["cash_flow_adjusted_return_pct", "cagr_pct", "max_drawdown_pct",
+                       "annualized_volatility_pct", "cumulative_return_SPY_pct", "excess_return_vs_SPY"]:
+            assert summary[metric] is None
+        assert pd.read_csv(bundle / "equity_curve.csv").empty
+        report = (bundle / "performance_report.md").read_text()
+        assert "Investment returns: N/A" in report
+        assert warning in report
+        assert (bundle / "broker_equity_observations.csv").read_bytes() == original
 
 
 @pytest.mark.parametrize("failure", ["utf8", "filesystem"])
