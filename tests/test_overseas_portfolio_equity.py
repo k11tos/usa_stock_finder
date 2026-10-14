@@ -480,6 +480,41 @@ def test_invalid_pickle_token_cache_is_replaced_with_a_fresh_token(cached_equity
 @pytest.mark.parametrize(
     "malformed_cache",
     [
+        b"\x80\x06.",
+        b"cmissing_cache_module\nMissingCacheType\n.",
+    ],
+    ids=["unsupported-protocol", "missing-module"],
+)
+def test_pickle_decoding_failures_are_replaced_with_a_fresh_token(
+    cached_equity_client, malformed_cache,
+):
+    get, post, token_path = cached_equity_client
+    token_path.write_bytes(malformed_cache)
+    get.return_value = _authentication_response()
+
+    assert fetch_overseas_portfolio_equity()["cash_krw"] == 358864.0
+
+    post.assert_called_once()
+    assert get.call_count == 1
+    with open(token_path, "rb") as token_file:
+        assert pickle.load(token_file)["access_token"] == AUTH_PRIVATE_VALUES[1]
+
+
+@pytest.mark.parametrize("termination", [KeyboardInterrupt, SystemExit])
+def test_process_termination_during_cache_decode_is_not_swallowed(
+    cached_equity_client, monkeypatch, termination,
+):
+    _, _, token_path = cached_equity_client
+    assert token_path.exists()
+    monkeypatch.setattr(stock_operations.pickle, "load", MagicMock(side_effect=termination))
+
+    with pytest.raises(termination):
+        stock_operations._is_malformed_equity_token_cache()  # pylint: disable=protected-access
+
+
+@pytest.mark.parametrize(
+    "malformed_cache",
+    [
         {},
         {"access_token": AUTH_PRIVATE_VALUES[0], "timestamp": int(time.time()) + 3600,
          "api_key": AUTH_PRIVATE_VALUES[2]},

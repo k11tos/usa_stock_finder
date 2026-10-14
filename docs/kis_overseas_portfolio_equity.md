@@ -31,10 +31,11 @@ and retries the balance read. Transport failures and unrelated nonzero
 `rt_cd` responses preserve the cache. Repeated authentication rejections do
 not trigger another cache bypass or refresh cycle.
 
-An empty, truncated, invalid-pickle, or decoded cache that is not Mojito's
-expected dictionary (`access_token`, integer `timestamp`, `api_key`, and
-`api_secret`) is removed once during broker construction, then retried within
-the same request budget. Cache removal is refused for a symlink, non-regular,
+An empty, truncated, invalid-pickle, unsupported-protocol, or missing-module
+cache is removed once during broker construction. The same applies to a decoded
+cache that is not Mojito's expected dictionary (`access_token`, integer
+`timestamp`, `api_key`, and `api_secret`). Recovery is retried within the same
+request budget. Cache removal is refused for a symlink, non-regular,
 non-owned, or hard-linked path; removal failures fail closed. Other
 construction, transport, HTTP, rate-limit, and API failures do not invalidate a
 valid cache.

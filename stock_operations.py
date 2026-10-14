@@ -47,7 +47,14 @@ class APIError(Exception):
     """Custom exception for API-related errors."""
 
 _TOKEN_CACHE_PATH = "token.dat"
-_TOKEN_CACHE_DESERIALIZATION_ERRORS = (EOFError, pickle.UnpicklingError)
+# Python's pickle decoder raises ValueError for an unsupported protocol and
+# ModuleNotFoundError while resolving a missing GLOBAL module reference.
+_TOKEN_CACHE_DECODING_ERRORS = (
+    EOFError,
+    pickle.UnpicklingError,
+    ValueError,
+    ModuleNotFoundError,
+)
 # KIS documents EGW00123 as an expired access-token response. Keep this
 # allowlist intentionally narrow: nonzero rt_cd values have many unrelated
 # meanings and must not cause cache invalidation.
@@ -243,7 +250,7 @@ def _is_malformed_equity_token_cache() -> bool:
             cache = pickle.load(token_file)
     except FileNotFoundError:
         return False
-    except _TOKEN_CACHE_DESERIALIZATION_ERRORS:
+    except _TOKEN_CACHE_DECODING_ERRORS:
         return True
     except OSError:
         return False
