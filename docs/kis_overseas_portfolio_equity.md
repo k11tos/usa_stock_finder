@@ -24,6 +24,13 @@ continue using the original Mojito class. Balance GET and token POST requests
 have connect/read timeouts of 5/10 seconds, with attempts limited by
 `APIConfig.MAX_RETRIES`, following this module's immediate-retry convention.
 
+A locally unexpired cached token is bypassed once only after a confirmed HTTP
+401 response or KIS's documented expired-token code `EGW00123`. The next
+bounded attempt obtains a replacement using the existing token-issuance path
+and retries the balance read. Transport failures and unrelated nonzero
+`rt_cd` responses preserve the cache. Repeated authentication rejections do
+not trigger another cache bypass or refresh cycle.
+
 | Result | Required output3 field | Supplied app-verified example (2026-10-14) |
 | --- | --- | ---: |
 | total_asset_krw | tot_asst_amt | 6,139,950 |
