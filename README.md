@@ -120,6 +120,9 @@ python main.py
 - `data/live/trade_signals.csv`: 매수/매도 신호 로그 (run_id, side, symbol, quantity, price, reason 등)
 - `data/live/account_snapshots.csv`: 일별 계좌/보유 스냅샷 (현금, 총자산, 종목별 평가손익 등)
 - `data/live/cash_flows.csv` (선택): 입출금/배당/수수료 로그 (`date,amount,currency,type,memo`)
+- `data/live/broker_equity_snapshots.csv` (optional, Stage 2): validated account-level KIS KRW equity.
+  Disabled by default with `PERFORMANCE_KRW_SNAPSHOT_ENABLED=false`; enable only after rollout approval.
+  See [collection and Docker persistence](docs/broker_equity_snapshots.md).
 
 특징:
 - append-only 저장 (기존 기록 보존)

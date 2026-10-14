@@ -42,6 +42,7 @@ import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
 
+from broker_equity_snapshot_runner import collect_broker_equity_snapshot_safely
 from config import ConfigError, EnvironmentConfig, InvestmentConfig, ScheduleConfig, StrategyConfig
 from file_utils import load_json, read_csv_first_column, save_json
 from live_performance_logger import (
@@ -1946,6 +1947,7 @@ def main() -> None:
         final_items=final_items,
         entry_symbol_set=entry_symbol_set,
     )
+    collect_broker_equity_snapshot_safely(run_id, run_date)
 
 
 def _send_daily_report(daily_message: str) -> None:
