@@ -161,12 +161,16 @@ def test_transport_http_and_json_failures_are_bounded_and_sanitized(equity_api, 
 def test_transient_failure_recovers_without_deleting_token(equity_api, tmp_path):
     _, get, _ = equity_api
     token = tmp_path / "token.dat"
-    token.write_text("test-cache", encoding="utf-8")
+    cached = pickle.dumps({
+        "access_token": "cached-token", "timestamp": int(time.time()) + 3600,
+        "api_key": "cached-key", "api_secret": "cached-secret",
+    })
+    token.write_bytes(cached)
     response = get.return_value
     get.side_effect = [requests.Timeout("private-token"), response]
     assert fetch_overseas_portfolio_equity()["total_asset_krw"] == 6139950.0
     assert get.call_count == 2
-    assert token.read_text(encoding="utf-8") == "test-cache"
+    assert token.read_bytes() == cached
 
 
 def test_api_failure_then_success(equity_api):
@@ -471,6 +475,57 @@ def test_invalid_pickle_token_cache_is_replaced_with_a_fresh_token(cached_equity
     assert get.call_count == 1
     with open(token_path, "rb") as token_file:
         assert pickle.load(token_file)["access_token"] == AUTH_PRIVATE_VALUES[1]
+
+
+@pytest.mark.parametrize(
+    "malformed_cache",
+    [
+        {},
+        {"access_token": AUTH_PRIVATE_VALUES[0], "timestamp": int(time.time()) + 3600,
+         "api_key": AUTH_PRIVATE_VALUES[2]},
+        {"timestamp": int(time.time()) + 3600, "api_key": AUTH_PRIVATE_VALUES[2],
+         "api_secret": AUTH_PRIVATE_VALUES[3]},
+        None,
+        [],
+        {"access_token": AUTH_PRIVATE_VALUES[0], "timestamp": "future",
+         "api_key": AUTH_PRIVATE_VALUES[2], "api_secret": AUTH_PRIVATE_VALUES[3]},
+    ],
+    ids=["empty-dict", "missing-check-key", "missing-load-key", "none", "list", "invalid-timestamp"],
+)
+def test_decoded_malformed_token_cache_is_replaced_with_a_fresh_token(
+    cached_equity_client, malformed_cache,
+):
+    get, post, token_path = cached_equity_client
+    token_path.write_bytes(pickle.dumps(malformed_cache))
+    get.return_value = _authentication_response()
+
+    assert fetch_overseas_portfolio_equity()["total_asset_krw"] == 6139950.0
+
+    post.assert_called_once()
+    assert get.call_count == 1
+    with open(token_path, "rb") as token_file:
+        assert pickle.load(token_file)["access_token"] == AUTH_PRIVATE_VALUES[1]
+
+
+@pytest.mark.parametrize("broker_error", [KeyError, TypeError])
+def test_unrelated_broker_schema_errors_do_not_invalidate_token_cache(
+    cached_equity_client, monkeypatch, broker_error,
+):
+    get, post, token_path = cached_equity_client
+    cached = token_path.read_bytes()
+    factory = MagicMock(side_effect=broker_error("unrelated"))
+    remove = MagicMock(wraps=stock_operations.os.remove)
+    monkeypatch.setattr(stock_operations, "_get_broker", factory)
+    monkeypatch.setattr(stock_operations.os, "remove", remove)
+
+    with pytest.raises(APIError):
+        fetch_overseas_portfolio_equity()
+
+    assert factory.call_count == 3
+    remove.assert_not_called()
+    post.assert_not_called()
+    get.assert_not_called()
+    assert token_path.read_bytes() == cached
 
 
 def test_malformed_token_cache_removal_failure_fails_closed(cached_equity_client, monkeypatch):
