@@ -24,11 +24,18 @@ Main Functions:
 """
 
 import logging
+import math
 import os
+import pickle
+import re
+import stat
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import jmespath
 import mojito
+import requests
 from dotenv import load_dotenv
 
 from config import APIConfig
@@ -38,6 +45,12 @@ logger = logging.getLogger(__name__)
 
 class APIError(Exception):
     """Custom exception for API-related errors."""
+
+_TOKEN_CACHE_PATH = "token.dat"
+# KIS documents EGW00123 as an expired access-token response. Keep this
+# allowlist intentionally narrow: nonzero rt_cd values have many unrelated
+# meanings and must not cause cache invalidation.
+_KIS_TOKEN_REJECTION_CODES = frozenset({"EGW00123"})
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -126,12 +139,36 @@ def fetch_us_stock_holdings():
     raise APIError(error_msg)
 
 
-def _get_broker(exchange: str) -> mojito.KoreaInvestment:
+class _EquityBroker(mojito.KoreaInvestment):
+    """Retain Mojito's token cache/configuration with bounded token issuance."""
+
+    def issue_access_token(self):
+        # Mojito 0.1.6 provides no timeout/transport hook for this request.
+        response = requests.post(
+            f"{self.base_url}/oauth2/tokenP",
+            headers={"content-type": "application/json"},
+            json={"grant_type": "client_credentials", "appkey": self.api_key, "appsecret": self.api_secret},
+            timeout=(5, 10),
+        )
+        response.raise_for_status()
+        data = response.json()
+        self.access_token = f'Bearer {data["access_token"]}'
+        data.update({
+            "timestamp": int(datetime.now().timestamp()) + data["expires_in"],
+            "api_key": self.api_key,
+            "api_secret": self.api_secret,
+        })
+        with open(_TOKEN_CACHE_PATH, "wb") as token_file:
+            pickle.dump(data, token_file)
+
+
+def _get_broker(exchange: str, *, broker_class=None) -> mojito.KoreaInvestment:
     """
     Create and return a KoreaInvestment broker instance for the given exchange.
 
     Args:
         exchange (str): Stock exchange name ("나스닥" for NASDAQ, "뉴욕" for NYSE)
+        broker_class: Optional Mojito subclass; existing callers use Mojito unchanged.
 
     Returns:
         mojito.KoreaInvestment: Broker instance
@@ -141,13 +178,215 @@ def _get_broker(exchange: str) -> mojito.KoreaInvestment:
         - Uses credentials from environment variables
     """
     load_dotenv()
-    return mojito.KoreaInvestment(
+    broker_class = broker_class or mojito.KoreaInvestment
+    return broker_class(
         api_key=os.getenv("ki_app_key"),
         api_secret=os.getenv("ki_app_secret_key"),
         acc_no=os.getenv("account_number"),
         exchange=exchange,
     )
 
+
+def _parse_equity_amount(value: Any, field: str) -> float:
+    """Parse a required finite KIS amount without substituting missing data."""
+    error = f"Invalid overseas equity field: {field}"
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise APIError(error)
+    if isinstance(value, str):
+        value = value.strip()
+        if "," in value and not re.fullmatch(r"[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?", value):
+            raise APIError(error)
+        value = value.replace(",", "")
+    try:
+        amount = float(value)
+    except (ValueError, OverflowError):
+        raise APIError(error) from None
+    if not math.isfinite(amount):
+        raise APIError(error)
+    return amount
+
+
+def _is_kis_token_rejection(response: dict[str, Any]) -> bool:
+    """Recognize only documented KIS token rejection codes."""
+    return response.get("msg_cd") in _KIS_TOKEN_REJECTION_CODES
+
+
+def _get_safe_equity_token_cache_status():
+    """Return standard-cache metadata only when it is safe to inspect or remove."""
+    try:
+        cache_status = os.lstat(_TOKEN_CACHE_PATH)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        logger.warning("Unable to inspect overseas equity token cache for invalidation")
+        raise APIError("Unable to refresh overseas equity authentication") from None
+
+    if (
+        not stat.S_ISREG(cache_status.st_mode)
+        or cache_status.st_uid != os.geteuid()
+        or cache_status.st_nlink != 1
+    ):
+        logger.warning("Refusing to invalidate an unsafe overseas equity token cache")
+        raise APIError("Unable to refresh overseas equity authentication")
+
+    return cache_status
+
+
+def _is_malformed_equity_token_cache() -> bool:
+    """Validate the decoded Mojito cache shape before broker construction."""
+    if _get_safe_equity_token_cache_status() is None:
+        return False
+
+    try:
+        with open(_TOKEN_CACHE_PATH, "rb") as token_file:
+            try:
+                # GLOBAL resolution and other ordinary pickle decoding work can
+                # raise more exception types than pickle.UnpicklingError.  This
+                # boundary intentionally covers only pickle.load(), so failures
+                # elsewhere in authentication and request handling stay visible.
+                cache = pickle.load(token_file)
+            except Exception:  # pylint: disable=broad-exception-caught
+                # Do not catch BaseException: process-level termination must pass through.
+                return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+    return not (
+        isinstance(cache, dict)
+        and isinstance(cache.get("access_token"), str)
+        and isinstance(cache.get("timestamp"), int)
+        and not isinstance(cache.get("timestamp"), bool)
+        and isinstance(cache.get("api_key"), str)
+        and isinstance(cache.get("api_secret"), str)
+    )
+
+
+def _invalidate_equity_token_cache() -> None:
+    """Remove Mojito's fixed, process-owned token cache or fail closed."""
+    if _get_safe_equity_token_cache_status() is None:
+        return
+
+    try:
+        os.remove(_TOKEN_CACHE_PATH)
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Unable to invalidate overseas equity token cache")
+        raise APIError("Unable to refresh overseas equity authentication") from None
+
+
+def _invalidate_rejected_equity_token() -> None:
+    """Remove the standard cache only after a confirmed authentication rejection."""
+    _invalidate_equity_token_cache()
+
+
+def fetch_overseas_portfolio_equity() -> dict[str, Any]:
+    """Read the confirmed US/all-market KIS total assets in KRW.
+
+    Transport and unrelated API failures retain the cached token. A confirmed
+    HTTP 401 or documented KIS token-rejection code bypasses the cache once;
+    all balance and token attempts remain bounded by ``APIConfig.MAX_RETRIES``.
+    """
+    endpoint = "/uapi/overseas-stock/v1/trading/inquire-present-balance"
+    query_parameters = {
+        "WCRC_FRCR_DVSN_CD": "01",
+        "NATN_CD": "840",
+        "TR_MKET_CD": "00",
+        "INQR_DVSN_CD": "00",
+    }
+    balance = None
+    token_refresh_attempted = False
+    malformed_cache_recovery_attempted = False
+    for attempt in range(APIConfig.MAX_RETRIES):
+        if _is_malformed_equity_token_cache():
+            if malformed_cache_recovery_attempted:
+                logger.warning("Overseas equity token cache remained malformed after refresh")
+                continue
+            _invalidate_equity_token_cache()
+            malformed_cache_recovery_attempted = True
+            logger.warning("Overseas equity token cache was malformed; refreshing it once")
+            continue
+
+        try:
+            broker = _get_broker("나스닥", broker_class=_EquityBroker)
+        except APIError:
+            raise
+        except Exception:  # Broker/authentication exceptions may contain sensitive data.
+            logger.warning("Overseas equity broker setup failed (attempt %d/%d)", attempt + 1, APIConfig.MAX_RETRIES)
+            continue
+
+        try:
+            response = requests.get(
+                f"{broker.base_url}{endpoint}",
+                headers={
+                    "content-type": "application/json",
+                    "authorization": broker.access_token,
+                    "appKey": broker.api_key,
+                    "appSecret": broker.api_secret,
+                    "tr_id": "CTRP6504R",
+                },
+                params={
+                    "CANO": broker.acc_no_prefix,
+                    "ACNT_PRDT_CD": broker.acc_no_postfix,
+                    **query_parameters,
+                },
+                timeout=(5, 10),
+            )
+            if response.status_code == 401:
+                if not token_refresh_attempted:
+                    _invalidate_rejected_equity_token()
+                    token_refresh_attempted = True
+                    logger.warning("Overseas equity authentication rejected; refreshing cached token once")
+                else:
+                    logger.warning("Overseas equity authentication remained rejected after token refresh")
+                continue
+            response.raise_for_status()
+            balance = response.json()
+        except APIError:
+            raise
+        except Exception:  # Request/authentication exceptions may contain sensitive data.
+            logger.warning("Overseas equity request failed (attempt %d/%d)", attempt + 1, APIConfig.MAX_RETRIES)
+            continue
+        if not isinstance(balance, dict):
+            raise APIError("Invalid overseas equity response shape")
+        if balance.get("rt_cd") == "0":
+            break
+        if _is_kis_token_rejection(balance):
+            if not token_refresh_attempted:
+                _invalidate_rejected_equity_token()
+                token_refresh_attempted = True
+                logger.warning("Overseas equity authentication rejected; refreshing cached token once")
+            else:
+                logger.warning("Overseas equity authentication remained rejected after token refresh")
+            continue
+        logger.warning("Overseas equity API unsuccessful (attempt %d/%d)", attempt + 1, APIConfig.MAX_RETRIES)
+    else:
+        raise APIError("Failed to fetch overseas portfolio equity after configured attempts") from None
+
+    aggregate = balance.get("output3")
+    if isinstance(aggregate, list) and len(aggregate) == 1:
+        aggregate = aggregate[0]
+    if not isinstance(aggregate, dict) or not aggregate:
+        raise APIError("Invalid or missing overseas equity output3")
+    fields = {
+        "total_asset_krw": "tot_asst_amt",
+        "stock_evaluation_krw": "evlu_amt_smtl_amt",
+        "cash_krw": "tot_dncl_amt",
+        "foreign_cash_krw": "frcr_evlu_tota",
+        "unsettled_buy_krw": "ustl_buy_amt_smtl",
+        "unsettled_sell_krw": "ustl_sll_amt_smtl",
+    }
+    result = {name: _parse_equity_amount(aggregate.get(field), field) for name, field in fields.items()}
+    if result["total_asset_krw"] < 0:
+        raise APIError("Negative overseas equity total assets")
+    result.update({
+        "fetched_at_kst": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+        "source": {"provider": "KIS", "endpoint": endpoint, "tr_id": "CTRP6504R"},
+        "query_parameters": query_parameters,
+    })
+    return result
 
 def fetch_account_balance() -> dict[str, Any] | None:
     """Fetch USD account cash/equity without mixing KIS KRW cash conversions into equity.
