@@ -566,8 +566,7 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None
         loaded.warnings.append("No valid broker KRW observations found for the selected period.")
     daily.to_csv(output_dir / "equity_curve.csv", index=False, index_label="date")
     # Includes invalid, superseded and duplicate records for diagnosis; never rewrite the source.
-    with (output_dir / "broker_equity_observations.csv").open("w", encoding="utf-8", newline="") as file_obj:
-        file_obj.write(loaded.original_csv)
+    (output_dir / "broker_equity_observations.csv").write_bytes(loaded.original_csv_bytes)
     summary = {
         "data_source": "broker_krw",
         "valuation_currency": "KRW",

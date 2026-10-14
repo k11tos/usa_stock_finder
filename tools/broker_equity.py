@@ -40,6 +40,7 @@ class BrokerEquityData:
     daily: pd.DataFrame
     original_csv: str
     warnings: list[str]
+    original_csv_bytes: bytes = b""
 
 
 def _validate_record(row: dict, as_of: datetime) -> None:
@@ -83,8 +84,12 @@ def _diagnose_dates(daily: pd.DataFrame, start_date: str | None, end_date: str |
     if age > STALE_AFTER_DAYS:
         warnings.append(f"Stale observations: latest selected observation is {age} calendar days old "
                         f"(threshold > {STALE_AFTER_DAYS} days).")
-    for idx, change in daily["total_asset_krw"].pct_change(fill_method=None).dropna().items():
-        if abs(change) >= DISCONTINUITY_THRESHOLD:
+    equities = daily["total_asset_krw"].tolist()
+    for idx in range(1, len(equities)):
+        previous, current = equities[idx - 1], equities[idx]
+        difference = current - previous
+        if abs(difference) >= previous * DISCONTINUITY_THRESHOLD:
+            change = difference / previous
             warnings.append(f"{daily.loc[idx, 'run_date']:%Y-%m-%d}: raw equity discontinuity "
                             f"{change * 100:.2f}% (>= 10%); observation preserved; "
                             "this is not an investment return.")
@@ -104,9 +109,14 @@ def load_broker_equity(start_date: str | None = None, end_date: str | None = Non
     if not BROKER_EQUITY_PATH.exists() or BROKER_EQUITY_PATH.stat().st_size == 0:
         result.warnings.append("Broker KRW snapshot CSV is missing or empty; no fallback source used.")
         return result
-    with BROKER_EQUITY_PATH.open(encoding="utf-8", newline="") as file_obj:
+    with BROKER_EQUITY_PATH.open("rb") as file_obj:
         fcntl.flock(file_obj, fcntl.LOCK_SH)
-        result.original_csv = file_obj.read()
+        result.original_csv_bytes = file_obj.read()
+    try:
+        result.original_csv = result.original_csv_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        result.warnings.append("Invalid UTF-8 in broker KRW snapshot CSV; no observations selected.")
+        return result
     try:
         reader = csv.DictReader(io.StringIO(result.original_csv), strict=True)
         if reader.fieldnames != HEADERS:

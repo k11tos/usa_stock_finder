@@ -85,6 +85,33 @@ def test_latest_valid_run_sorted_by_observation_time(broker_path):
     assert result.original_csv.encode() == broker_path.read_bytes()
 
 
+def test_invalid_utf8_is_unusable_and_preserved_byte_for_byte(broker_path):
+    original = b"run_id,run_date,fetched_at_kst\nsecret\xff,2026-01-01,2026-01-01T16:00:01+09:00\n"
+    broker_path.write_bytes(original)
+
+    result = load_broker_equity(as_of=AS_OF)
+
+    assert result.daily.empty
+    assert result.original_csv == ""
+    assert result.original_csv_bytes == original
+    assert broker_path.read_bytes() == original
+    assert result.warnings == ["Invalid UTF-8 in broker KRW snapshot CSV; no observations selected."]
+    assert "secret" not in " ".join(result.warnings)
+
+
+def test_valid_snapshot_corrupted_with_invalid_utf8_selects_nothing(broker_path):
+    valid_snapshot = broker_path.parent / "valid.csv"
+    write_records(valid_snapshot, [record(), record("2026-01-02", "1100000")])
+    original = valid_snapshot.read_bytes() + b"\xff"
+    broker_path.write_bytes(original)
+
+    result = load_broker_equity(as_of=AS_OF)
+
+    assert result.daily.empty
+    assert result.original_csv_bytes == original
+    assert any("Invalid UTF-8" in warning for warning in result.warnings)
+
+
 def test_duplicate_run_ids_and_conflicts_are_reported(broker_path):
     row = record()
     write_records(broker_path, [row, row, record("2026-01-02")])
@@ -165,6 +192,19 @@ def test_staleness_threshold(broker_path, age, stale):
     write_records(broker_path, [record(f"2026-01-{10 - age:02}")])
     warnings = load_broker_equity(as_of=AS_OF).warnings
     assert any("Stale observations" in warning for warning in warnings) == stale
+
+
+@pytest.mark.parametrize(("equity", "expected_warning"), [
+    ("900000", True), ("1100000", True), ("900001", False), ("1099999", False),
+    ("899999", True), ("1100001", True),
+])
+def test_discontinuity_threshold_uses_raw_amount_boundary(broker_path, equity, expected_warning):
+    write_records(broker_path, [record("2026-01-01", "1000000"), record("2026-01-02", equity)])
+
+    result = load_broker_equity(as_of=AS_OF)
+
+    assert result.daily["total_asset_krw"].tolist() == [1000000.0, float(equity)]
+    assert any("raw equity discontinuity" in warning for warning in result.warnings) is expected_warning
 
 
 @pytest.mark.parametrize("suffix", [",extra", "\nshort", '\n"unclosed'])
@@ -256,6 +296,49 @@ def test_no_valid_krw_data_never_falls_back(broker_path, tmp_path, monkeypatch, 
     assert summary["cumulative_return_pct"] is None
     assert any("No valid broker KRW" in warning for warning in summary["data_quality_warnings"])
     assert pd.read_csv(Path(args.output) / "equity_curve.csv").empty
+
+
+def test_invalid_utf8_publishes_empty_krw_latest_and_history(broker_path, tmp_path, monkeypatch):
+    write_records(broker_path, [record(), record("2026-01-02", "1100000")])
+    for path, content in [
+        (broker_path.with_name("account_snapshots.csv"), "run_date,total_equity_usd\n2026-01-01,999\n"),
+        (broker_path.with_name("cash_flows.csv"), "date,amount,currency,type,memo\n2026-01-01,1,KRW,deposit,x\n"),
+    ]:
+        path.write_text(content)
+    monkeypatch.setattr(performance_report, "load_strategy_equity_curve_with_warnings",
+                        MagicMock(side_effect=AssertionError("KRW mode must not load legacy equity")))
+    monkeypatch.setattr(performance_report, "_load_cash_flows",
+                        MagicMock(side_effect=AssertionError("KRW mode must not load cash flows")))
+    monkeypatch.setattr(performance_report, "fetch_benchmark_prices",
+                        MagicMock(side_effect=AssertionError("KRW mode must not load benchmarks")))
+    args = report_args(tmp_path)
+
+    performance_report.build_report(args)
+    assert json.loads((Path(args.output) / "latest/performance_summary.json").read_text())["num_days"] == 2
+
+    corrupted = broker_path.read_bytes() + b"\xff"
+    broker_path.write_bytes(corrupted)
+    performance_report.build_report(args)
+
+    output = Path(args.output)
+    for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
+        summary = json.loads((bundle / "performance_summary.json").read_text())
+        assert summary["data_source"] == "broker_krw"
+        assert summary["num_days"] == 0 and summary["latest_equity_krw"] is None
+        assert summary["returns_validated"] is False
+        assert summary["cumulative_return_pct"] is None
+        assert summary["cash_flow_adjusted_return_pct"] is None
+        assert summary["cagr_pct"] is None
+        assert summary["max_drawdown_pct"] is None
+        assert summary["annualized_volatility_pct"] is None
+        assert summary["cumulative_return_SPY_pct"] is None
+        assert summary["excess_return_vs_SPY"] is None
+        assert any("Invalid UTF-8" in warning for warning in summary["data_quality_warnings"])
+        assert pd.read_csv(bundle / "equity_curve.csv").empty
+        assert (bundle / "broker_equity_observations.csv").read_bytes() == corrupted
+        report = (bundle / "performance_report.md").read_text()
+        assert "Investment returns: N/A" in report
+        assert "Invalid UTF-8" in report
 
 
 def test_mode_switch_replaces_old_artifacts_without_stale_returns(broker_path, tmp_path, monkeypatch):
