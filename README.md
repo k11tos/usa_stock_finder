@@ -340,6 +340,14 @@ pytest --cov=. --cov-report=html
 ### Optional auto refresh after daily run
 
 `main.py` can optionally refresh the live performance report **after** it appends trade signals/account snapshots and saves `data/data.json`.
+
+Stage 3 adds `PERFORMANCE_REPORT_DATA_SOURCE=legacy_usd|broker_krw` (default:
+`legacy_usd`). The KRW source reads only the validated Stage 2 CSV and publishes
+raw equity diagnostics with investment performance metrics N/A until external
+cash-flow completeness is established. See [KRW source, diagnostics and Stage 4
+readiness](docs/broker_equity_performance.md) for the CLI, rollout and publishing
+contracts.
+
 This step is failure-tolerant: report generation errors are logged as warnings and will not stop the daily signal run.
 
 Environment variables:

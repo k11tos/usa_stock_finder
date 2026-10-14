@@ -33,6 +33,14 @@ def _format_pct(value: object, suffix: str = "%") -> str:
 
 def build_performance_summary_message(summary: dict, report_url: str | None) -> str:
     """Format computed performance metrics as a section of the daily report."""
+    if summary.get("data_source") == "broker_krw":
+        lines = [
+            f"브로커 자산 진단 (KRW, {summary.get('start_date') or 'N/A'} ~ {summary.get('end_date') or 'N/A'})",
+            "투자 수익률: N/A (외부 현금흐름 완전성 미확인)",
+        ]
+        if report_url:
+            lines.extend(["", f"상세: {report_url}"])
+        return "\n".join(lines)
     lines = [
         f"전략 성과 ({summary.get('start_date') or 'N/A'} ~ {summary.get('end_date') or 'N/A'})",
         f"전략: {_format_pct(summary.get('cumulative_return_pct'))}",
