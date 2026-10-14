@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 from datetime import datetime
+import pickle
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -317,3 +319,137 @@ def test_token_timeout_is_bounded_and_sanitized(equity_api, monkeypatch, caplog)
     assert all(value not in str(error.value) + caplog.text for value in PRIVATE_VALUES)
     _, get, _ = equity_api
     get.assert_not_called()
+
+
+
+AUTH_PRIVATE_VALUES = ("old-token", "fresh-token", "private-app-key", "private-secret", "12345678", "01")
+
+
+def _authentication_response(payload=None, status_code=200):
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = payload or {"rt_cd": "0", "output3": deepcopy(AMOUNTS)}
+    return response
+
+
+@pytest.fixture
+def cached_equity_client(monkeypatch, tmp_path):
+    """Use Mojito's real cache loader while mocking every HTTP request."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stock_operations, "_get_broker", ORIGINAL_GET_BROKER)
+    monkeypatch.setenv("ki_app_key", AUTH_PRIVATE_VALUES[2])
+    monkeypatch.setenv("ki_app_secret_key", AUTH_PRIVATE_VALUES[3])
+    monkeypatch.setenv("account_number", f"{AUTH_PRIVATE_VALUES[4]}-{AUTH_PRIVATE_VALUES[5]}")
+    monkeypatch.setattr(stock_operations, "load_dotenv", MagicMock())
+    monkeypatch.setattr(stock_operations.APIConfig, "MAX_RETRIES", 3)
+    with open("token.dat", "wb") as token_file:
+        pickle.dump({
+            "access_token": AUTH_PRIVATE_VALUES[0], "timestamp": int(time.time()) + 3600,
+            "api_key": AUTH_PRIVATE_VALUES[2], "api_secret": AUTH_PRIVATE_VALUES[3],
+        }, token_file)
+    get = MagicMock()
+    post = MagicMock()
+    post.return_value = _authentication_response({"access_token": AUTH_PRIVATE_VALUES[1], "expires_in": 3600})
+    monkeypatch.setattr(stock_operations.requests, "get", get)
+    monkeypatch.setattr(stock_operations.requests, "post", post)
+    return get, post, tmp_path / "token.dat"
+
+
+def test_http_401_rejected_cached_token_refreshes_once_and_recovers(cached_equity_client):
+    get, post, token_path = cached_equity_client
+    get.side_effect = [_authentication_response(status_code=401), _authentication_response()]
+
+    assert fetch_overseas_portfolio_equity()["total_asset_krw"] == 6139950.0
+
+    assert [call.kwargs["headers"]["authorization"] for call in get.call_args_list] == [
+        f"Bearer {AUTH_PRIVATE_VALUES[0]}", f"Bearer {AUTH_PRIVATE_VALUES[1]}",
+    ]
+    post.assert_called_once()
+    with open(token_path, "rb") as token_file:
+        assert pickle.load(token_file)["access_token"] == AUTH_PRIVATE_VALUES[1]
+
+
+def test_documented_kis_token_rejection_refreshes_and_recovers(cached_equity_client):
+    get, post, _ = cached_equity_client
+    get.side_effect = [
+        _authentication_response({"rt_cd": "1", "msg_cd": "EGW00123"}),
+        _authentication_response(),
+    ]
+
+    assert fetch_overseas_portfolio_equity()["cash_krw"] == 358864.0
+    assert get.call_count == 2
+    post.assert_called_once()
+
+
+def test_transient_failure_retains_cached_token_without_post(cached_equity_client):
+    get, post, token_path = cached_equity_client
+    cached = token_path.read_bytes()
+    get.side_effect = [requests.Timeout(AUTH_PRIVATE_VALUES[0]), _authentication_response()]
+
+    assert fetch_overseas_portfolio_equity()["total_asset_krw"] == 6139950.0
+    post.assert_not_called()
+    assert token_path.read_bytes() == cached
+
+
+def test_unrelated_kis_api_error_does_not_refresh_token(cached_equity_client):
+    get, post, token_path = cached_equity_client
+    cached = token_path.read_bytes()
+    get.return_value = _authentication_response({"rt_cd": "1", "msg_cd": "EGW99999"})
+
+    with pytest.raises(APIError):
+        fetch_overseas_portfolio_equity()
+    assert get.call_count == 3
+    post.assert_not_called()
+    assert token_path.read_bytes() == cached
+
+
+def test_repeated_authentication_rejection_uses_one_cache_bypass(cached_equity_client):
+    get, post, _ = cached_equity_client
+    get.side_effect = [
+        _authentication_response(status_code=401),
+        _authentication_response(status_code=401),
+        _authentication_response(status_code=401),
+    ]
+
+    with pytest.raises(APIError):
+        fetch_overseas_portfolio_equity()
+    assert get.call_count == 3
+    post.assert_called_once()
+
+
+def test_token_refresh_failure_is_bounded_and_sanitized(cached_equity_client, caplog):
+    get, post, _ = cached_equity_client
+    secret_text = " ".join(AUTH_PRIVATE_VALUES)
+    get.side_effect = [_authentication_response(status_code=401)]
+    post.side_effect = requests.Timeout(secret_text)
+
+    with pytest.raises(APIError) as error:
+        fetch_overseas_portfolio_equity()
+    assert post.call_count == 2
+    assert all(value not in str(error.value) + caplog.text for value in AUTH_PRIVATE_VALUES)
+
+
+def test_valid_cached_token_is_reused_without_token_post(cached_equity_client):
+    get, post, _ = cached_equity_client
+    get.return_value = _authentication_response()
+
+    assert fetch_overseas_portfolio_equity()["total_asset_krw"] == 6139950.0
+    post.assert_not_called()
+
+
+def test_output3_total_and_legacy_factory_behavior_remain_unchanged(cached_equity_client, monkeypatch):
+    get, post, _ = cached_equity_client
+    get.return_value = _authentication_response({"rt_cd": "0", "output3": [deepcopy(AMOUNTS)]})
+
+    result = fetch_overseas_portfolio_equity()
+
+    assert result["total_asset_krw"] == 6139950.0
+    assert result["stock_evaluation_krw"] == 4537263.0
+    post.assert_not_called()
+    constructor = MagicMock()
+    monkeypatch.setattr(stock_operations.mojito, "KoreaInvestment", constructor)
+    stock_operations._get_broker("뉴욕")  # pylint: disable=protected-access
+    constructor.assert_called_once_with(
+        api_key=AUTH_PRIVATE_VALUES[2], api_secret=AUTH_PRIVATE_VALUES[3],
+        acc_no=f"{AUTH_PRIVATE_VALUES[4]}-{AUTH_PRIVATE_VALUES[5]}", exchange="뉴욕",
+    )
