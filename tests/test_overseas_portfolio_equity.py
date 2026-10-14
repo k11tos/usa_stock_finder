@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 import pickle
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -482,8 +483,9 @@ def test_invalid_pickle_token_cache_is_replaced_with_a_fresh_token(cached_equity
     [
         b"\x80\x06.",
         b"cmissing_cache_module\nMissingCacheType\n.",
+        b"cbuiltins\nDefinitelyMissingThing\n.",
     ],
-    ids=["unsupported-protocol", "missing-module"],
+    ids=["unsupported-protocol", "missing-module", "missing-attribute"],
 )
 def test_pickle_decoding_failures_are_replaced_with_a_fresh_token(
     cached_equity_client, malformed_cache,
@@ -590,6 +592,30 @@ def test_malformed_symlink_cache_fails_closed_without_deleting_its_target(cached
     get.assert_not_called()
     assert token_path.is_symlink()
     assert unrelated_file.read_bytes() == b"not a pickle"
+
+
+@pytest.mark.parametrize("unsafe_property", ["owner", "hard-link"])
+def test_malformed_cache_with_unsafe_metadata_fails_closed(
+    cached_equity_client, monkeypatch, unsafe_property,
+):
+    get, post, token_path = cached_equity_client
+    cache_status = token_path.stat()
+    unsafe_status = SimpleNamespace(
+        st_mode=cache_status.st_mode,
+        st_uid=cache_status.st_uid if unsafe_property == "hard-link" else cache_status.st_uid + 1,
+        st_nlink=2 if unsafe_property == "hard-link" else cache_status.st_nlink,
+    )
+    remove = MagicMock(wraps=stock_operations.os.remove)
+    monkeypatch.setattr(stock_operations.os, "lstat", MagicMock(return_value=unsafe_status))
+    monkeypatch.setattr(stock_operations.os, "remove", remove)
+
+    with pytest.raises(APIError, match="Unable to refresh overseas equity authentication"):
+        fetch_overseas_portfolio_equity()
+
+    post.assert_not_called()
+    get.assert_not_called()
+    remove.assert_not_called()
+    assert token_path.exists()
 
 
 def test_malformed_cache_recovery_uses_only_the_remaining_retry_budget(cached_equity_client):
