@@ -28,6 +28,7 @@ import math
 import os
 import pickle
 import re
+import stat
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -46,6 +47,7 @@ class APIError(Exception):
     """Custom exception for API-related errors."""
 
 _TOKEN_CACHE_PATH = "token.dat"
+_TOKEN_CACHE_DESERIALIZATION_ERRORS = (EOFError, pickle.UnpicklingError)
 # KIS documents EGW00123 as an expired access-token response. Keep this
 # allowlist intentionally narrow: nonzero rt_cd values have many unrelated
 # meanings and must not cause cache invalidation.
@@ -210,15 +212,36 @@ def _is_kis_token_rejection(response: dict[str, Any]) -> bool:
     return response.get("msg_cd") in _KIS_TOKEN_REJECTION_CODES
 
 
-def _invalidate_rejected_equity_token() -> None:
-    """Remove the standard cache only after a confirmed authentication rejection."""
+def _invalidate_equity_token_cache() -> None:
+    """Remove Mojito's fixed, process-owned token cache or fail closed."""
+    try:
+        cache_status = os.lstat(_TOKEN_CACHE_PATH)
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Unable to inspect overseas equity token cache for invalidation")
+        raise APIError("Unable to refresh overseas equity authentication") from None
+
+    if (
+        not stat.S_ISREG(cache_status.st_mode)
+        or cache_status.st_uid != os.geteuid()
+        or cache_status.st_nlink != 1
+    ):
+        logger.warning("Refusing to invalidate an unsafe overseas equity token cache")
+        raise APIError("Unable to refresh overseas equity authentication")
+
     try:
         os.remove(_TOKEN_CACHE_PATH)
     except FileNotFoundError:
         return
     except OSError:
-        logger.warning("Unable to invalidate rejected overseas equity token cache")
+        logger.warning("Unable to invalidate overseas equity token cache")
         raise APIError("Unable to refresh overseas equity authentication") from None
+
+
+def _invalidate_rejected_equity_token() -> None:
+    """Remove the standard cache only after a confirmed authentication rejection."""
+    _invalidate_equity_token_cache()
 
 
 def fetch_overseas_portfolio_equity() -> dict[str, Any]:
@@ -237,9 +260,25 @@ def fetch_overseas_portfolio_equity() -> dict[str, Any]:
     }
     balance = None
     token_refresh_attempted = False
+    malformed_cache_recovery_attempted = False
     for attempt in range(APIConfig.MAX_RETRIES):
         try:
             broker = _get_broker("나스닥", broker_class=_EquityBroker)
+        except _TOKEN_CACHE_DESERIALIZATION_ERRORS:
+            if malformed_cache_recovery_attempted:
+                logger.warning("Overseas equity token cache remained malformed after refresh")
+                continue
+            _invalidate_equity_token_cache()
+            malformed_cache_recovery_attempted = True
+            logger.warning("Overseas equity token cache was malformed; refreshing it once")
+            continue
+        except APIError:
+            raise
+        except Exception:  # Broker/authentication exceptions may contain sensitive data.
+            logger.warning("Overseas equity broker setup failed (attempt %d/%d)", attempt + 1, APIConfig.MAX_RETRIES)
+            continue
+
+        try:
             response = requests.get(
                 f"{broker.base_url}{endpoint}",
                 headers={

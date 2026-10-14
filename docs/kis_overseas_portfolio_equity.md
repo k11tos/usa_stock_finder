@@ -31,6 +31,12 @@ and retries the balance read. Transport failures and unrelated nonzero
 `rt_cd` responses preserve the cache. Repeated authentication rejections do
 not trigger another cache bypass or refresh cycle.
 
+An empty, truncated, or invalid-pickle standard `token.dat` cache is also
+removed once during broker construction, then retried within the same request
+budget. Cache removal is refused for a symlink, non-regular, non-owned, or
+hard-linked path; removal failures fail closed. Other construction, transport,
+HTTP, rate-limit, and API failures do not invalidate a valid cache.
+
 | Result | Required output3 field | Supplied app-verified example (2026-10-14) |
 | --- | --- | ---: |
 | total_asset_krw | tot_asst_amt | 6,139,950 |

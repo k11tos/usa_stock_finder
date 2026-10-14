@@ -437,6 +437,83 @@ def test_valid_cached_token_is_reused_without_token_post(cached_equity_client):
     post.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "malformed_cache",
+    [b"", pickle.dumps({"access_token": "partial"})[:-1]],
+    ids=["empty", "truncated"],
+)
+def test_malformed_token_cache_is_replaced_with_a_fresh_token(
+    cached_equity_client, malformed_cache,
+):
+    get, post, token_path = cached_equity_client
+    unrelated_file = token_path.with_name("unrelated.txt")
+    unrelated_file.write_text("must remain", encoding="utf-8")
+    token_path.write_bytes(malformed_cache)
+    get.return_value = _authentication_response()
+
+    assert fetch_overseas_portfolio_equity()["total_asset_krw"] == 6139950.0
+
+    post.assert_called_once()
+    assert get.call_count == 1
+    assert unrelated_file.read_text(encoding="utf-8") == "must remain"
+    with open(token_path, "rb") as token_file:
+        assert pickle.load(token_file)["access_token"] == AUTH_PRIVATE_VALUES[1]
+
+
+def test_invalid_pickle_token_cache_is_replaced_with_a_fresh_token(cached_equity_client):
+    get, post, token_path = cached_equity_client
+    token_path.write_bytes(b"not a pickle")
+    get.return_value = _authentication_response()
+
+    assert fetch_overseas_portfolio_equity()["cash_krw"] == 358864.0
+
+    post.assert_called_once()
+    assert get.call_count == 1
+    with open(token_path, "rb") as token_file:
+        assert pickle.load(token_file)["access_token"] == AUTH_PRIVATE_VALUES[1]
+
+
+def test_malformed_token_cache_removal_failure_fails_closed(cached_equity_client, monkeypatch):
+    get, post, token_path = cached_equity_client
+    token_path.write_bytes(b"")
+    monkeypatch.setattr(stock_operations.os, "remove", MagicMock(side_effect=PermissionError))
+
+    with pytest.raises(APIError, match="Unable to refresh overseas equity authentication"):
+        fetch_overseas_portfolio_equity()
+
+    post.assert_not_called()
+    get.assert_not_called()
+    assert token_path.read_bytes() == b""
+
+
+def test_malformed_symlink_cache_fails_closed_without_deleting_its_target(cached_equity_client):
+    get, post, token_path = cached_equity_client
+    unrelated_file = token_path.with_name("unrelated.txt")
+    unrelated_file.write_bytes(b"not a pickle")
+    token_path.unlink()
+    token_path.symlink_to(unrelated_file)
+
+    with pytest.raises(APIError, match="Unable to refresh overseas equity authentication"):
+        fetch_overseas_portfolio_equity()
+
+    post.assert_not_called()
+    get.assert_not_called()
+    assert token_path.is_symlink()
+    assert unrelated_file.read_bytes() == b"not a pickle"
+
+
+def test_malformed_cache_recovery_uses_only_the_remaining_retry_budget(cached_equity_client):
+    get, post, token_path = cached_equity_client
+    token_path.write_bytes(b"not a pickle")
+    post.side_effect = requests.Timeout("private-token")
+
+    with pytest.raises(APIError):
+        fetch_overseas_portfolio_equity()
+
+    assert post.call_count == 2
+    get.assert_not_called()
+
+
 def test_output3_total_and_legacy_factory_behavior_remain_unchanged(cached_equity_client, monkeypatch):
     get, post, _ = cached_equity_client
     get.return_value = _authentication_response({"rt_cd": "0", "output3": [deepcopy(AMOUNTS)]})
