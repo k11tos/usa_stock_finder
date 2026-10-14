@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import main
+import broker_equity_snapshot_runner as equity_runner
+from tests.test_broker_equity_snapshots import EQUITY
+from stock_operations import APIError
 from sell_signals import SellDecision, SellReason
 from telegram_utils import build_daily_report_message, build_performance_summary_message, send_telegram_message
 
@@ -30,6 +33,7 @@ REPORT_URL = "https://reports.example/latest/"
 def daily_run(monkeypatch, tmp_path):
     """Exercise main's filters/formatters/sender, with all external services mocked."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PERFORMANCE_KRW_SNAPSHOT_ENABLED", raising=False)
     monkeypatch.setattr(main, "_load_and_validate_runtime_prerequisites", lambda: True)
     monkeypatch.setattr(main, "generate_run_metadata", lambda: ("test-run", "2026-08-26"))
     fixed_date = MagicMock()
@@ -156,6 +160,67 @@ def sent_message(daily_run):
 
 def sent_messages(daily_run):
     return [call.kwargs["text"] for call in daily_run["bot"].sendMessage.call_args_list]
+
+
+@pytest.mark.parametrize("result", ["success", "api_failure", "missing_fields", "disk_failure"])
+def test_equity_collection_preserves_daily_workflow_and_sizing(daily_run, monkeypatch, tmp_path, result):
+    # Compare the same production flow with collection off and on.
+    main.main()
+    baseline_messages = sent_messages(daily_run)
+    baseline_sizing = daily_run["sizing"].call_args
+    baseline_trades = daily_run["trades"].call_args
+    baseline_snapshots = daily_run["snapshots"].call_args
+    for key in ("sizing", "trades", "snapshots", "save", "builder"):
+        daily_run[key].reset_mock()
+    daily_run["bot"].sendMessage.reset_mock()
+    monkeypatch.setenv("PERFORMANCE_KRW_SNAPSHOT_ENABLED", "true")
+
+    def fetch():
+        # Optional API work cannot delay actionable alerts or consume sizing inputs.
+        assert sent_messages(daily_run) == baseline_messages
+        if result == "api_failure":
+            raise APIError("mock failure")
+        if result == "missing_fields":
+            return {key: value for key, value in EQUITY.items() if key != "cash_krw"}
+        return EQUITY
+
+    fetch_mock = MagicMock(side_effect=fetch)
+    monkeypatch.setattr(equity_runner, "fetch_overseas_portfolio_equity", fetch_mock)
+    if result == "disk_failure":
+        monkeypatch.setattr(equity_runner, "append_broker_equity_snapshot", MagicMock(side_effect=OSError("disk")))
+    main.main()
+    fetch_mock.assert_called_once_with()
+    assert sent_messages(daily_run) == baseline_messages
+    assert daily_run["sizing"].call_args == baseline_sizing
+    assert daily_run["trades"].call_args == baseline_trades
+    assert daily_run["snapshots"].call_args == baseline_snapshots
+    assert (tmp_path / "data/live/broker_equity_snapshots.csv").exists() == (result == "success")
+
+
+def test_failed_daily_execution_does_not_collect_equity(daily_run, monkeypatch):
+    monkeypatch.setenv("PERFORMANCE_KRW_SNAPSHOT_ENABLED", "true")
+    daily_run["save"].side_effect = OSError("disk full")
+    fetch = MagicMock()
+    monkeypatch.setattr(equity_runner, "fetch_overseas_portfolio_equity", fetch)
+    with pytest.raises(OSError):
+        main.main()
+    fetch.assert_not_called()
+
+
+def test_empty_trade_day_still_collects_equity(daily_run, monkeypatch, tmp_path):
+    monkeypatch.setenv("PERFORMANCE_KRW_SNAPSHOT_ENABLED", "true")
+    finder, _buys, _holds, entries, stages = daily_run["prepare"].return_value
+    daily_run["prepare"].return_value = (finder, [], [], entries, stages)
+    daily_run["sizing"].side_effect = None
+    daily_run["sizing"].return_value = ([], {}, {}, {})
+    monkeypatch.setattr(main, "_prepare_sell_decisions_and_quantities", lambda *_args: ({}, {}, 0.0, []))
+    fetch = MagicMock(return_value=EQUITY)
+    monkeypatch.setattr(equity_runner, "fetch_overseas_portfolio_equity", fetch)
+    main.main()
+    fetch.assert_called_once_with()
+    daily_run["trades"].assert_called_once_with([])
+    assert daily_run["bot"].sendMessage.await_count == 1
+    assert (tmp_path / "data/live/broker_equity_snapshots.csv").exists()
 
 
 def test_trade_day_sends_immediate_trade_alert_then_performance_follow_up(daily_run, caplog):

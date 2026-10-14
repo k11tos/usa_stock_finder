@@ -2,13 +2,105 @@
 
 from __future__ import annotations
 
+import fcntl
+import json
+import math
+import os
 from csv import DictReader, DictWriter
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
+
+BROKER_EQUITY_AMOUNT_FIELDS = [
+    "total_asset_krw", "stock_evaluation_krw", "cash_krw", "foreign_cash_krw",
+    "unsettled_buy_krw", "unsettled_sell_krw",
+]
+BROKER_EQUITY_SNAPSHOT_HEADERS = [
+    "run_id", "run_date", "fetched_at_kst", *BROKER_EQUITY_AMOUNT_FIELDS,
+    "source", "valuation_currency",
+]
+
+
+def build_broker_equity_snapshot_row(
+    run_id: str, run_date: str, equity: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the Stage 1 result without inferring amounts or filling blanks."""
+    if not isinstance(run_id, str) or not run_id.strip() or any(char in run_id for char in "\r\n"):
+        raise ValueError("Invalid broker equity run_id")
+    if date.fromisoformat(run_date).isoformat() != run_date:
+        raise ValueError("Invalid broker equity run_date")
+    if not isinstance(equity, dict):
+        raise ValueError("Invalid broker equity result")
+    timestamp = equity.get("fetched_at_kst")
+    if not isinstance(timestamp, str) or datetime.fromisoformat(timestamp).utcoffset() != timedelta(hours=9):
+        raise ValueError("Invalid broker equity KST timestamp")
+    expected_source = {
+        "provider": "KIS", "endpoint": "/uapi/overseas-stock/v1/trading/inquire-present-balance",
+        "tr_id": "CTRP6504R",
+    }
+    expected_query = {"WCRC_FRCR_DVSN_CD": "01", "NATN_CD": "840", "TR_MKET_CD": "00", "INQR_DVSN_CD": "00"}
+    if equity.get("source") != expected_source or equity.get("query_parameters") != expected_query:
+        raise ValueError("Invalid broker equity source or KRW query scope")
+    row = {"run_id": run_id, "run_date": run_date, "fetched_at_kst": timestamp}
+    for field in BROKER_EQUITY_AMOUNT_FIELDS:
+        value = equity.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"Invalid broker equity amount: {field}")
+        row[field] = value
+    if row["total_asset_krw"] < 0:
+        raise ValueError("Negative broker equity total")
+    row.update(source=json.dumps(expected_source, sort_keys=True), valuation_currency="KRW")
+    return row
+
+
+def _broker_equity_run_ids(file_obj) -> set[str]:
+    """Fail closed on a foreign schema or incomplete existing record."""
+    file_obj.seek(0)
+    reader = DictReader(file_obj)
+    if reader.fieldnames != BROKER_EQUITY_SNAPSHOT_HEADERS:
+        raise ValueError("Invalid broker equity CSV header")
+    run_ids = set()
+    for row in reader:
+        if None in row or any(value in (None, "") for value in row.values()):
+            raise ValueError("Incomplete broker equity CSV record")
+        run_ids.add(row["run_id"])
+    return run_ids
+
+
+def broker_equity_snapshot_exists(run_id: str, output_dir: str = "data/live") -> bool:
+    """Skip an already persisted run before making another broker request."""
+    csv_path = Path(output_dir) / "broker_equity_snapshots.csv"
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        return False
+    with csv_path.open("r", newline="", encoding="utf-8") as file_obj:
+        fcntl.flock(file_obj, fcntl.LOCK_SH)
+        return run_id in _broker_equity_run_ids(file_obj)
+
+
+def append_broker_equity_snapshot(
+    run_id: str, run_date: str, equity: dict[str, Any], output_dir: str = "data/live",
+) -> bool:
+    """Append one validated row under a process lock; never rewrite old CSVs."""
+    row = build_broker_equity_snapshot_row(run_id, run_date, equity)
+    csv_path = Path(output_dir) / "broker_equity_snapshots.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("a+", newline="", encoding="utf-8") as file_obj:
+        fcntl.flock(file_obj, fcntl.LOCK_EX)
+        file_obj.seek(0, os.SEEK_END)
+        empty = file_obj.tell() == 0
+        if not empty and run_id in _broker_equity_run_ids(file_obj):
+            return False
+        file_obj.seek(0, os.SEEK_END)
+        writer = DictWriter(file_obj, fieldnames=BROKER_EQUITY_SNAPSHOT_HEADERS)
+        if empty:
+            writer.writeheader()
+        writer.writerow(row)
+        file_obj.flush()
+        os.fsync(file_obj.fileno())
+    return True
 
 TRADE_SIGNAL_HEADERS = [
     "run_id",
