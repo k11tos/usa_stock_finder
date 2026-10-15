@@ -244,6 +244,7 @@ def test_full_report_publishing_and_legacy_isolation(inputs, tmp_path, monkeypat
     legacy.write_text("date,amount,currency,type,memo\n2026-01-02,999,USD,deposit,legacy\n")
     original = legacy.read_bytes(), inputs[0].read_bytes(), inputs[1].read_bytes()
     monkeypatch.setattr(performance_report, "fetch_benchmark_prices", MagicMock(side_effect=AssertionError))
+    monkeypatch.setattr("tools.krw_benchmarks.fetch_series", lambda *_args: pd.Series(dtype=float))
     monkeypatch.setattr(performance_report, "_load_cash_flows", MagicMock(side_effect=AssertionError))
     args = argparse.Namespace(data_source="broker_krw", start_date=None, end_date=None, benchmarks=["SPY"],
                               output=str(tmp_path / "report"), publish_latest=True, history=True, report_run_id="twr")
