@@ -522,7 +522,7 @@ def test_krw_report_source_isolation_publication_and_raw_chart(broker_path, tmp_
     performance_report.build_report(args)
     for loader in [legacy_loader, cash_loader, benchmark_loader]:
         loader.assert_not_called()
-    assert plot.call_args_list[0].args[0]["Broker equity"].tolist() == [1000000, 3000000]
+    assert plot.call_args_list[0].args[0]["Broker total assets"].tolist() == [1000000, 3000000]
     assert "KRW" in plot.call_args_list[0].args[3]
     output = Path(args.output)
     for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
@@ -882,5 +882,5 @@ def test_cli_defaults_and_direct_script_execution(broker_path, tmp_path, monkeyp
         [sys.executable, str(script), "--data-source", "broker_krw", "--output", str(tmp_path / "cli")],
         check=False, capture_output=True, text=True, timeout=30,
     )
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 1, completed.stderr  # Diagnostic-only KRW output is not validated success.
     assert json.loads((tmp_path / "cli/performance_summary.json").read_text())["data_source"] == "broker_krw"

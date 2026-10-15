@@ -1,5 +1,9 @@
 # Cash-flow-aware KRW performance — Stage 4
 
+Stage 5 adds historical-FX benchmark comparisons and report status contracts;
+see [validated KRW charts](validated_krw_charts.md). Accounting and TWR validation
+rules below are unchanged. Benchmark statements below describe Stage 4 only.
+
 ## Accounting boundary (defined before implementation)
 
 Dependencies: merged Stage 1 #164 (`355f164`), Stage 2 #165 (`baf80b1`),

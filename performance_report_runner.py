@@ -55,7 +55,10 @@ def run_performance_report_safely() -> bool:
     )
 
     try:
-        build_report(args)
+        result = build_report(args)
+        if result is False:
+            logger.warning("KRW performance is not validated; diagnostic report only: output=%s", output_dir)
+            return False
         logger.info(
             "Performance report generated: output=%s benchmarks=%s publish_latest=%s history=%s source=%s",
             output_dir,
