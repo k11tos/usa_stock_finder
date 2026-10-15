@@ -42,6 +42,7 @@ class BrokerEquityData:
     original_csv: str
     warnings: list[str]
     original_csv_bytes: bytes | None = None
+    rejected_records: bool = False
 
 
 def _validate_record(row: dict, as_of: datetime) -> pd.Timestamp:
@@ -151,6 +152,7 @@ def load_broker_equity(start_date: str | None = None, end_date: str | None = Non
         if run_id in seen:
             result.warnings.append(f"Row {number}: duplicate run ID detected.")
             if row != seen[run_id]:
+                result.rejected_records = True
                 conflicting_ids.add(run_id)
                 result.warnings.append(f"Row {number}: conflicting duplicate run ID; all its records quarantined.")
             continue
@@ -158,9 +160,11 @@ def load_broker_equity(start_date: str | None = None, end_date: str | None = Non
         try:
             fetched = _validate_record(row, current)
         except InvalidBrokerRecord as exc:
+            result.rejected_records = True
             result.warnings.append(f"Row {number}: invalid broker KRW record: {exc}.")
             continue
         except (ValueError, TypeError, OverflowError):
+            result.rejected_records = True
             # Describe the failed contract without echoing private/raw CSV values.
             result.warnings.append(f"Row {number}: invalid broker KRW record; verify source, KRW currency, "
                                    "finite amounts, positive equity, date/timestamp and record structure.")

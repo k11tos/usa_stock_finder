@@ -38,6 +38,10 @@ def build_performance_summary_message(summary: dict, report_url: str | None) -> 
             f"브로커 자산 진단 (KRW, {summary.get('start_date') or 'N/A'} ~ {summary.get('end_date') or 'N/A'})",
             "투자 수익률: N/A (외부 현금흐름 완전성 미확인)",
         ]
+        if summary.get("returns_validated") is True:
+            lines[1] = f"투자 수익률 (TWR): {_format_pct(summary.get('cumulative_return_pct'))}"
+        elif summary.get("external_cash_flow_completeness", "unknown") != "unknown":
+            lines[1] = "투자 수익률 (TWR): N/A (평가 구간 또는 현금흐름 시점 검증 불충분)"
         if report_url:
             lines.extend(["", f"상세: {report_url}"])
         return "\n".join(lines)
