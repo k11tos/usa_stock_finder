@@ -638,6 +638,110 @@ def test_mode_switch_replaces_old_artifacts_without_stale_returns(broker_path, t
         assert not (bundle / "broker_equity_observations.csv").exists()
 
 
+def test_krw_to_empty_legacy_removes_return_charts_and_preserves_old_history(
+        broker_path, tmp_path, monkeypatch):
+    write_records(broker_path, [record(), record("2026-01-02", "3000000")])
+    args = report_args(tmp_path, "broker_krw")
+    output = Path(args.output)
+
+    performance_report.build_report(args)
+
+    stale_charts = {
+        name: (output / "charts" / name).read_bytes()
+        for name in performance_report.RETURN_CHARTS
+    }
+    assert all(stale_charts.values())
+    old_history = output / "history" / "older-run"
+    old_history.mkdir(parents=True)
+    (old_history / "keep.txt").write_text("historical report", encoding="utf-8")
+    (old_history / "charts").mkdir()
+    (old_history / "charts" / performance_report.RETURN_CHARTS[0]).write_bytes(
+        stale_charts[performance_report.RETURN_CHARTS[0]])
+
+    empty_snapshots = broker_path.with_name("account_snapshots.csv")
+    pd.DataFrame(columns=["run_date", "cash", "market_value"]).to_csv(empty_snapshots, index=False)
+    monkeypatch.setattr(performance_report, "fetch_benchmark_prices", MagicMock(
+        side_effect=AssertionError("empty legacy reports must not fetch benchmarks")))
+    args.data_source = "legacy_usd"
+    performance_report.build_report(args)
+
+    for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
+        summary = json.loads((bundle / "performance_summary.json").read_text())
+        assert summary["data_source"] == "legacy_usd"
+        assert summary["num_days"] == 0
+        assert summary["cumulative_return_pct"] is None
+        assert summary["cash_flow_adjusted_return_pct"] is None
+        assert summary["max_drawdown_pct"] is None
+        assert summary["annualized_volatility_pct"] is None
+        assert pd.read_csv(bundle / "equity_curve.csv").empty
+        assert not (bundle / "broker_equity_observations.csv").exists()
+        assert not (bundle / "charts" / performance_report.RAW_KRW_CHART).exists()
+        for chart in performance_report.RETURN_CHARTS:
+            assert not (bundle / "charts" / chart).exists()
+        html = (bundle / "index.html").read_text(encoding="utf-8")
+        for chart in performance_report.RETURN_CHARTS:
+            assert f'<img src="charts/{chart}"' not in html
+            assert f"Missing chart:</strong> charts/{chart}" in html
+
+    assert (old_history / "keep.txt").read_text(encoding="utf-8") == "historical report"
+    assert (old_history / "charts" / performance_report.RETURN_CHARTS[0]).read_bytes() == stale_charts[
+        performance_report.RETURN_CHARTS[0]]
+
+
+def test_valid_legacy_to_empty_legacy_removes_old_return_charts(broker_path, tmp_path, monkeypatch):
+    snapshots = broker_path.with_name("account_snapshots.csv")
+    pd.DataFrame({
+        "run_date": ["2026-01-01", "2026-01-02"],
+        "cash": [100, 100], "market_value": [100, 120],
+    }).to_csv(snapshots, index=False)
+    monkeypatch.setattr(performance_report, "fetch_benchmark_prices", lambda *_args: pd.DataFrame())
+    args = report_args(tmp_path, "legacy_usd")
+    performance_report.build_report(args)
+    output = Path(args.output)
+    old_charts = {
+        name: (output / "charts" / name).read_bytes()
+        for name in performance_report.RETURN_CHARTS
+    }
+    assert all(old_charts.values())
+
+    pd.DataFrame(columns=["run_date", "cash", "market_value"]).to_csv(snapshots, index=False)
+    performance_report.build_report(args)
+
+    for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
+        summary = json.loads((bundle / "performance_summary.json").read_text())
+        assert summary["data_source"] == "legacy_usd" and summary["num_days"] == 0
+        for name, old_chart in old_charts.items():
+            assert not (bundle / "charts" / name).exists()
+            assert old_chart
+        html = (bundle / "index.html").read_text(encoding="utf-8")
+        assert "<img src=\"charts/" not in html
+        assert "Missing chart:" in html
+
+
+def test_empty_legacy_to_valid_legacy_generates_and_publishes_charts(broker_path, tmp_path, monkeypatch):
+    snapshots = broker_path.with_name("account_snapshots.csv")
+    pd.DataFrame(columns=["run_date", "cash", "market_value"]).to_csv(snapshots, index=False)
+    monkeypatch.setattr(performance_report, "fetch_benchmark_prices", lambda *_args: pd.DataFrame())
+    args = report_args(tmp_path, "legacy_usd")
+    output = Path(args.output)
+    performance_report.build_report(args)
+    assert not any((output / "charts" / name).exists() for name in performance_report.RETURN_CHARTS)
+
+    pd.DataFrame({
+        "run_date": ["2026-01-01", "2026-01-02"],
+        "cash": [100, 100], "market_value": [100, 120],
+    }).to_csv(snapshots, index=False)
+    performance_report.build_report(args)
+
+    for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
+        summary = json.loads((bundle / "performance_summary.json").read_text())
+        assert summary["data_source"] == "legacy_usd" and summary["num_days"] == 2
+        for name in performance_report.RETURN_CHARTS:
+            chart = bundle / "charts" / name
+            assert chart.exists() and chart.stat().st_size > 0
+            assert f'<img src="charts/{name}"' in (bundle / "index.html").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("source", [None, "legacy_usd", "broker_krw"])
 def test_runner_source_selection_preserves_output_and_publishing(monkeypatch, source):
     monkeypatch.setenv("PERFORMANCE_REPORT_ENABLED", "true")

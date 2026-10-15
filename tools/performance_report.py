@@ -665,6 +665,8 @@ def build_report(args: argparse.Namespace) -> None:
     equity_curve_path = output_dir / "equity_curve.csv"
 
     if strategy.empty:
+        for chart in RETURN_CHARTS:
+            (output_dir / "charts" / chart).unlink(missing_ok=True)
         strategy.to_csv(equity_curve_path, index=False)
         summary = {
             "data_source": "legacy_usd",
