@@ -246,3 +246,6 @@ pyrightconfig.json
 # Live runtime outputs
 data/live/*.csv
 outputs/performance/
+backups/
+stage6-preview-*/
+compose.stage6-image.yml

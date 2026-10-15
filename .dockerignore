@@ -19,3 +19,11 @@ portfolio/*
 *.pyo
 *.pyd
 .vscode
+.env
+.env.*
+outputs/
+backups/
+.pytest_cache/
+.coverage
+htmlcov/
+stage6-preview-*/

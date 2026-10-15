@@ -54,24 +54,30 @@ to KRW equity belongs to a later stage.
 
 ## Docker volume persistence
 
+For the current production `stock` container, follow the
+[Stage 6 rollout/backup/rollback runbook](production_rollout.md). It is a
+scheduled one-shot: inspection must not start an extra daily execution.
+
 Docker's working directory is `/py_app`. Mount the host data directory so both
 the new CSV and existing tracking/history files survive container replacement:
 
 ```bash
 mkdir -p data
-docker run --rm --env-file .env \
+docker create --name stock --env-file .env \
   --mount type=bind,src="$(pwd)/data",dst=/py_app/data \
-  ghcr.io/k11tos/usa-stock-finder:latest
+  ghcr.io/k11tos/usa_stock_finder@sha256:REPLACE_WITH_VERIFIED_DIGEST
 ```
 
-Run from the repository root and ensure the container user can write to the
+This example creates a new stopped container only; use the Stage 6 Compose
+procedure to replace an existing `stock`. Run from the repository root and ensure the container user can write to the
 mounted directory. For a named volume, use `--mount
 type=volume,src=usa-stock-data,dst=/py_app/data` and seed any required existing
 tracking/history files before the first execution. Back up the entire volume,
 including `live/broker_equity_snapshots.csv`. An unmounted container filesystem
 does not retain records after replacement. Use a filesystem supporting POSIX
 file locks (the supported Linux/Docker runtime); separate unshared volumes do
-not provide cross-container deduplication. No Dockerfile change is required.
+not provide cross-container deduplication. Stage 6 also persists the report
+output directory and verifies final-image imports.
 
 ## Verification
 

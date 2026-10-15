@@ -3,7 +3,7 @@ name: Docker Build & Push to GHCR
 # 이 워크플로우는 Docker 이미지 빌드와 GitHub Container Registry에 푸시를 담당합니다
 # ARM64 (Raspberry Pi 등) 및 AMD64 플랫폼을 지원합니다
 # 안전 규칙:
-# - 프로덕션(latest 태그/라즈베리파이 배포)은 main 브랜치 푸시(예: PR 머지) 또는 main 수동 실행에서 수행합니다.
+# - main에서 latest 태그를 발행하고 Pi에 digest 이미지만 pull합니다. stock은 시작/교체하지 않습니다.
 # - non-main 수동 실행은 빌드/브랜치 태그 푸시까지만 허용합니다.
 
 on:
@@ -23,6 +23,8 @@ permissions:
 jobs:
   build-and-push:
     name: Build & Push Docker Image
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -87,11 +89,11 @@ jobs:
         if: github.event_name != 'pull_request'
         run: echo "Image pushed with digest ${{ steps.build.outputs.digest }}"
 
-  deploy-to-raspberry-pi:
-    name: Deploy to Raspberry Pi
+  stage-on-raspberry-pi:
+    name: Stage image on Raspberry Pi (no strategy execution)
     runs-on: ubuntu-latest
     needs: build-and-push
-    # 프로덕션 배포는 main 브랜치 push(PR merge 포함) 또는 수동 실행에서 허용
+    # main에서는 이미지만 준비합니다. 예약 실행/컨테이너 교체는 운영 절차를 따릅니다.
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Set up Tailscale
@@ -123,10 +125,12 @@ jobs:
           ssh-keyscan "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Deploy to Raspberry Pi
+      - name: Pull immutable image without recreating or starting stock
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.digest }}
         run: |
           set -euo pipefail
-          timeout 10m ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'TARGET_DIR="${{ secrets.PI_PROJECT_PATH }}" bash -se' <<'REMOTE_SCRIPT'
+          timeout 10m ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" 'TARGET_DIR="${{ secrets.PI_PROJECT_PATH }}" IMAGE_REF="'"$IMAGE_REF"'" bash -se' <<'REMOTE_SCRIPT'
           set -euo pipefail
           if [ -z "$TARGET_DIR" ]; then
             echo "ERROR: deployment target directory is not configured."
@@ -151,56 +155,14 @@ jobs:
           docker login -u ${{ github.actor }} --password-stdin ${{ env.REGISTRY }} <<GITHUB_TOKEN_EOF
           ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN_EOF
-          docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
-          docker compose rm -sf stock || true
-          docker compose up -d stock
-          docker image prune -f
-          echo "== docker compose ps -a =="
-          docker compose ps -a
-
-          container_id=$(docker compose ps -aq stock)
-          if [ -z "$container_id" ]; then
-            echo "ERROR: stock service container was not created."
-            exit 1
-          fi
-
-          container_state=$(docker inspect -f '{{.State.Status}}' "$container_id")
-          health_state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
-          exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
-          echo "stock container state: $container_state (exit_code=$exit_code, health=$health_state)"
-          # main.py may exit immediately outside the execution window, so exited(0) is a valid success.
-          case "$container_state" in
-            running)
-              echo "stock service is running."
-              ;;
-            exited)
-              if [ "$exit_code" -eq 0 ]; then
-                echo "stock service finished with exit code 0 (valid batch success)."
-              else
-                echo "ERROR: stock service exited with non-zero code: $exit_code"
-                docker logs --tail 100 "$container_id" || true
-                exit 1
-              fi
-              ;;
-            restarting|dead|created)
-              echo "ERROR: stock service is in invalid post-deploy state: $container_state"
-              docker logs --tail 100 "$container_id" || true
-              exit 1
-              ;;
-            *)
-              echo "ERROR: stock service is in unexpected state: $container_state"
-              docker logs --tail 100 "$container_id" || true
-              exit 1
-              ;;
-          esac
-
-          echo "stock container health: $health_state"
-
-          echo "== recent stock service logs =="
-          docker compose logs --tail 100 stock || docker logs --tail 100 "$container_id" || true
-          echo "Deployment completed; showing container status."
-          docker compose ps
-          docker logout ${{ env.REGISTRY }}
+          # Staging must not invoke main.py, interrupt a scheduled run, or prune
+          # the previous image. Container recreation is an operator rollout step.
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          docker pull "$IMAGE_REF"
+          docker image inspect --format '{{.Os}}/{{.Architecture}} {{.Id}}' "$IMAGE_REF"
+          echo "Staged immutable image: $IMAGE_REF"
+          echo "stock was not started or recreated. Follow docs/production_rollout.md."
+          docker ps -a --filter name=^/stock$ --format '{{.Names}} {{.Status}} {{.Image}}'
           REMOTE_SCRIPT
 
       # 선택사항: Slack 알림 (SLACK_WEBHOOK_URL secret이 설정된 경우에만)
@@ -213,7 +175,7 @@ jobs:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
-            text: "✅ Docker build/push/deploy succeeded for `${{ github.repository }}` on `${{ github.ref_name }}`."
+            text: "✅ Docker build/push/stage succeeded; manual rollout required for `${{ github.repository }}` on `${{ github.ref_name }}`."
 
       - name: Slack Notification (Failure)
         if: failure()
@@ -223,4 +185,4 @@ jobs:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
-            text: "❌ Docker build/push/deploy failed for `${{ github.repository }}` on `${{ github.ref_name }}`. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            text: "❌ Docker build/push/stage failed for `${{ github.repository }}` on `${{ github.ref_name }}`. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
