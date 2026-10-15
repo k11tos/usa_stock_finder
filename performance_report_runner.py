@@ -42,6 +42,7 @@ def run_performance_report_safely() -> bool:
     history = _env_bool("PERFORMANCE_REPORT_HISTORY", False)
 
     args = argparse.Namespace(
+        data_source=os.getenv("PERFORMANCE_REPORT_DATA_SOURCE", "legacy_usd"),
         snapshots="data/live/account_snapshots.csv",
         trades="data/live/trade_signals.csv",
         benchmarks=benchmarks,
@@ -56,11 +57,12 @@ def run_performance_report_safely() -> bool:
     try:
         build_report(args)
         logger.info(
-            "Performance report generated: output=%s benchmarks=%s publish_latest=%s history=%s",
+            "Performance report generated: output=%s benchmarks=%s publish_latest=%s history=%s source=%s",
             output_dir,
             benchmarks,
             publish_latest,
             history,
+            args.data_source,
         )
     except Exception as exc:  # pragma: no cover - defensive safety wrapper
         logger.warning("Performance report generation failed (continuing main flow): %s", str(exc))

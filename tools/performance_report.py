@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 from datetime import datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 
 import matplotlib
@@ -13,6 +14,19 @@ import yfinance as yf
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position,ungrouped-imports
+
+if __package__:
+    from .broker_equity import load_broker_equity
+else:  # Support the existing `python tools/performance_report.py` entry point.
+    from broker_equity import load_broker_equity
+
+PERFORMANCE_DATA_SOURCES = ("legacy_usd", "broker_krw")
+RETURN_CHARTS = ("cumulative_return.png", "drawdown.png", "excess_return.png")
+RAW_KRW_CHART = "raw_equity_krw.png"
+KRW_RETURN_CAVEAT = (
+    "External cash-flow completeness is unknown. Raw equity changes are not investment returns. "
+    "Return, CAGR, drawdown, volatility and benchmark comparison metrics are N/A in Stage 3."
+)
 
 DEFAULT_SNAPSHOTS = "data/live/account_snapshots.csv"
 DEFAULT_CASH_FLOWS = "data/live/cash_flows.csv"
@@ -94,17 +108,22 @@ def _copy_report_bundle(source_dir: Path, destination_dir: Path) -> None:
         "performance_summary.json",
         "equity_curve.csv",
         "benchmark_comparison.csv",
+        "broker_equity_observations.csv",
     ]
     for name in files:
         src = source_dir / name
         if src.exists():
             shutil.copy2(src, destination_dir / name)
-    for chart in ["cumulative_return.png", "drawdown.png", "excess_return.png"]:
+        else:
+            (destination_dir / name).unlink(missing_ok=True)
+    for chart in [*RETURN_CHARTS, RAW_KRW_CHART]:
         src = source_dir / "charts" / chart
         dst = destination_dir / "charts" / chart
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.exists():
             shutil.copy2(src, dst)
+        else:
+            dst.unlink(missing_ok=True)
 
 
 def _publish_report_bundles(output_dir: Path, args: argparse.Namespace) -> None:
@@ -540,9 +559,103 @@ def cagr_pct(series: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> float
     return float((growth ** (365.25 / days) - 1.0) * 100.0)
 
 
+def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None:
+    loaded = load_broker_equity(args.start_date, args.end_date)
+    daily = loaded.daily
+    if daily.empty:
+        loaded.warnings.append("No valid broker KRW observations found for the selected period.")
+    daily.to_csv(output_dir / "equity_curve.csv", index=False, index_label="date")
+    # Includes invalid, superseded and duplicate records for diagnosis; never rewrite the source.
+    original_path = output_dir / "broker_equity_observations.csv"
+    if loaded.original_csv_bytes is None:
+        original_path.unlink(missing_ok=True)
+        original_description = "Original snapshot input unavailable; no original-input artifact was retained."
+        original_link = "Original snapshot input unavailable"
+    else:
+        original_path.write_bytes(loaded.original_csv_bytes)
+        original_description = (
+            "Original records, including rejected and superseded rows, are preserved in broker_equity_observations.csv."
+        )
+        original_link = '<a href="broker_equity_observations.csv">Original observations (includes rejected records)</a>'
+    summary = {
+        "data_source": "broker_krw",
+        "valuation_currency": "KRW",
+        "report_kind": "raw_equity_diagnostic",
+        "returns_validated": False,
+        "external_cash_flow_completeness": "unknown",
+        "start_date": None if daily.empty else daily["run_date"].iloc[0].strftime("%Y-%m-%d"),
+        "end_date": None if daily.empty else daily["run_date"].iloc[-1].strftime("%Y-%m-%d"),
+        "num_days": len(daily),
+        "latest_equity_krw": None if daily.empty else float(daily["total_asset_krw"].iloc[-1]),
+        "benchmarks": args.benchmarks,
+        "best_benchmark": None,
+        "cumulative_return_pct": None,
+        "cash_flow_adjusted_return_pct": None,
+        "cagr_pct": None,
+        "max_drawdown_pct": None,
+        "annualized_volatility_pct": None,
+        "cash_flow_warnings": [KRW_RETURN_CAVEAT],
+        "data_quality_warnings": loaded.warnings,
+    }
+    for symbol in args.benchmarks:
+        summary[f"cumulative_return_{symbol}_pct"] = None
+        summary[f"excess_return_vs_{symbol}"] = None
+    (output_dir / "performance_summary.json").write_text(
+        json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8",
+    )
+    pd.DataFrame([
+        {"asset": asset, "cumulative_return_pct": None} for asset in ["Broker equity (KRW)", *args.benchmarks]
+    ]).to_csv(output_dir / "benchmark_comparison.csv", index=False)
+    plot_data = daily.set_index("run_date")[["total_asset_krw"]].rename(columns={"total_asset_krw": "Broker equity"})
+    _save_line_chart(plot_data, output_dir / "charts" / RAW_KRW_CHART,
+                     "Raw broker equity (KRW) — diagnostic observations", "Equity (KRW)")
+    # Keep established bundle filenames, replacing earlier return charts with explicit unavailable panels.
+    for chart in RETURN_CHARTS:
+        _save_line_chart(pd.DataFrame(), output_dir / "charts" / chart,
+                         "N/A — external cash-flow completeness unknown", "Metric unavailable")
+    warnings = loaded.warnings or ["None"]
+    period = f"{summary['start_date'] or 'N/A'} to {summary['end_date'] or 'N/A'} ({len(daily)} snapshot days)"
+    lines = [
+        "# Broker Equity Diagnostic Report (KRW)", "", "- Data source: broker_krw",
+        "- Input: data/live/broker_equity_snapshots.csv", f"- Period: {period}",
+        "- Investment returns: N/A", "- Cash-flow-adjusted return: N/A", "- CAGR: N/A",
+        "- Max drawdown: N/A", "- Annualized volatility: N/A", "- Benchmark / excess returns: N/A",
+        "", KRW_RETURN_CAVEAT, "", "## Raw Equity", "",
+        f"![Raw broker equity in KRW](charts/{RAW_KRW_CHART})", "",
+        original_description,
+        "No interpolation, smoothing, currency conversion or spike removal is performed.",
+        "", "## Data Quality Warnings", "", *(f"- {warning}" for warning in warnings),
+    ]
+    (output_dir / "performance_report.md").write_text("\n".join(lines), encoding="utf-8")
+    warning_html = "".join(f"<li>{escape(warning)}</li>" for warning in warnings)
+    html = f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Broker Equity Diagnostic Report (KRW)</title></head><body>
+<h1>Broker Equity Diagnostic Report (KRW)</h1>
+<p>Data source: broker_krw · Currency: KRW · Period: {period}</p>
+<p>{KRW_RETURN_CAVEAT}</p>
+<p>Investment returns: N/A · Cash-flow-adjusted return: N/A · CAGR: N/A · Max drawdown: N/A ·
+Annualized volatility: N/A · Benchmark / excess returns: N/A</p>
+<figure><img src="charts/{RAW_KRW_CHART}" alt="Raw broker equity in KRW" style="max-width:100%;height:auto"></figure>
+<p>No interpolation, smoothing, currency conversion or spike removal is performed.</p>
+<p><a href="equity_curve.csv">Selected observations</a> ·
+{original_link}</p>
+<h2>Data Quality Warnings</h2><ul>{warning_html}</ul></body></html>'''
+    (output_dir / "index.html").write_text(html, encoding="utf-8")
+    _publish_report_bundles(output_dir, args)
+
+
 def build_report(args: argparse.Namespace) -> None:
+    data_source = getattr(args, "data_source", "legacy_usd")
+    if data_source not in PERFORMANCE_DATA_SOURCES:
+        raise ValueError(f"Unsupported performance data source: {data_source}")
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if data_source == "broker_krw":
+        _build_broker_krw_report(args, output_dir)
+        return
+    (output_dir / "broker_equity_observations.csv").unlink(missing_ok=True)
+    (output_dir / "charts" / RAW_KRW_CHART).unlink(missing_ok=True)
 
     strategy, equity_warnings = load_strategy_equity_curve_with_warnings(args.snapshots, args.start_date, args.end_date)
     cash_flows, cash_flow_warnings = _load_cash_flows(getattr(args, "cash_flows", DEFAULT_CASH_FLOWS))
@@ -552,8 +665,12 @@ def build_report(args: argparse.Namespace) -> None:
     equity_curve_path = output_dir / "equity_curve.csv"
 
     if strategy.empty:
+        for chart in RETURN_CHARTS:
+            (output_dir / "charts" / chart).unlink(missing_ok=True)
         strategy.to_csv(equity_curve_path, index=False)
         summary = {
+            "data_source": "legacy_usd",
+            "valuation_currency": "USD",
             "start_date": None,
             "end_date": None,
             "num_days": 0,
@@ -600,6 +717,8 @@ def build_report(args: argparse.Namespace) -> None:
     write_performance_charts(chart_data, output_dir)
 
     summary: dict[str, object] = {
+        "data_source": "legacy_usd",
+        "valuation_currency": "USD",
         "start_date": start.strftime("%Y-%m-%d"),
         "end_date": end.strftime("%Y-%m-%d"),
         "num_days": int(len(norm_df)),
@@ -740,6 +859,7 @@ def parse_args() -> argparse.Namespace:
         description="Build live performance report vs benchmarks.",
     )
     parser.add_argument("--snapshots", default=DEFAULT_SNAPSHOTS)
+    parser.add_argument("--data-source", choices=PERFORMANCE_DATA_SOURCES, default="legacy_usd")
     parser.add_argument("--trades", default=DEFAULT_TRADES)
     parser.add_argument("--cash-flows", default=DEFAULT_CASH_FLOWS)
     parser.add_argument("--benchmarks", nargs="+", default=DEFAULT_BENCHMARKS)
