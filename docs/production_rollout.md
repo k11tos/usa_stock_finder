@@ -20,7 +20,7 @@ Do not interrupt it or add restart policies/health checks that repeatedly run it
 | `PERFORMANCE_KRW_SNAPSHOT_ENABLED` | `false` | Enable only after persistence and read-only broker checks. |
 | `PERFORMANCE_REPORT_ENABLED` | `false` | Enable after flow coverage and standalone report verification. |
 | `PERFORMANCE_REPORT_DATA_SOURCE` | `legacy_usd` | Change to `broker_krw` only after verified KRW history exists. |
-| `PERFORMANCE_REPORT_OUTPUT_DIR` | `outputs/performance` | Persist `/py_app/outputs`, or the exact custom output path. |
+| `PERFORMANCE_REPORT_OUTPUT_DIR` | `outputs/performance` | Persist `/py_app/outputs`, a subtree, or a safe custom path outside `/py_app`. |
 | `PERFORMANCE_REPORT_BENCHMARKS` | `SPY,IWM` | KRW comparisons support these verified USD ETFs. |
 | `PERFORMANCE_REPORT_PUBLISH_LATEST` | `true` | Effective only with report generation enabled. |
 | `PERFORMANCE_REPORT_HISTORY` | `false` | Optional; enable with disk space and retention monitoring. |
@@ -73,6 +73,23 @@ existing** bind/named volume before and after replacement. A nested tmpfs or
 read-only mount is not sufficient. Use an explicitly named volume in Compose;
 anonymous volumes are not a safe recreation contract. Do not mount the entire
 host checkout over `/py_app`, which can hide newly deployed code.
+
+The mount policy is fail-closed: mounts at `/py_app`, its parents, or anywhere
+below it are rejected except `/py_app/data`, `/py_app/outputs`,
+`/py_app/portfolio`, `/py_app/logs` and their descendants. The optional logs
+mount persists `logs/log.json` from the image's logging configuration; mounting
+`logging_config` itself is prohibited. This applies to every mount type and to
+read-only mounts too. Nested state mounts still need to satisfy the writable
+persistence and candidate-input checks. Other state files, including the broker's
+pickle token cache `token.dat`, are not approved mount exceptions.
+
+Custom report output can use a persisted subtree such as
+`outputs/private/performance` or a separate mount such as `/reports`. A custom
+output setting never permits additional mounts below `/py_app`: paths such as
+`/py_app/reports`, `/py_app/tools` or `/py_app/config.py` remain rejected. Mounts
+at parent directories such as `/` are also rejected, even with valid nested
+state mounts. Path comparisons normalize separators and respect directory
+boundaries, so `/py_app/outputs-old` is not an approved output tree.
 
 Pause **only the discovered stock schedule**, record how to restore it, and wait
 for `Running=false`. For a user crontab, save it before `crontab -e`, then comment

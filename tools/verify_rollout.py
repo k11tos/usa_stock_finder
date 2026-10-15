@@ -14,20 +14,28 @@ DEFAULTS = {
     "PERFORMANCE_REPORT_HISTORY": "false",
     "PERFORMANCE_REPORT_TELEGRAM_ENABLED": "false",
 }
-CODE_PATHS = [
-    "main.py", "stock_operations.py", "live_performance_logger.py",
-    "broker_equity_snapshot_runner.py", "performance_report_runner.py",
-    "tools/broker_equity.py", "tools/krw_twr.py", "tools/krw_benchmarks.py",
-    "tools/performance_report.py",
-]
+# State/input/output trees only; never extend this from report configuration.
+# logs/log.json is the output of logging_config/logging_config.json.
+STATE_DIRECTORIES = ("/py_app/data", "/py_app/outputs", "/py_app/portfolio", "/py_app/logs")
+
+
+def normalize_path(path: str) -> str:
+    """Normalize Linux container paths without consulting the host filesystem."""
+    if not path.startswith("/"):
+        raise ValueError("Expected absolute container path")
+    return posixpath.normpath("/" + path.lstrip("/"))
+
+
+def within_directory(path: str, directory: str) -> bool:
+    """Compare exact paths or descendants, respecting directory boundaries."""
+    path, directory = normalize_path(path), normalize_path(directory)
+    return path == directory or path.startswith(directory.rstrip("/") + "/")
 
 
 def covering_mount(path: str, mounts: list[dict]) -> dict | None:
     """Use the deepest mount, including mounts shadowing a persistent parent."""
-    matches = [mount for mount in mounts
-               if path == mount["Destination"].rstrip("/")
-               or path.startswith(mount["Destination"].rstrip("/") + "/")]
-    return max(matches, key=lambda item: len(item["Destination"]), default=None)
+    matches = [mount for mount in mounts if within_directory(path, mount["Destination"])]
+    return max(matches, key=lambda item: len(normalize_path(item["Destination"])), default=None)
 
 
 def review_container(container: dict) -> tuple[dict, list[str]]:
@@ -56,8 +64,8 @@ def review_container(container: dict) -> tuple[dict, list[str]]:
             }
             if value.strip().lower() not in accepted:
                 errors.append(f"Unrecognized boolean configuration: {name}")
-    output = posixpath.normpath(posixpath.join("/py_app", flags["PERFORMANCE_REPORT_OUTPUT_DIR"]))
-    if output == "/py_app/data" or output.startswith("/py_app/data/"):
+    output = normalize_path(posixpath.join("/py_app", flags["PERFORMANCE_REPORT_OUTPUT_DIR"]))
+    if within_directory(output, "/py_app/data"):
         errors.append("Report output must be separate from live input data.")
     paths = ["/py_app/data", "/py_app/data/live/broker_equity_snapshots.csv",
              "/py_app/data/live/krw_external_flows.csv", output]
@@ -70,9 +78,11 @@ def review_container(container: dict) -> tuple[dict, list[str]]:
                              "source": (mount.get("Name") or mount.get("Source")) if mount else None}
         if not persistent:
             errors.append(f"Missing writable bind/named-volume persistence: {path}")
-    for path in CODE_PATHS:
-        if covering_mount("/py_app/" + path, mounts):
-            errors.append(f"Runtime mount hides image code: {path}")
+    for mount in mounts:
+        destination = mount["Destination"]
+        if (within_directory(destination, "/py_app") or within_directory("/py_app", destination)) and not any(
+                within_directory(destination, directory) for directory in STATE_DIRECTORIES):
+            errors.append("Runtime mount hides image code: destination is outside reviewed state directories.")
     portfolio = covering_mount("/py_app/portfolio/portfolio.csv", mounts)
     if not portfolio or portfolio.get("Type") not in {"bind", "volume"}:
         errors.append("Candidate input requires the existing portfolio mount; it is excluded from the image.")
