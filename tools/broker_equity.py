@@ -114,16 +114,19 @@ def load_broker_equity(start_date: str | None = None, end_date: str | None = Non
     """
     result = BrokerEquityData(pd.DataFrame(columns=HEADERS), "", [])
     try:
-        if not BROKER_EQUITY_PATH.exists() or BROKER_EQUITY_PATH.stat().st_size == 0:
-            result.warnings.append("Broker KRW snapshot CSV is missing or empty; no fallback source used.")
-            return result
         with BROKER_EQUITY_PATH.open("rb") as file_obj:
+            # The first writer may have created an empty file while holding LOCK_EX.
             fcntl.flock(file_obj, fcntl.LOCK_SH)
-            original_bytes = file_obj.read()
+            result.original_csv_bytes = file_obj.read()
+    except FileNotFoundError:
+        result.warnings.append("Broker KRW snapshot CSV is missing or empty; no fallback source used.")
+        return result
     except OSError:
         result.warnings.append("Broker KRW snapshot CSV is unavailable or unreadable; no fallback source used.")
         return result
-    result.original_csv_bytes = original_bytes
+    if not result.original_csv_bytes:
+        result.warnings.append("Broker KRW snapshot CSV is missing or empty; no fallback source used.")
+        return result
     try:
         result.original_csv = result.original_csv_bytes.decode("utf-8")
     except UnicodeDecodeError:

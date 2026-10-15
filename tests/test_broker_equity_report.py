@@ -3,11 +3,12 @@
 import argparse
 import csv
 import json
+import multiprocessing
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open
+from unittest.mock import MagicMock, mock_open, patch
 
 import pandas as pd
 import pytest
@@ -71,6 +72,106 @@ def test_stage2_persisted_csv_is_loaded(broker_path):
     assert result.original_csv.encode() == original == broker_path.read_bytes()
 
 
+def test_first_writer_blocks_reader_until_snapshot_is_flushed(broker_path):
+    """Pause the real Stage 2 append after file creation and exclusive locking."""
+    context = multiprocessing.get_context("fork")
+    writer_locked, release_writer = context.Event(), context.Event()
+    receiver, sender = context.Pipe(duplex=False)
+    row = record()
+
+    def write_snapshot():
+        real_flock = broker_equity.fcntl.flock
+
+        def pause_after_lock(file_obj, operation):
+            real_flock(file_obj, operation)
+            writer_locked.set()
+            assert release_writer.wait(10), "Writer release timed out"
+
+        equity = {field: float(row[field]) for field in AMOUNT_FIELDS}
+        equity.update(fetched_at_kst=row["fetched_at_kst"], source=EXPECTED_SOURCE, query_parameters={
+            "WCRC_FRCR_DVSN_CD": "01", "NATN_CD": "840", "TR_MKET_CD": "00", "INQR_DVSN_CD": "00",
+        })
+        with patch.object(broker_equity.fcntl, "flock", pause_after_lock):
+            append_broker_equity_snapshot(row["run_id"], row["run_date"], equity)
+
+    def read_snapshot():
+        real_flock = broker_equity.fcntl.flock
+
+        def signal_lock(file_obj, operation):
+            assert operation == broker_equity.fcntl.LOCK_SH
+            sender.send("attempting shared lock")
+            real_flock(file_obj, operation)
+            sender.send("acquired shared lock")
+
+        with patch.object(broker_equity.fcntl, "flock", signal_lock):
+            sender.send(load_broker_equity(as_of=AS_OF))
+        sender.close()
+
+    writer = context.Process(target=write_snapshot)
+    reader = context.Process(target=read_snapshot)
+    assert not broker_path.exists()
+    try:
+        writer.start()
+        assert writer_locked.wait(10), "Writer did not acquire exclusive lock"
+        assert broker_path.exists() and broker_path.read_bytes() == b""
+        reader.start()
+        assert receiver.poll(10), "Reader did not attempt shared lock"
+        assert receiver.recv() == "attempting shared lock"
+        assert not receiver.poll(0.2), "Reader returned while writer held exclusive lock"
+        release_writer.set()
+        assert receiver.poll(10), "Reader did not acquire released lock"
+        assert receiver.recv() == "acquired shared lock"
+        assert receiver.poll(10), "Reader did not finish loading"
+        result = receiver.recv()
+        writer.join(10)
+        reader.join(10)
+        assert writer.exitcode == reader.exitcode == 0
+        assert result.daily["run_id"].tolist() == [row["run_id"]]
+        assert result.daily["total_asset_krw"].tolist() == [1000000.0]
+        assert result.original_csv_bytes == broker_path.read_bytes()
+        assert not any("missing or empty" in warning for warning in result.warnings)
+    finally:
+        release_writer.set()
+        for process in (reader, writer):
+            if process.pid is not None:
+                if process.is_alive():
+                    process.terminate()
+                process.join(10)
+                if process.is_alive():
+                    process.kill()
+                    process.join(10)
+                process.close()
+        receiver.close()
+        sender.close()
+
+
+def test_empty_snapshot_is_diagnosed_after_shared_lock(broker_path, monkeypatch):
+    broker_path.touch()
+    real_flock = broker_equity.fcntl.flock
+    locked = []
+
+    def check_lock(file_obj, operation):
+        assert operation == broker_equity.fcntl.LOCK_SH
+        real_flock(file_obj, operation)
+        locked.append(file_obj.name)
+
+    monkeypatch.setattr(broker_equity.fcntl, "flock", check_lock)
+    result = load_broker_equity(as_of=AS_OF)
+    assert len(locked) == 1
+    assert result.daily.empty
+    assert result.original_csv == "" and result.original_csv_bytes == b""
+    assert broker_path.read_bytes() == b""
+    assert result.warnings == ["Broker KRW snapshot CSV is missing or empty; no fallback source used."]
+
+
+def test_missing_snapshot_is_not_created(broker_path):
+    result = load_broker_equity(as_of=AS_OF)
+    assert not broker_path.exists()
+    assert result.daily.empty
+    assert result.original_csv == "" and result.original_csv_bytes is None
+    assert result.warnings == ["Broker KRW snapshot CSV is missing or empty; no fallback source used."]
+
+
 def test_latest_valid_run_sorted_by_observation_time(broker_path):
     rows = [record("2026-01-03", "3000000"), record(equity="1500000", hour="18", run_id="a"),
             record(run_id="z"), {**record(hour="23"), "valuation_currency": "USD"}]
@@ -119,9 +220,7 @@ def fail_snapshot_read():
     def fail(stage, patcher):
         path = MagicMock(wraps=broker_equity.BROKER_EQUITY_PATH)
         error = OSError("private/account/path and sensitive contents")
-        if stage in {"exists", "stat"}:
-            getattr(path, stage).side_effect = error
-        elif stage in {"open", "permission", "disappeared"}:
+        if stage in {"open", "permission", "disappeared"}:
             errors = {"open": error, "permission": PermissionError(str(error)),
                       "disappeared": FileNotFoundError(str(error))}
             path.open.side_effect = errors[stage]
@@ -139,7 +238,7 @@ def fail_snapshot_read():
     return fail
 
 
-@pytest.mark.parametrize("stage", ["exists", "stat", "open", "permission", "disappeared", "lock", "read"])
+@pytest.mark.parametrize("stage", ["open", "permission", "disappeared", "lock", "read"])
 def test_snapshot_filesystem_failure_is_sanitized_and_recovers(broker_path, monkeypatch, fail_snapshot_read, stage):
     write_records(broker_path, [record()])
     original = broker_path.read_bytes()
@@ -148,8 +247,8 @@ def test_snapshot_filesystem_failure_is_sanitized_and_recovers(broker_path, monk
         result = load_broker_equity("2026-01-02", "2026-01-04", as_of=AS_OF)
         assert result.daily.empty
         assert result.original_csv == "" and result.original_csv_bytes is None
-        assert result.warnings == [
-            "Broker KRW snapshot CSV is unavailable or unreadable; no fallback source used."]
+        description = "missing or empty" if stage == "disappeared" else "unavailable or unreadable"
+        assert result.warnings == [f"Broker KRW snapshot CSV is {description}; no fallback source used."]
         assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
         if stage == "read":
             path.open.assert_called_once_with("rb")
@@ -550,7 +649,7 @@ def test_absent_requested_period_publishes_empty_diagnostic_and_missing_dates(
         assert (bundle / "broker_equity_observations.csv").read_bytes() == original
 
 
-@pytest.mark.parametrize("failure", ["utf8", "filesystem"])
+@pytest.mark.parametrize("failure", ["utf8", "open", "permission", "disappeared", "lock", "read"])
 def test_unusable_input_publishes_empty_krw_latest_and_history(
         broker_path, tmp_path, monkeypatch, fail_snapshot_read, failure):
     write_records(broker_path, [record(), record("2026-01-02", "1100000")])
@@ -576,7 +675,7 @@ def test_unusable_input_publishes_empty_krw_latest_and_history(
         if failure == "utf8":
             broker_path.write_bytes(corrupted)
         else:
-            fail_snapshot_read("permission", scoped)
+            fail_snapshot_read(failure, scoped)
         performance_report.build_report(args)
 
     output = Path(args.output)
@@ -593,6 +692,8 @@ def test_unusable_input_publishes_empty_krw_latest_and_history(
         assert summary["cumulative_return_SPY_pct"] is None
         assert summary["excess_return_vs_SPY"] is None
         expected_warning = "Invalid UTF-8" if failure == "utf8" else "unavailable or unreadable"
+        if failure == "disappeared":
+            expected_warning = "missing or empty"
         assert any(expected_warning in warning for warning in summary["data_quality_warnings"])
         assert pd.read_csv(bundle / "equity_curve.csv").empty
         artifact = bundle / "broker_equity_observations.csv"
@@ -604,11 +705,11 @@ def test_unusable_input_publishes_empty_krw_latest_and_history(
         report = (bundle / "performance_report.md").read_text()
         assert "Investment returns: N/A" in report
         assert expected_warning in report
-        if failure == "filesystem":
+        if failure != "utf8":
             assert "Original snapshot input unavailable" in report
             assert "are preserved in broker_equity_observations.csv" not in report
 
-    if failure == "filesystem":
+    if failure != "utf8":
         performance_report.build_report(args)
         assert (output / "latest/broker_equity_observations.csv").read_bytes() == original
         assert json.loads((output / "latest/performance_summary.json").read_text())["num_days"] == 2
