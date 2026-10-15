@@ -124,6 +124,23 @@ python main.py
   Disabled by default with `PERFORMANCE_KRW_SNAPSHOT_ENABLED=false`; enable only after rollout approval.
   See [collection and Docker persistence](docs/broker_equity_snapshots.md).
 
+### Docker 운영 배포 (Stage 6)
+
+Stage 1–5가 병합된 상태에서 적용하는 [배포·검증·롤백 절차](docs/production_rollout.md)를
+따르세요. `stock`은 예약된 일회성 컨테이너입니다. 종료 코드 0은 정상일 수 있으며,
+검증을 위해 `main.py`를 재실행하지 마세요. CI는 이미지 digest를 Raspberry Pi에 pull만
+하며 컨테이너 교체나 전략 실행은 하지 않습니다.
+
+기본값은 수집 `false`, 리포트 `false`, 데이터 소스 `legacy_usd`입니다.
+`/py_app/data`와 리포트 출력 디렉터리를 영속 마운트한 뒤 수집 → 실계좌 대조 →
+외부 현금흐름 검증 → KRW 리포트 순서로 활성화합니다. 기존 CSV는 변환·삭제하지 않습니다.
+중지된 컨테이너도 호스트 Python 3만으로 검사할 수 있습니다(비밀값 출력 없음):
+
+```bash
+set -o pipefail
+docker inspect stock | python3 tools/verify_rollout.py
+```
+
 특징:
 - append-only 저장 (기존 기록 보존)
 - 파일이 없으면 헤더 자동 생성
@@ -352,7 +369,9 @@ This step is failure-tolerant: report generation errors are logged as warnings a
 
 Environment variables:
 
+- `PERFORMANCE_KRW_SNAPSHOT_ENABLED` (default: `false`)
 - `PERFORMANCE_REPORT_ENABLED` (default: `false`)
+- `PERFORMANCE_REPORT_DATA_SOURCE` (default: `legacy_usd`; verified KRW: `broker_krw`)
 - `PERFORMANCE_REPORT_OUTPUT_DIR` (default: `outputs/performance`)
 - `PERFORMANCE_REPORT_BENCHMARKS` (default: `SPY,IWM`)
 - `PERFORMANCE_REPORT_PUBLISH_LATEST` (default: `true`)
