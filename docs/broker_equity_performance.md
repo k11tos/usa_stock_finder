@@ -1,5 +1,10 @@
 # Broker KRW performance source — Stage 3
 
+Stage 4 extends this historical Stage 3 contract with an explicit separate KRW
+flow ledger and validated TWR. See [KRW TWR](krw_time_weighted_return.md) for the
+current return, output and verification semantics. Source selection, raw broker
+validation and legacy compatibility below remain applicable.
+
 Requires merged Stage 1 PR #164 (`355f164`) and Stage 2 PR #165 (`baf80b1`).
 Stage 3 adds a report source and diagnostic output only. Candidate selection,
 buy/sell decisions, sizing quantities, and snapshot collection are unchanged.

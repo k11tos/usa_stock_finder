@@ -17,15 +17,18 @@ import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position,ungroup
 
 if __package__:
     from .broker_equity import load_broker_equity
+    from .krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, load_external_flow_ledger
 else:  # Support the existing `python tools/performance_report.py` entry point.
     from broker_equity import load_broker_equity
+    from krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, load_external_flow_ledger
 
 PERFORMANCE_DATA_SOURCES = ("legacy_usd", "broker_krw")
 RETURN_CHARTS = ("cumulative_return.png", "drawdown.png", "excess_return.png")
 RAW_KRW_CHART = "raw_equity_krw.png"
 KRW_RETURN_CAVEAT = (
-    "External cash-flow completeness is unknown. Raw equity changes are not investment returns. "
-    "Return, CAGR, drawdown, volatility and benchmark comparison metrics are N/A in Stage 3."
+    "Raw equity changes are not investment returns. TWR requires verified complete external flows "
+    "and boundary timing. Missing coverage or intraday flows produce N/A. "
+    "CAGR and benchmark comparison remain outside Stage 4."
 )
 
 DEFAULT_SNAPSHOTS = "data/live/account_snapshots.csv"
@@ -109,6 +112,7 @@ def _copy_report_bundle(source_dir: Path, destination_dir: Path) -> None:
         "equity_curve.csv",
         "benchmark_comparison.csv",
         "broker_equity_observations.csv",
+        "twr_curve.csv",
     ]
     for name in files:
         src = source_dir / name
@@ -562,6 +566,10 @@ def cagr_pct(series: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> float
 def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None:
     loaded = load_broker_equity(args.start_date, args.end_date)
     daily = loaded.daily
+    ledger = load_external_flow_ledger(getattr(args, "krw_external_flows", DEFAULT_KRW_FLOWS))
+    twr, metrics = calculate_twr(daily, ledger, start_date=args.start_date, end_date=args.end_date,
+                                 rejected_records=loaded.rejected_records)
+    twr.to_csv(output_dir / "twr_curve.csv", index=False)
     if daily.empty:
         loaded.warnings.append("No valid broker KRW observations found for the selected period.")
     daily.to_csv(output_dir / "equity_curve.csv", index=False, index_label="date")
@@ -580,22 +588,16 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None
     summary = {
         "data_source": "broker_krw",
         "valuation_currency": "KRW",
-        "report_kind": "raw_equity_diagnostic",
-        "returns_validated": False,
-        "external_cash_flow_completeness": "unknown",
         "start_date": None if daily.empty else daily["run_date"].iloc[0].strftime("%Y-%m-%d"),
         "end_date": None if daily.empty else daily["run_date"].iloc[-1].strftime("%Y-%m-%d"),
         "num_days": len(daily),
         "latest_equity_krw": None if daily.empty else float(daily["total_asset_krw"].iloc[-1]),
         "benchmarks": args.benchmarks,
         "best_benchmark": None,
-        "cumulative_return_pct": None,
-        "cash_flow_adjusted_return_pct": None,
         "cagr_pct": None,
-        "max_drawdown_pct": None,
-        "annualized_volatility_pct": None,
-        "cash_flow_warnings": [KRW_RETURN_CAVEAT],
-        "data_quality_warnings": loaded.warnings,
+        "cash_flow_warnings": ledger.warnings,
+        "data_quality_warnings": loaded.warnings + metrics["twr_unavailable_reasons"],
+        **metrics,
     }
     for symbol in args.benchmarks:
         summary[f"cumulative_return_{symbol}_pct"] = None
@@ -604,22 +606,40 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None
         json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8",
     )
     pd.DataFrame([
-        {"asset": asset, "cumulative_return_pct": None} for asset in ["Broker equity (KRW)", *args.benchmarks]
+        {"asset": "Portfolio TWR (KRW)", "cumulative_return_pct": summary["cumulative_return_pct"]},
+        *[{"asset": asset, "cumulative_return_pct": None} for asset in args.benchmarks],
     ]).to_csv(output_dir / "benchmark_comparison.csv", index=False)
     plot_data = daily.set_index("run_date")[["total_asset_krw"]].rename(columns={"total_asset_krw": "Broker equity"})
     _save_line_chart(plot_data, output_dir / "charts" / RAW_KRW_CHART,
                      "Raw broker equity (KRW) — diagnostic observations", "Equity (KRW)")
-    # Keep established bundle filenames, replacing earlier return charts with explicit unavailable panels.
-    for chart in RETURN_CHARTS:
-        _save_line_chart(pd.DataFrame(), output_dir / "charts" / chart,
-                         "N/A — external cash-flow completeness unknown", "Metric unavailable")
-    warnings = loaded.warnings or ["None"]
+    prefix = twr.set_index("run_date")
+    for chart, column, title in (("cumulative_return.png", "twr_index", "TWR index (base 100; unbroken prefix)"),
+                                  ("drawdown.png", "drawdown_pct", "TWR drawdown (unbroken prefix)")):
+        values = prefix[[column]].dropna()
+        if not summary["valid_daily_return_count"]:
+            values = pd.DataFrame()
+        _save_line_chart(values, output_dir / "charts" / chart, title, column)
+    _save_line_chart(pd.DataFrame(), output_dir / "charts/excess_return.png",
+                     "N/A — currency-consistent benchmarks outside Stage 4", "Metric unavailable")
+    warnings = summary["data_quality_warnings"] or ["None"]
+    metric_lines = [
+        f"Investment returns: {_fmt_pct(summary['cumulative_return_pct'])} (cumulative KRW TWR)",
+        f"Cash-flow-adjusted return: {_fmt_pct(summary['cash_flow_adjusted_return_pct'])} (TWR)",
+        f"External flow history: {summary['external_cash_flow_completeness']}",
+        f"Max drawdown: {_fmt_pct(summary['max_drawdown_pct'])} (TWR index; full period)",
+        f"Annualized volatility: {_fmt_pct(summary['annualized_volatility_pct'])} "
+        f"({summary['volatility_valid_return_count']} valid daily returns; {summary['volatility_scope']}; "
+        "sample standard deviation × sqrt(365.25); N/A if fewer than two valid returns)",
+        f"Timing: {summary['timing_convention']}",
+        "CAGR: N/A · Benchmark / excess returns: N/A (outside Stage 4)",
+    ]
     period = f"{summary['start_date'] or 'N/A'} to {summary['end_date'] or 'N/A'} ({len(daily)} snapshot days)"
     lines = [
-        "# Broker Equity Diagnostic Report (KRW)", "", "- Data source: broker_krw",
+        "# Broker KRW TWR and Equity Report", "", "- Data source: broker_krw",
         "- Input: data/live/broker_equity_snapshots.csv", f"- Period: {period}",
-        "- Investment returns: N/A", "- Cash-flow-adjusted return: N/A", "- CAGR: N/A",
-        "- Max drawdown: N/A", "- Annualized volatility: N/A", "- Benchmark / excess returns: N/A",
+        *(f"- {line}" for line in metric_lines),
+        "", "[Daily validation and TWR index](twr_curve.csv)",
+        "![TWR index](charts/cumulative_return.png)", "![TWR drawdown](charts/drawdown.png)",
         "", KRW_RETURN_CAVEAT, "", "## Raw Equity", "",
         f"![Raw broker equity in KRW](charts/{RAW_KRW_CHART})", "",
         original_description,
@@ -630,12 +650,14 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> None
     warning_html = "".join(f"<li>{escape(warning)}</li>" for warning in warnings)
     html = f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Broker Equity Diagnostic Report (KRW)</title></head><body>
-<h1>Broker Equity Diagnostic Report (KRW)</h1>
+<title>Broker KRW TWR and Equity Report</title></head><body>
+<h1>Broker KRW TWR and Equity Report</h1>
 <p>Data source: broker_krw · Currency: KRW · Period: {period}</p>
 <p>{KRW_RETURN_CAVEAT}</p>
-<p>Investment returns: N/A · Cash-flow-adjusted return: N/A · CAGR: N/A · Max drawdown: N/A ·
-Annualized volatility: N/A · Benchmark / excess returns: N/A</p>
+<ul>{''.join(f'<li>{escape(line)}</li>' for line in metric_lines)}</ul>
+<p><a href="twr_curve.csv">Daily validation and TWR index</a></p>
+<figure><img src="charts/cumulative_return.png" alt="Validated TWR index" style="max-width:100%;height:auto"></figure>
+<figure><img src="charts/drawdown.png" alt="TWR drawdown" style="max-width:100%;height:auto"></figure>
 <figure><img src="charts/{RAW_KRW_CHART}" alt="Raw broker equity in KRW" style="max-width:100%;height:auto"></figure>
 <p>No interpolation, smoothing, currency conversion or spike removal is performed.</p>
 <p><a href="equity_curve.csv">Selected observations</a> ·
@@ -655,6 +677,7 @@ def build_report(args: argparse.Namespace) -> None:
         _build_broker_krw_report(args, output_dir)
         return
     (output_dir / "broker_equity_observations.csv").unlink(missing_ok=True)
+    (output_dir / "twr_curve.csv").unlink(missing_ok=True)
     (output_dir / "charts" / RAW_KRW_CHART).unlink(missing_ok=True)
 
     strategy, equity_warnings = load_strategy_equity_curve_with_warnings(args.snapshots, args.start_date, args.end_date)
@@ -862,6 +885,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-source", choices=PERFORMANCE_DATA_SOURCES, default="legacy_usd")
     parser.add_argument("--trades", default=DEFAULT_TRADES)
     parser.add_argument("--cash-flows", default=DEFAULT_CASH_FLOWS)
+    parser.add_argument("--krw-external-flows", default=DEFAULT_KRW_FLOWS)
     parser.add_argument("--benchmarks", nargs="+", default=DEFAULT_BENCHMARKS)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--start-date")
