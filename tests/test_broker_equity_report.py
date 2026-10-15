@@ -210,13 +210,52 @@ def test_timestamp_tie_break_is_deterministic(broker_path):
         assert any("tie-break" in warning for warning in result.warnings)
 
 
+def test_timestamp_with_invalid_separator_is_rejected_and_preserved(broker_path):
+    invalid = {**record(), "fetched_at_kst": "2026-01-01X16:00:00+09:00"}
+    write_records(broker_path, [invalid])
+    original = broker_path.read_bytes()
+
+    result = load_broker_equity(as_of=AS_OF)
+
+    assert result.daily.empty
+    assert result.original_csv_bytes == original == broker_path.read_bytes()
+    assert any("Row 2: invalid broker KRW record" in warning for warning in result.warnings)
+    assert "2026-01-01X16:00:00+09:00" not in " ".join(result.warnings)
+
+
+def test_invalid_timestamp_does_not_discard_valid_rows_or_break_order(broker_path):
+    rows = [
+        {**record("2026-01-02", "2000000"), "fetched_at_kst": "2026-01-02T16:00:00+09:00"},
+        {**record("2026-01-01", "1000000"), "fetched_at_kst": "2026-01-01X17:00:00+09:00"},
+        {**record("2026-01-02", "2100000", run_id="later"),
+         "fetched_at_kst": "2026-01-02T16:30:00+09:00"},
+        {**record("2026-01-01", "1100000", run_id="earlier"),
+         "fetched_at_kst": "2026-01-01 16:15:00+09:00"},
+    ]
+    write_records(broker_path, rows)
+
+    result = load_broker_equity(as_of=AS_OF)
+
+    assert result.daily["run_date"].dt.strftime("%Y-%m-%d").tolist() == [
+        "2026-01-01", "2026-01-02",
+    ]
+    assert result.daily["run_id"].tolist() == ["earlier", "later"]
+    assert result.daily["total_asset_krw"].tolist() == [1100000.0, 2100000.0]
+    assert any("invalid broker KRW record" in warning for warning in result.warnings)
+
+
 def test_valid_mixed_iso_timestamp_precision_and_numeric_notation(broker_path):
     write_records(broker_path, [
         {**record(), "fetched_at_kst": "2026-01-01T16:00+09:00", "total_asset_krw": "1e6"},
-        {**record("2026-01-02"), "fetched_at_kst": "2026-01-02T16:00:01.123456+09:00"},
+        {**record("2026-01-02"), "fetched_at_kst": "2026-01-02 16:00:01+09:00"},
+        {**record("2026-01-03"), "fetched_at_kst": "2026-01-03T16:00+09:00"},
+        {**record("2026-01-04"), "fetched_at_kst": "2026-01-04T16:00:01.123456789+09:00"},
     ])
     result = load_broker_equity(as_of=AS_OF)
-    assert result.daily["total_asset_krw"].tolist() == [1000000.0, 1000000.0]
+    assert result.daily["run_date"].dt.strftime("%Y-%m-%d").tolist() == [
+        "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04",
+    ]
+    assert result.daily["total_asset_krw"].tolist() == [1000000.0] * 4
 
 
 @pytest.mark.parametrize("field", AMOUNT_FIELDS)
@@ -429,6 +468,56 @@ def test_no_valid_krw_data_never_falls_back(broker_path, tmp_path, monkeypatch, 
     assert not any("Missing calendar observation dates" in warning
                    for warning in summary["data_quality_warnings"])
     assert pd.read_csv(Path(args.output) / "equity_curve.csv").empty
+
+
+def test_all_invalid_timestamps_refresh_published_krw_diagnostics(
+        broker_path, tmp_path, monkeypatch):
+    write_records(broker_path, [record(), record("2026-01-02", "1100000")])
+    legacy_loader = MagicMock(side_effect=AssertionError("KRW mode must not load legacy equity"))
+    benchmark_loader = MagicMock(side_effect=AssertionError("KRW mode must not load benchmarks"))
+    monkeypatch.setattr(performance_report, "load_strategy_equity_curve_with_warnings", legacy_loader)
+    monkeypatch.setattr(performance_report, "fetch_benchmark_prices", benchmark_loader)
+    args = report_args(tmp_path)
+
+    performance_report.build_report(args)
+    previous = json.loads((Path(args.output) / "latest/performance_summary.json").read_text())
+    assert previous["latest_equity_krw"] == 1100000
+
+    invalid_rows = [
+        {**record(), "fetched_at_kst": "2026-01-01X16:00:01+09:00"},
+        {**record("2026-01-02", "1100000"), "fetched_at_kst": "2026-01-02T16:00:01+00:00"},
+    ]
+    write_records(broker_path, invalid_rows)
+    original = broker_path.read_bytes()
+
+    performance_report.build_report(args)
+
+    for loader in [legacy_loader, benchmark_loader]:
+        loader.assert_not_called()
+    output = Path(args.output)
+    for bundle in [output, output / "latest", output / "history/diagnostic-run"]:
+        summary = json.loads((bundle / "performance_summary.json").read_text())
+        assert summary["data_source"] == "broker_krw"
+        assert summary["num_days"] == 0 and summary["latest_equity_krw"] is None
+        assert summary["returns_validated"] is False
+        assert summary["cumulative_return_pct"] is None
+        assert summary["cash_flow_adjusted_return_pct"] is None
+        assert summary["cagr_pct"] is None
+        assert summary["max_drawdown_pct"] is None
+        assert summary["annualized_volatility_pct"] is None
+        assert summary["cumulative_return_SPY_pct"] is None
+        assert summary["excess_return_vs_SPY"] is None
+        warnings = " ".join(summary["data_quality_warnings"])
+        assert "invalid broker KRW record" in warnings
+        assert "No valid broker KRW observations" in warnings
+        assert "2026-01-01X16:00:01+09:00" not in warnings
+        assert pd.read_csv(bundle / "equity_curve.csv").empty
+        assert (bundle / "broker_equity_observations.csv").read_bytes() == original
+        report = (bundle / "performance_report.md").read_text()
+        assert "Investment returns: N/A" in report
+        assert "No valid broker KRW observations" in report
+    assert json.loads((output / "latest/performance_summary.json").read_text())[
+        "latest_equity_krw"] is None
 
 
 def test_absent_requested_period_publishes_empty_diagnostic_and_missing_dates(

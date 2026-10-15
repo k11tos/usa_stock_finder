@@ -44,7 +44,7 @@ class BrokerEquityData:
     original_csv_bytes: bytes | None = None
 
 
-def _validate_record(row: dict, as_of: datetime) -> None:
+def _validate_record(row: dict, as_of: datetime) -> pd.Timestamp:
     if None in row or any(value in (None, "") for value in row.values()):
         raise InvalidBrokerRecord("inconsistent or incomplete record structure")
     if not row["run_id"].strip() or any(char in row["run_id"] for char in "\r\n"):
@@ -56,18 +56,19 @@ def _validate_record(row: dict, as_of: datetime) -> None:
     observed_date = date.fromisoformat(row["run_date"])
     if observed_date.isoformat() != row["run_date"]:
         raise InvalidBrokerRecord("invalid observation date format")
-    fetched = datetime.fromisoformat(row["fetched_at_kst"])
+    fetched = pd.to_datetime(row["fetched_at_kst"], format="ISO8601")
     if fetched.utcoffset() != timedelta(hours=9):
         raise InvalidBrokerRecord("invalid KST observation timestamp")
     if fetched.date() != observed_date:
         raise InvalidBrokerRecord("stale observation: timestamp does not match observation date")
-    if fetched > as_of:
+    if fetched > pd.Timestamp(as_of):
         raise InvalidBrokerRecord("future observation timestamp")
     for field in AMOUNT_FIELDS:
         if not math.isfinite(float(row[field])):
             raise InvalidBrokerRecord(f"non-finite amount: {field}")
     if float(row["total_asset_krw"]) <= 0:
         raise InvalidBrokerRecord("equity must be positive and finite")
+    return fetched.tz_convert("UTC")
 
 
 def _diagnose_dates(daily: pd.DataFrame, start_date: str | None, end_date: str | None,
@@ -152,7 +153,7 @@ def load_broker_equity(start_date: str | None = None, end_date: str | None = Non
             continue
         seen[run_id] = row
         try:
-            _validate_record(row, current)
+            fetched = _validate_record(row, current)
         except InvalidBrokerRecord as exc:
             result.warnings.append(f"Row {number}: invalid broker KRW record: {exc}.")
             continue
@@ -161,14 +162,15 @@ def load_broker_equity(start_date: str | None = None, end_date: str | None = Non
             result.warnings.append(f"Row {number}: invalid broker KRW record; verify source, KRW currency, "
                                    "finite amounts, positive equity, date/timestamp and record structure.")
             continue
-        valid_rows.append(row)
+        valid_rows.append((row, fetched))
 
-    valid_rows = [row for row in valid_rows if row["run_id"] not in conflicting_ids]
+    valid_rows = [(row, fetched) for row, fetched in valid_rows
+                  if row["run_id"] not in conflicting_ids]
     if not valid_rows:
         return result
-    frame = pd.DataFrame(valid_rows)
+    frame = pd.DataFrame([row for row, _ in valid_rows])
     frame["run_date"] = pd.to_datetime(frame["run_date"])
-    frame["_fetched"] = pd.to_datetime(frame["fetched_at_kst"], format="ISO8601", utc=True)
+    frame["_fetched"] = [fetched for _, fetched in valid_rows]
     for field in AMOUNT_FIELDS:
         frame[field] = frame[field].map(float)
     if start_date:
