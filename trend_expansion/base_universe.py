@@ -59,8 +59,11 @@ _STRONG_PREFERRED_SECURITY_PATTERN = re.compile(
     re.I,
 )
 _AMBIGUOUS_PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)
+_EXPLICIT_ETF_PATTERN = re.compile(r"\b(?:etf|exchange[- ]traded fund)\b", re.I)
+_FUND_PATTERN = re.compile(r"\bfund\b", re.I)
 _NAME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\b(?:etf|exchange[- ]traded fund|fund)\b", re.I), "etf_fund"),
+    (_EXPLICIT_ETF_PATTERN, "etf_fund"),
+    (_FUND_PATTERN, "etf_fund"),
     (re.compile(r"\bwarrants?\b", re.I), "warrant"),
     (re.compile(r"\bunits?\b", re.I), "unit"),
     (re.compile(r"\brights?\b", re.I), "right"),
@@ -127,6 +130,12 @@ def _rejection_reason(record: dict[str, str]) -> str | None:
         if not match:
             continue
         if reason == "preferred" and not _has_preferred_security_evidence(security_name):
+            continue
+        if (
+            reason == "etf_fund"
+            and pattern is _FUND_PATTERN
+            and _EXPLICIT_COMMON_STOCK_PATTERN.search(security_name)
+        ):
             continue
         if (
             reason == "unit"

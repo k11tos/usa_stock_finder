@@ -55,8 +55,11 @@ preferreds, test issues, and obvious SPAC or other non-common instruments.
 Issuer names are not security-type evidence: neither `ETF=N`, `Common Stock`,
 `Trust`, nor an asset-manager brand proves that a listing is ordinary common
 equity. Legitimate common-equity REITs therefore remain eligible at this stage.
-Missing optional metadata alone does not reject a listing. Output ordering and
-duplicate precedence are stable for a fixed input.
+Likewise, a bare `Fund` in an explicitly common-stock issuer name is ambiguous,
+not an automatic Stage B exclusion; explicit ETF/exchange-traded-fund and
+closed-end/CEF wording remains excluded. Missing optional metadata alone does
+not reject a listing. Output ordering and duplicate precedence are stable for a
+fixed input.
 
 Stage B is a **preliminary eligibility** filter, not authoritative common-equity
 proof. In particular, ambiguous closed-end funds such as RMT/RVT-like listings

@@ -80,6 +80,30 @@ def test_absent_optional_metadata_does_not_reject_normal_listing():
     assert not rejected
 
 
+def test_fund_issuer_name_with_common_stock_is_preliminarily_accepted():
+    accepted, rejected, _ = filter_base_universe(
+        [_record("FUNDCO", "Fund Holdings, Inc. Common Stock", "NYSE")]
+    )
+
+    assert [row["symbol"] for row in accepted] == ["FUNDCO"]
+    assert not rejected
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        ("Example Income Fund", "etf_fund"),
+        ("Example Exchange-Traded Fund Common Stock", "etf_fund"),
+        ("Example Closed-End Fund Common Stock", "other_non_common"),
+    ],
+)
+def test_explicit_fund_instrument_evidence_remains_excluded(name, reason):
+    accepted, rejected, _ = filter_base_universe([_record("FUND", name, "NYSE")])
+
+    assert not accepted
+    assert rejected[0]["reason"] == reason
+
+
 @pytest.mark.parametrize(
     "name",
     [
