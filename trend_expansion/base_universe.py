@@ -46,9 +46,7 @@ _EXPLICIT_COMMON_BENEFICIAL_INTEREST_PATTERN = re.compile(r"\bcommon\s+shares?\s
 _BENEFICIAL_INTEREST_PATTERN = re.compile(r"\b(?:shares?|units?)\s+of\s+beneficial interest\b", re.I)
 _TRUST_CERTIFICATE_PATTERN = re.compile(r"\btrust certificates?\b", re.I)
 _INVESTMENT_TRUST_PATTERN = re.compile(
-    r"\b(?:closed[- ]end|term\s+(?:trust|fund))\b|"
-    r"\b(?:blackrock|eaton vance|franklin|gabelli|guggenheim|invesco|xai)\b"
-    r".*\btrust\b",
+    r"\b(?:closed[- ]end|cef|term\s+(?:trust|fund))\b",
     re.I,
 )
 _PREFERRED_TERMINOLOGY_PATTERN = re.compile(r"\b(?:preferred|preference|pfd)\b", re.I)

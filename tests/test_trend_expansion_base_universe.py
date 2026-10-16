@@ -47,7 +47,9 @@ def test_allowed_exchange_common_stocks_pass(exchange):
     [
         (_record("OTC", "Ordinary Common Stock", "OTCQX"), "exchange_not_allowed"),
         (_record("ETF", "Index Portfolio", etf="Y"), "etf_fund"),
+        (_record("ETFNAME", "Example Exchange-Traded Fund"), "etf_fund"),
         (_record("FUND", "Example Income Fund"), "etf_fund"),
+        (_record("CEF", "Example CEF"), "other_non_common"),
         (_record("W", "Example Corp Warrants"), "warrant"),
         (_record("U", "Example Acquisition Corp Units"), "unit"),
         (_record("R", "Example Subscription Rights"), "right"),
@@ -160,6 +162,15 @@ def test_genuine_trust_instrument_is_still_rejected():
     assert rejected[0]["reason"] == "other_non_common"
 
 
+def test_fbrt_like_common_equity_reit_is_preliminarily_accepted():
+    accepted, rejected, _ = filter_base_universe(
+        [_record("FBRT", "Franklin BSP Realty Trust, Inc. Common Stock", "NYSE")]
+    )
+
+    assert [row["symbol"] for row in accepted] == ["FBRT"]
+    assert not rejected
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -191,18 +202,32 @@ def test_explicit_investment_trust_evidence_beats_common_beneficial_interest(nam
 
 
 @pytest.mark.parametrize(
-    "name",
+    ("symbol", "name"),
     [
-        "BlackRock Science and Technology Trust Common Shares of Beneficial Interest",
-        "Eaton Vance Floating Rate Income Trust Common Shares of Beneficial Interest",
+        ("OPERATING", "BlackRock Industrial Trust, Inc. Common Stock"),
+        ("TRUSTCO", "Community Trust Holdings, Inc. Common Stock"),
     ],
 )
-def test_manager_branded_investment_trust_beats_common_beneficial_interest(name):
-    accepted, rejected, diagnostics = filter_base_universe([_record("FUND", name, "NYSE")])
+def test_manager_like_or_trust_issuer_names_are_not_security_type_evidence(symbol, name):
+    accepted, rejected, _ = filter_base_universe([_record(symbol, name, "NYSE")])
 
-    assert not accepted
-    assert rejected[0]["reason"] == "other_non_common"
-    assert diagnostics["other_non_common_count"] == 1
+    assert [row["symbol"] for row in accepted] == [symbol]
+    assert not rejected
+
+
+@pytest.mark.parametrize(
+    ("symbol", "name"),
+    [
+        ("RMT", "Royce Micro-Cap Trust, Inc. Common Stock"),
+        ("RVT", "Royce Value Trust, Inc. Common Stock"),
+    ],
+)
+def test_ambiguous_closed_end_fund_name_is_only_preliminarily_accepted(symbol, name):
+    """ETF=N and Common Stock do not verify these; Stage C must verify finalists."""
+    accepted, rejected, _ = filter_base_universe([_record(symbol, name, "NYSE", etf="N")])
+
+    assert [row["symbol"] for row in accepted] == [symbol]
+    assert not rejected
 
 
 def test_generic_operating_trust_common_beneficial_interest_still_passes():
