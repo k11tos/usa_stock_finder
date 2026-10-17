@@ -1,8 +1,9 @@
 # Trend Expansion Pool Design (Future Data Source)
 
 ## Status
-- **Stage A data infrastructure only**.
-- **No production behavior changes in this PR**.
+- **Stage A snapshot plus Stage B research-only base-universe filtering**.
+- **No production behavior changes**; the live candidate loader does not read
+  these outputs.
 
 ## Stage A symbol snapshot
 
@@ -25,8 +26,55 @@ to refresh. Use `--output-dir` for another location and
 
 The stable CSV schema retains symbol and security name, normalized exchange,
 market/financial status, round-lot size, ETF/test-issue/NextShares flags,
-CQS/Nasdaq aliases, source directory, and snapshot date. It intentionally does
-not filter security types yet; that deterministic filtering belongs to Stage B.
+CQS/Nasdaq aliases, source directory, and snapshot date.
+
+## Stage B deterministic base universe
+
+Filter the selected cached snapshot without making a network request:
+
+```bash
+python -m tools.build_trend_expansion_universe --filter
+```
+
+By default this publishes `base_universe.csv` and `exclusions.json` as an
+immutable generation beside the snapshot cache. A single atomically replaced
+`FILTER_CURRENT` selector commits both files, so readers using
+`load_filter_outputs()` cannot observe a CSV from one generation with a report
+from another. `--filter-output` and `--exclusion-report` select the logical
+artifact names, but both must share a directory so they can use one selector.
+The filtered CSV preserves the Stage A columns and adds
+`source_pool=trend_expansion`. The JSON report contains every rejected symbol
+and its deterministic reason, plus input, allowed-exchange, exchange exclusion,
+ETF/fund, warrant, unit, right, preferred, debt, test-issue, other-non-common,
+duplicate, total-exclusion, and final-common-equity counts.
+
+Only NASDAQ, NYSE, and NYSE American/AMEX listings pass. Reliable directory
+flags and explicit security-name evidence remove ETFs/funds, ETNs and other
+listed debt, CEFs explicitly identified as such, warrants, units, rights,
+preferreds, test issues, and obvious SPAC or other non-common instruments.
+Issuer names are not security-type evidence: neither `ETF=N`, `Common Stock`,
+`Trust`, nor an asset-manager brand proves that a listing is ordinary common
+equity. Legitimate common-equity REITs therefore remain eligible at this stage.
+Likewise, a bare `Fund` in an explicitly common-stock issuer name is ambiguous,
+not an automatic Stage B exclusion; explicit ETF/exchange-traded-fund and
+closed-end/CEF wording remains excluded. Missing optional metadata alone does
+not reject a listing. Output ordering and duplicate precedence are stable for a
+fixed input.
+
+Stage B is a **preliminary eligibility** filter, not authoritative common-equity
+proof. In particular, ambiguous closed-end funds such as RMT/RVT-like listings
+can survive a directory-only pass even with `ETF=N` and `Common Stock` in the
+name. Stage C must verify every ambiguous finalist with suitable cached,
+authoritative evidence before it is added to an expansion watch pool; missing
+or insufficient evidence means exclude/defer the candidate and consider the
+next ranked name. The legacy `final_common_equity_count` diagnostic name is
+preserved for output compatibility, but it counts Stage B preliminary passes.
+
+Compatibility risk for a later live integration: `main.py` currently has a
+separate broad `Trust` metadata-name exclusion. This Stage B change does not
+modify that live filter, so a Stage B-eligible FBRT-like listing would still
+need the live rule to be reconciled in a separately reviewed rollout before it
+could become a production candidate.
 
 ## Purpose
 The Trend Expansion Pool is intended to **supplement** (not replace) the existing Core Quant Pool.
@@ -142,27 +190,25 @@ To generate practical trend candidates from a broader U.S. universe, we will nee
 
 **Deliverable:** Cleaner common-equity candidate universe with audit metrics.
 
-### Stage C: small-batch yfinance OHLCV fetch with caching
-- Fetch daily OHLCV in bounded batches.
-- Cache results by symbol/date range with refresh policy.
-- Add retry/backoff and data quality checks (missing bars, suspicious zeros, stale dates).
+### Stage C: bounded quarterly watch-pool construction and finalist verification
+- Fetch and cache daily OHLCV in bounded batches, then apply price, history,
+  liquidity, and coverage-diagnosed market-cap checks.
+- Rank with coarse as-of 3M/6M momentum only; do not use a Minervini trend
+  template, entry gate, or OHLCV buy screening here.
+- Remove Core overlap with Core priority, select no more than the configured
+  expansion cap, and verify ambiguous finalist instrument types using cached
+  authoritative evidence. Unknown finalists are deferred/excluded.
+- Produce immutable, provenance-rich artifacts for a **quarterly WATCH pool**.
 
-**Deliverable:** Stable trend-ready OHLCV cache for filtered symbols.
+**Deliverable:** A bounded, verified research watch-pool artifact.
 
-### Stage D: price/liquidity/trend-only candidate generation
-- Compute minimal trend feature set (example: moving-average relationships, momentum windows).
-- Apply minimum price and average dollar volume filters.
-- Output candidates tagged with `source_pool = "trend_expansion"`.
-- Keep this output separate from Core Quant Pool in both backtests and reporting.
+### Stage D: research validation
+- Compare Core-only and Core-plus-expansion quarterly watch pools with unchanged
+  daily entry/exit/sizing behavior.
+- The existing daily Minervini funnel evaluates buy eligibility only after the
+  pools are combined; watch-list membership is never a buy recommendation.
 
-**Deliverable:** Measurable Trend Expansion Pool candidate feed (research mode).
-
-### Stage E: optional paid API evaluation for enrichment
-- Pilot one paid/low-cost vendor (e.g., FMP-like) for market cap/fundamental fields.
-- Compare data quality, coverage, cost, and operational stability versus current stack.
-- Decide whether enrichment materially improves candidate quality or risk controls.
-
-**Deliverable:** Go/no-go decision memo for paid enrichment.
+**Deliverable:** Evidence for or against a later opt-in live rollout.
 
 ## Measurement and Safety Controls
 - Preserve source isolation with `source_pool` metadata.
