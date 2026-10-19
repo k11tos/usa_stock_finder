@@ -1,0 +1,9 @@
+{
+  "fixture_notice": "Synthetic SEC response shapes for offline regression; not real investment evidence.",
+  "cases": {
+    "FBRT": {"cik": 1001, "entityType": "operating", "sic": "6798", "title": "Common Stock, par value $0.01 per share", "shell": "false"},
+    "RMT": {"cik": 1002, "entityType": "investment", "sic": "6726", "title": "Common Stock", "shell": "false"},
+    "RVT": {"cik": 1003, "entityType": "investment", "sic": "6726", "title": "Common Stock", "shell": "false"},
+    "UNKNOWN": {"cik": 1004, "entityType": "other", "sic": "", "title": "Common Stock", "shell": "false"}
+  }
+}

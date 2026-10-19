@@ -1,7 +1,7 @@
 # Trend Expansion Pool Design (Future Data Source)
 
 ## Status
-- **Stage A snapshot plus Stage B research-only base-universe filtering**.
+- **Stages A/B plus Stage C research-only quarterly watch-pool construction**.
 - **No production behavior changes**; the live candidate loader does not read
   these outputs.
 
@@ -75,6 +75,237 @@ separate broad `Trust` metadata-name exclusion. This Stage B change does not
 modify that live filter, so a Stage B-eligible FBRT-like listing would still
 need the live rule to be reconciled in a separately reviewed rollout before it
 could become a production candidate.
+
+## Stage C quarterly research watch pool
+
+Stage C is implemented in `trend_expansion/watch_pool.py`, `watch_prices.py`,
+`research_cache.py` and `security_evidence.py`. It is independent of `main.py`;
+no daily process imports or consumes these artifacts. Refresh manually alongside
+one current Quantus quarterly snapshot. There is no scheduler or live flag.
+Stages D (validation) and E (opt-in integration) remain separate work.
+
+### Build and inspect
+
+Prepare Stage A/B with the existing CLI. It retains its formats and selectors.
+Stage C checks the Stage A CSV checksum and recomputes Stage B to verify its
+exact selected rows and exclusion report belong to that Stage A generation.
+It records both generation identifiers, checksums and listing source metadata.
+The listing date must be within seven days before as-of; a listing captured
+after as-of is rejected, even if its manually supplied snapshot date is older.
+
+```bash
+python -m tools.build_trend_expansion_universe --refresh --filter
+python -m tools.build_trend_expansion_watch_pool build \
+  --asof-date 2026-10-19 --session-date 2026-10-19 \
+  --core-asof-date 2026-10-19 --fetch \
+  --sec-user-agent 'Research Organization research@example.org'
+```
+
+Run only after the chosen session has closed. `--session-date` explicitly
+identifies the last completed U.S. session, including holidays; a weekend
+quarter end may be up to four calendar days later. The reported price cutoff is
+16:00 America/New_York (DST aware; conservative on half days). Source capture
+timestamps are separate: after-close collection on the same as-of calendar day
+is permitted. Future bars, annual filings after as-of, and raw observations
+from later New York calendar days are rejected. This deliberately prevents
+backfilling a historical quarter with today's listed universe, SEC mapping or
+split-adjusted prices. Capture inputs during the rebalance; retain them.
+
+Omit `--fetch` for fully offline fixture/cache replay. Default paths are
+`data/trend_expansion/universe`, `portfolio/portfolio.csv`,
+`data/trend_expansion/research_cache/<asof-date>` and
+`data/trend_expansion/research_watch`. Override `--listing-dir`, `--core-csv`,
+`--cache-dir`, `--output-dir` for isolated fixtures. No historical-Core glob or
+union is performed. `--core-asof-date` is an explicit operator attestation
+because the production CSV does not embed an as-of date; it must be no more
+than 100 calendar days old. The current CSV bytes and attested date are retained
+in lineage; the builder never writes to that CSV.
+
+```bash
+python -m tools.build_trend_expansion_watch_pool build \
+  --asof-date 2026-09-30 --session-date 2026-09-30 \
+  --core-asof-date 2026-09-30 \
+  --listing-dir /tmp/quarter-fixture/listing \
+  --core-csv /tmp/quarter-fixture/current_core.csv \
+  --cache-dir /tmp/quarter-fixture/cache \
+  --output-dir /tmp/research-watch
+python -m tools.build_trend_expansion_watch_pool inspect \
+  /tmp/research-watch/research-watch-2026-09-30-<generation-sha256>
+```
+
+The cache is a URL-SHA256-named JSON file with `url`, raw UTF-8 `body`,
+`sha256` of raw response bytes and `observed_at_utc`. Offline tests generate
+complete A/B, Yahoo daily-response and SEC fixtures in temporary directories;
+`tests/fixtures/watch_security_cases.json` contains synthetic security cases.
+They are regression evidence, not real financial evidence or a published stock
+recommendation. Corrupt cache entries fail explicitly and are never silently
+refetched. Keep each quarterly cache directory frozen; choose a new directory
+for a new capture rather than editing existing inputs.
+
+### Admission and counting policies
+
+Core is the normalized, deduplicated first column of **one current** Quantus
+CSV, using the existing reader's header/suffix/slash conventions and uppercase
+research normalization, with dot/dash class-share aliases deduplicated. It is counted **before** the existing live exchange /
+tradability / buy filters. Core rows are preserved with
+`ohlcv_validity=not_evaluated` and `verification_status=core_not_reverified`;
+the expansion verifier does not claim Core is verified. A Core-overlapping
+listing is excluded from expansion before OHLCV downloads or ranking. Core
+always has priority. Ambiguous collisions between two listed symbols mapping
+to the same Yahoo symbol are diagnosed and excluded before downloading.
+
+`needed = min(max(target_total - unique_current_core_count, 0), max_expansion)`.
+Initial target is 100, maximum expansion is 50 (hard upper bound). Core 40, 60,
+100 produces at most 50, 40, 0 expansion names, hence 90, 100, 100 watch names.
+Core itself is never truncated, even if it has more than 100 names. Shortfalls
+are allowed. No expansion OHLCV is fetched when `needed=0`.
+
+Expansion defaults are an inclusive $5–$90 as-of close, >=252 valid daily
+bars and trailing 20-session mean of individual `close * volume` >=$2,000,000.
+The Yahoo chart endpoint requests 550 calendar days of daily OHLCV through the
+completed session only; it does not request intraday/fundamental data. We use
+Yahoo `quote.close`: split-adjusted, dividend-unadjusted price returns, never
+`adjclose` or yfinance's dividend-adjusted default. This differs from live
+`stock_analysis.py`'s `auto_adjust=True` convention; Stage C never replaces
+live data or its daily checks.
+
+Every supplied bar must have finite, positive OHLC and volume, coherent OHLC,
+a unique weekday date, and no date later than the session. Bars are sorted by
+date; there is no fill/drop of invalid bars. Last bar must match the explicitly
+supplied session. Null/missing/nonfinite/zero values, stale bars, insufficient
+history, duplicate dates and >4-calendar-day gaps have distinct data reasons.
+Gaps are labeled possible suspension/data loss; the source cannot establish
+actual suspension status. Weekdays absent inside shorter gaps cannot be
+distinguished from exchange holidays without a separate exchange calendar.
+This limitation is recorded rather than inventing trading days. Non-normal
+Nasdaq financial-status listings are separately excluded.
+
+Cross-sectional ranking includes only nonoverlapping numeric-eligible symbols.
+Returns are exactly `C[t]/C[t-63]-1` and `C[t]/C[t-126]-1`, using the final
+completed-session close. Each percentile is average ordinal rank divided by
+cross-section size (one member = 1); equal returns receive the same percentile.
+Score is `0.4*pct_3m + 0.6*pct_6m`, sorted score DESC then symbol ASC. Security
+verification follows ranking; a denied/unknown finalist does not change the
+cross-section or cause reranking. No Minervini template, MA order, 52-week
+entry check, correlation or `select_stocks()` is used for admission. A test
+runs the actual production trend evaluator on declining FBRT-like data,
+confirms failure, and still admits it to the research watch pool.
+
+Use `--parameters params.json` for `WatchParameters` overrides. Defaults are
+initial research choices, not optimized weights or trading recommendations.
+Session/history/size parameters have finite bounds; history cannot be reduced
+below 252 and expansion cannot exceed 50 in this implementation.
+
+Market cap defaults to `market_cap_policy="diagnostic"`: missing coverage is
+`unknown` and does not block admission; known below-threshold coverage is
+labeled `below_minimum`. It is never silently described as verified/pass.
+`"require_known"` excludes unknown and below-$300m coverage. Optional
+`--market-caps caps.json` supplies reviewed as-of USD evidence, for example:
+
+```json
+{
+  "EXAMPLE": {
+    "value": 350000000,
+    "currency": "USD",
+    "asof_date": "2026-09-30",
+    "source_url": "https://issuer.example/dated-market-cap-evidence",
+    "coverage_verified": true
+  }
+}
+```
+
+The supplier must review credibility and set `coverage_verified`; this is an
+attestation, not automatic credibility inference from an HTTPS URL. Evidence
+must be positive, finite and dated within seven days before as-of. Unsupported,
+unreviewed, future or absent coverage is unknown. The complete evidence and
+input checksum are retained. No thousands-symbol current market-cap download
+is introduced. Stage D must audit coverage before choosing a hard market-cap
+gate.
+
+### Finalist security verification and finite resources
+
+Every selected expansion member needs independent SEC evidence. The verifier
+loads one cached SEC ticker/CIK map, then for each considered finalist at most
+one submissions response and one latest available 10-K/20-F cover page. It
+checks CIK identity, `entityType=operating`, known SIC, a non-investment/non-shell
+classification, and a cover-page `dei:TradingSymbol` matched to
+`dei:Security12bTitle` in the **same class context**. The title must explicitly
+identify common/ordinary shares, and `dei:EntityShellCompanyBoolean` must be
+explicitly false. REIT SIC 6798 remains possible. Investment-company
+classification or SIC 6722/6726, shell SIC 6770, a shell declaration, and explicit
+non-common class titles deny admission. Class-title checks apply to the
+filing's security class, never the issuer/manager name. ETF=N and Stage B's
+legacy `final_common_equity_count` cannot certify finalists.
+
+The annual filing must be filed by as-of and no more than 550 calendar days old.
+Raw observations must be captured by the as-of New York calendar date and no
+more than seven days old; OHLCV cannot predate the requested final session.
+Unmatched classes, unavailable/blocked SEC responses, missing SIC/entity/shell
+facts, transformed/continued inline facts, and unsupported formats produce
+`unknown`; skip/defer them and consider the next ranked symbol. This intentionally
+sacrifices coverage rather than guessing. No ticker blocklist, brand rule,
+licensed master, LLM, companyfacts crawl or historical-submissions pagination
+is used. SEC throttling/blocking or unfamiliar inline markup can cause a short
+or empty expansion pool; inspect the audit before treating it as usable.
+
+Defaults: 8,000 preliminary symbols (configurable to <=12,000), batches of 10
+(<=25), one HTTP response / one symbol history in memory at a time, 25,000
+HTTP attempts total (<=40,000), 3 attempts/request (<=4), 15-second request
+timeouts (<=30), 8 MB/response (<=16 MB), 512 MB total downloaded bytes
+(<=1,024 MB), 0.25-second minimum request pause,
+1s/2s retry backoff, and a 7,200-second network budget (<=14,400). The byte
+limit also bounds cached inputs. The budget includes retries and evidence;
+exhaustion is an explicit diagnostic. Finalist verifications default to 150
+(hard ceiling 200), so requests remain bounded even if every candidate is
+unknown. Individual symbol failures stay in audit and do not pass screening.
+Invalid A/B lineage or an oversized universe aborts before OHLCV collection.
+No automatic background refresh runs in the daily process.
+
+### Immutable artifacts and repeatability
+
+One `research-watch-YYYY-MM-DD-<sha256>/` directory contains:
+
+- `watch.csv`: Core symbol ASC followed by selected expansion rank order,
+  source attribution, as-of date/timestamp, price/returns/score, ranking and
+  verification status. `universe_type=quarterly_watch` and `asof_date` permit
+  existing backtest loaders to read it; no Stage D evaluation is implemented.
+- `audit.json`: one row for every Stage B preliminary symbol, Core overlap,
+  OHLCV source/checksum/validity, numeric metrics, market-cap evidence, rank,
+  security verification URL/checksum/class facts, and one terminal reason.
+- `metadata.json`: research-only schema, dated source/generation lineage,
+  source observation timestamps, parameters/weights, price convention, resource
+  limits, market-cap checksum and concise counts. Terminal reason counts sum
+  exactly to Stage B preliminary count; selected count equals expansion count.
+  Stage A/B counts are retained separately.
+
+Files are first completed in a private staging directory, then published by a
+single atomic directory rename. There is no mutable live selector. A generation
+is the SHA-256 of canonical metadata including artifact checksums; identical
+fixed inputs yield identical file bytes and generation. Wall-clock build times
+and request/cache-hit counters are excluded from deterministic artifact content;
+actual source capture timestamps remain part of the input. Repeating a build
+validates existing bytes and never overwrites an immutable snapshot. `inspect`
+checks canonical metadata, generation/path and both artifact checksums. A
+failed publication cannot select a mixed or partial result.
+
+Yahoo history can still contain provider corrections/split adjustments made
+before capture, and current listing/SEC maps are not a historical security
+master. Captured observations do not prove survivorship-free historical
+coverage. Stage D must use comparable frozen snapshots or forward shadow
+observations and report these limitations; no fabricated historical coverage.
+
+### Unchanged production and next stage
+
+`main.py`, `config.py`, `stock_analysis.py`, daily CSV loading, sell priority,
+B-plan, sizing, Telegram and orders are unchanged. Live sizing defaults to
+**equal allocation**, with `MIN_INVESTMENT=100` and no default maximum; this
+is not proof of a deployed fixed-$100-per-stock policy. Live whole-share
+quantity remains `int(investment_amount/current_price)` and excludes zero
+quantities. The $90 research ceiling only provides a snapshot affordability
+proxy, not a future buy/quantity guarantee. Stage D must validate the operator's
+actual $100 policy, cash ratio and source-aware incremental trades before
+Stage E can activate anything. The existing live broad Trust-name exclusion
+also remains a separate rollout compatibility issue.
 
 ## Purpose
 The Trend Expansion Pool is intended to **supplement** (not replace) the existing Core Quant Pool.
