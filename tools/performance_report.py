@@ -20,11 +20,11 @@ import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position,ungroup
 if __package__:
     from .broker_equity import load_broker_equity
     from .krw_benchmarks import compare_benchmarks
-    from .krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, load_external_flow_ledger
+    from .krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, interval_volatility, load_external_flow_ledger
 else:  # Support the existing `python tools/performance_report.py` entry point.
     from broker_equity import load_broker_equity
     from krw_benchmarks import compare_benchmarks
-    from krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, load_external_flow_ledger
+    from krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, interval_volatility, load_external_flow_ledger
 
 PERFORMANCE_DATA_SOURCES = ("legacy_usd", "broker_krw")
 RETURN_CHARTS = ("cumulative_return.png", "drawdown.png", "excess_return.png")
@@ -597,19 +597,20 @@ def _write_krw_charts(daily: pd.DataFrame, twr: pd.DataFrame, benchmark_index: p
     prefix = twr.set_index("run_date")
     cumulative = prefix[["twr_index"]].rename(columns={"twr_index": "Portfolio TWR (KRW)"})
     drawdown = prefix[["drawdown_pct"]].rename(columns={"drawdown_pct": "Portfolio TWR"})
-    if not summary["valid_daily_return_count"]:
+    if not summary["valid_interval_return_count"]:
         cumulative[:] = np.nan
         drawdown[:] = np.nan
     excess = pd.DataFrame(index=cumulative.index)
     for symbol in benchmark_index:
         cumulative[f"{symbol} (KRW total return)"] = benchmark_index[symbol]
         excess[f"Portfolio − {symbol} (KRW)"] = prefix["twr_index"] - benchmark_index[symbol]
-    # Expanding sample volatility is always labeled with coverage. It never
-    # turns a multi-day equity change across a gap into a daily return.
-    valid_returns = pd.to_numeric(prefix["daily_return"], errors="coerce")
-    volatility = valid_returns.expanding(min_periods=2).std(ddof=1) * np.sqrt(365.25) * 100
-    volatility = volatility.where(valid_returns.notna()).to_frame("TWR valid-sample volatility")
+    # Share the summary's duration eligibility; do not chart a daily-only subset
+    # when the selected period contains mixed observation durations.
+    values, _ = interval_volatility(twr)
+    volatility = pd.DataFrame({"TWR valid-sample volatility": values.to_numpy()}, index=prefix.index)
     scope = "full period" if summary["returns_validated"] else "valid samples; incomplete period"
+    if summary["volatility_unavailable_reason"]:
+        scope = "N/A: " + summary["volatility_unavailable_reason"]
     raw = daily.set_index("run_date")[["total_asset_krw"]].rename(columns={"total_asset_krw": "Broker total assets"})
     charts = [
         (RAW_KRW_CHART, raw, "Raw broker total assets (KRW)", "Total assets (KRW)"),
@@ -657,7 +658,8 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> bool
         "best_benchmark": None,
         "cagr_pct": None,
         "cash_flow_warnings": ledger.warnings,
-        "data_quality_warnings": loaded.warnings + metrics["twr_unavailable_reasons"],
+        "data_quality_warnings": (loaded.warnings + metrics["twr_unavailable_reasons"]
+                                  + metrics["observation_gap_warnings"]),
         **metrics,
     }
     benchmark_index, benchmark_curve, benchmark_metrics, benchmark_warnings = compare_benchmarks(
@@ -666,7 +668,9 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> bool
     summary.update(benchmark_metrics)
     summary["data_quality_warnings"].extend(benchmark_warnings)
     summary["valid_snapshot_count"] = len(daily)
-    summary["performance_methodology"] = "Cash-flow-adjusted boundary-valued KRW TWR; calendar-day observation returns."
+    summary["performance_methodology"] = (
+        "Cash-flow-adjusted boundary-valued KRW TWR between consecutive actual broker observations."
+    )
     summary["requested_start_date"] = args.start_date
     summary["requested_end_date"] = args.end_date
     summary["report_status"] = (
@@ -692,6 +696,8 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> bool
         f"Report status: {summary['report_status']}",
         "Valuation currency: KRW",
         f"Valid snapshots: {summary['valid_snapshot_count']}",
+        f"Valid interval returns: {summary['valid_interval_return_count']} / "
+        f"{summary['expected_interval_return_count']} actual observation intervals",
         f"Methodology: {summary['performance_methodology']}",
         f"Raw broker total assets (KRW): {summary['latest_equity_krw']:,.0f}"
         if summary['latest_equity_krw'] is not None else "Raw broker total assets (KRW): N/A",
@@ -700,8 +706,9 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> bool
         f"External flow history: {summary['external_cash_flow_completeness']}",
         f"Max drawdown: {_fmt_pct(summary['max_drawdown_pct'])} (TWR index; full period)",
         f"Annualized volatility: {_fmt_pct(summary['annualized_volatility_pct'])} "
-        f"({summary['volatility_valid_return_count']} valid daily returns; {summary['volatility_scope']}; "
-        "sample standard deviation × sqrt(365.25); N/A if fewer than two valid returns)",
+        f"({summary['volatility_valid_return_count']} valid interval returns; {summary['volatility_scope']})",
+        f"Volatility convention: {summary['volatility_convention']}",
+        f"Volatility availability: {summary['volatility_unavailable_reason'] or 'Available'}",
         f"Timing: {summary['timing_convention']}",
         "CAGR: N/A",
     ]
@@ -711,13 +718,13 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> bool
             f"{symbol} cumulative total return (KRW): {_fmt_pct(summary[f'cumulative_return_{symbol}_pct'])}",
             f"Excess return vs {symbol} (KRW; percentage points): " + ("N/A" if excess is None else f"{excess:.2f}"),
         ])
-    period = f"{summary['start_date'] or 'N/A'} to {summary['end_date'] or 'N/A'} ({len(daily)} snapshot days)"
+    period = f"{summary['start_date'] or 'N/A'} to {summary['end_date'] or 'N/A'} ({len(daily)} actual snapshots)"
     lines = [
         "# Broker KRW TWR and Equity Report", "", "- Data source: broker_krw",
         "- Input: data/live/broker_equity_snapshots.csv", f"- Period: {period}",
         f"- Requested period: {args.start_date or 'all available'} to {args.end_date or 'all available'}",
         *(f"- {line}" for line in metric_lines),
-        "", "[Daily validation and TWR index](twr_curve.csv)",
+        "", "[Observation interval validation and TWR index](twr_curve.csv)",
         *(f"![{title}](charts/{name})" for name, title in charts if name != RAW_KRW_CHART),
         "", "## Benchmark methodology", "", summary["benchmark_methodology"],
         "[Aligned benchmark and FX observations](benchmark_curve.csv)",
@@ -742,7 +749,7 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> bool
 <p>{KRW_RETURN_CAVEAT}</p>
 <ul class="metrics">{''.join(f'<li>{escape(line)}</li>' for line in metric_lines)}</ul>
 <h2>Data Quality Warnings</h2><ul class="warnings">{warning_html}</ul>
-<p><a href="twr_curve.csv">Daily validation and TWR index</a></p>
+<p><a href="twr_curve.csv">Observation interval validation and TWR index</a></p>
 {chart_html}
 <h2>Benchmark methodology</h2><p>{escape(summary['benchmark_methodology'])}</p>
 <p><a href="benchmark_curve.csv">Aligned benchmark and FX observations</a></p>

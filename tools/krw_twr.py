@@ -26,8 +26,15 @@ ATTESTATIONS = {"complete", "incomplete"}
 CURVE_COLUMNS = [
     "run_date", "interval_start", "interval_end", "flow_status", "start_flow_krw",
     "end_flow_krw", "daily_return", "return_valid", "reason", "twr_index", "drawdown_pct",
+    "interval_return", "interval_days", "calendar_days", "gap_warning",
 ]
 TIMING_CONVENTION = "Verified start-after-opening / end-before-closing flows; intraday or unknown timing is N/A."
+VOLATILITY_CONVENTION = (
+    "Sample standard deviation of verified interval returns × sqrt(365.25 / elapsed interval days). "
+    "Requires at least two valid returns and identical positive elapsed durations for all observed intervals; "
+    "mixed or unknown durations are N/A. No daily interpolation or partial-duration filtering."
+)
+LONG_GAP_DAYS = 4
 
 
 @dataclass
@@ -135,13 +142,15 @@ def _interval_flows(ledger: ExternalFlowLedger, start: pd.Timestamp, end: pd.Tim
     flows = [row for row in rows if row["classification"] not in ATTESTATIONS]
     status = "verified_nonzero" if flows else "verified_zero"
     if any(row["timing"] not in {"start", "end"} for row in flows):
-        return status, None, None, "Intraday or unknown flow timing lacks boundary valuations; exact daily TWR is N/A."
+        return status, None, None, (
+            "Intraday or unknown flow timing lacks boundary valuations; exact interval TWR is N/A."
+        )
     start_flow = sum((row["amount_krw"] for row in flows if row["timing"] == "start"), Fraction(0))
     end_flow = sum((row["amount_krw"] for row in flows if row["timing"] == "end"), Fraction(0))
     return status, start_flow, end_flow, ""
 
 
-def _daily_result(previous: dict, current: dict, ledger: ExternalFlowLedger) -> dict:
+def _interval_result(previous: dict, current: dict, ledger: ExternalFlowLedger) -> dict:
     start, end = _timestamp(previous["fetched_at_kst"]), _timestamp(current["fetched_at_kst"])
     status, start_flow, end_flow, reason = _interval_flows(ledger, start, end)
     result = {
@@ -149,10 +158,22 @@ def _daily_result(previous: dict, current: dict, ledger: ExternalFlowLedger) -> 
         "flow_status": status, "start_flow_krw": None if start_flow is None else float(start_flow),
         "end_flow_krw": None if end_flow is None else float(end_flow), "daily_return": None,
         "return_valid": False, "reason": reason, "twr_index": None, "drawdown_pct": None,
+        "interval_return": None, "interval_days": (end - start) / pd.Timedelta(days=1),
+        "calendar_days": (end.date() - start.date()).days, "gap_warning": "",
     }
-    if (end.date() - start.date()).days != 1:
-        result["reason"] = "Missing consecutive calendar observations; no daily return across a gap."
+    if end <= start:
+        result["reason"] = "Non-increasing observation timestamps; interval TWR is N/A."
         return result
+    missing = pd.bdate_range(start.normalize() + pd.Timedelta(days=1), end.normalize() - pd.Timedelta(days=1))
+    warnings = []
+    if len(missing):
+        warnings.append("Missing weekday observations (may include market holidays): " +
+                        ", ".join(missing.strftime("%Y-%m-%d")) + ".")
+    if result["calendar_days"] > LONG_GAP_DAYS:
+        warnings.append(f"Unusually long observation gap: {result['calendar_days']} calendar days "
+                        f"(threshold > {LONG_GAP_DAYS}).")
+    if warnings:
+        result["gap_warning"] = " ".join(warnings) + " No snapshots or flows inferred; verify the entire interval."
     if reason:
         return result
     opening, closing = Fraction(str(previous["total_asset_krw"])), Fraction(str(current["total_asset_krw"]))
@@ -164,12 +185,51 @@ def _daily_result(previous: dict, current: dict, ledger: ExternalFlowLedger) -> 
     if capital <= 0 or terminal <= 0:
         result["reason"] = "Nonpositive flow-adjusted equity; return denominator/subperiod is invalid."
         return result
-    daily_return = float(terminal / capital - 1)
-    if not math.isfinite(daily_return):
+    interval_return = float(terminal / capital - 1)
+    if not math.isfinite(interval_return):
         result["reason"] = "Non-finite return."
         return result
-    result.update(daily_return=daily_return, return_valid=True, _growth=terminal / capital)
+    result.update(interval_return=interval_return, return_valid=True, _growth=terminal / capital)
+    if result["calendar_days"] == 1:
+        result["daily_return"] = interval_return  # Compatibility: strictly one KST calendar day only.
     return result
+
+
+def interval_volatility(curve: pd.DataFrame) -> tuple[pd.Series, dict]:
+    """Use one elapsed sampling duration, or decline annualization for the whole sample.
+
+    This is the usual equal-period arithmetic-return estimator (independent,
+    stationary increments assumed), not a model for unobserved daily paths.
+    Invalid returns may be excluded, but their interval durations may not be.
+    """
+    returns = pd.to_numeric(curve["interval_return"], errors="coerce").where(curve["return_valid"])
+    durations = pd.to_numeric(curve["interval_days"].iloc[1:], errors="coerce")
+    interval_days = None
+    reason = ""
+    if durations.isna().any() or (durations <= 0).any():
+        reason = "Unknown or nonpositive interval durations; annualized volatility is N/A."
+    elif durations.nunique() > 1:
+        reason = "Mixed elapsed interval durations; reliable annualized volatility is N/A."
+    elif not durations.empty:
+        interval_days = float(durations.iloc[0])
+    if not reason and returns.count() < 2:
+        reason = "At least two valid interval returns are required for annualized volatility."
+    values = pd.Series(float("nan"), index=curve.index, dtype=float)
+    if not reason:
+        values = returns.expanding(min_periods=2).std(ddof=1) * math.sqrt(365.25 / interval_days) * 100
+        values = values.where(returns.notna() & values.map(math.isfinite))
+        if pd.isna(values.loc[returns.notna()].iloc[-1]):
+            reason = "Non-finite sample volatility; annualized volatility is N/A."
+            values[:] = float("nan")
+    available = values.dropna()
+    return values, {
+        "annualized_volatility_pct": None if available.empty else float(available.iloc[-1]),
+        "volatility_valid_return_count": int(returns.count()),
+        "volatility_annualization_days": 365.25,
+        "volatility_interval_days": interval_days,
+        "volatility_convention": VOLATILITY_CONVENTION,
+        "volatility_unavailable_reason": reason or None,
+    }
 
 
 def calculate_twr(daily: pd.DataFrame, ledger: ExternalFlowLedger, *, start_date: str | None = None,
@@ -192,6 +252,7 @@ def calculate_twr(daily: pd.DataFrame, ledger: ExternalFlowLedger, *, start_date
             "interval_end": observations[0]["fetched_at_kst"], "flow_status": "baseline",
             "start_flow_krw": None, "end_flow_krw": None, "daily_return": None, "return_valid": False,
             "reason": "Opening valuation; no return interval.", "twr_index": 100.0, "drawdown_pct": 0.0,
+            "interval_return": None, "interval_days": None, "calendar_days": None, "gap_warning": "",
         })
     index, peak = Fraction(100), Fraction(100)
     chain_valid = endpoints_valid and not rejected_records
@@ -199,14 +260,14 @@ def calculate_twr(daily: pd.DataFrame, ledger: ExternalFlowLedger, *, start_date
         rows[0].update(twr_index=None, drawdown_pct=None)
     for previous, current in zip(observations, observations[1:]):
         try:
-            row = _daily_result(previous, current, ledger)
+            row = _interval_result(previous, current, ledger)
         except (ValueError, TypeError, OverflowError, ZeroDivisionError):
             row = dict.fromkeys(CURVE_COLUMNS)
             row.update(run_date=current["run_date"], flow_status="unknown", return_valid=False,
-                       reason="Invalid equity or timestamp; daily TWR is N/A.")
+                       reason="Invalid equity or timestamp; interval TWR is N/A.")
         growth = row.pop("_growth", None)
         if rejected_records:
-            row.update(daily_return=None, return_valid=False,
+            row.update(daily_return=None, interval_return=None, return_valid=False,
                        reason="Rejected broker records require reconciliation before TWR validation.")
         if not row["return_valid"]:
             chain_valid = False
@@ -226,28 +287,25 @@ def calculate_twr(daily: pd.DataFrame, ledger: ExternalFlowLedger, *, start_date
                 reasons.append("TWR index exceeds finite numeric range; full-period TWR is N/A.")
         rows.append(row)
     curve = pd.DataFrame(rows, columns=CURVE_COLUMNS)
-    returns = pd.to_numeric(curve["daily_return"], errors="coerce").dropna()
+    returns = pd.to_numeric(curve["interval_return"], errors="coerce").dropna()
     complete = bool(chain_valid and len(observations) >= 2)
     statuses = curve["flow_status"].iloc[1:].tolist()
     flow_status = "unknown"
     if statuses and "unknown" not in statuses and endpoints_valid and not rejected_records:
         flow_status = "verified_nonzero" if "verified_nonzero" in statuses else "verified_zero"
-    volatility = float(returns.std(ddof=1) * math.sqrt(365.25) * 100) if len(returns) >= 2 else None
-    if volatility is not None and not math.isfinite(volatility):
-        volatility = None
-    expected_count = 0
-    if observations:
-        expected_count = max((pd.Timestamp(end_date or observations[-1]["run_date"])
-                              - pd.Timestamp(start_date or observations[0]["run_date"])).days, 0)
+    _, volatility_metrics = interval_volatility(curve)
     summary = {
         "report_kind": "krw_time_weighted_return", "returns_validated": complete,
         "external_cash_flow_completeness": flow_status, "timing_convention": TIMING_CONVENTION,
         "cumulative_return_pct": float((index / 100 - 1) * 100) if complete else None,
         "max_drawdown_pct": float(curve["drawdown_pct"].min()) if complete else None,
-        "annualized_volatility_pct": volatility, "volatility_valid_return_count": len(returns),
+        **volatility_metrics,
         "volatility_scope": "full_period" if complete else "valid_returns_only_incomplete_period",
-        "volatility_annualization_days": 365.25, "valid_daily_return_count": len(returns),
-        "expected_daily_return_count": expected_count,
+        "valid_interval_return_count": len(returns),
+        "expected_interval_return_count": max(len(observations) - 1, 0),
+        "valid_daily_return_count": int(curve["daily_return"].notna().sum()),
+        "expected_daily_return_count": int((curve["calendar_days"] == 1).sum()),
+        "observation_gap_warnings": curve["gap_warning"].dropna().loc[lambda values: values != ""].tolist(),
         "twr_unavailable_reasons": list(dict.fromkeys(reasons)),
     }
     summary["cash_flow_adjusted_return_pct"] = summary["cumulative_return_pct"]

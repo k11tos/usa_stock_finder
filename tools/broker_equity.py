@@ -79,10 +79,13 @@ def _diagnose_dates(daily: pd.DataFrame, start_date: str | None, end_date: str |
         return warnings
     first = daily["run_date"].iloc[0] if not daily.empty else None
     last = daily["run_date"].iloc[-1] if not daily.empty else None
-    expected = pd.date_range(start_date or first, end_date or last, freq="D")
+    expected = pd.bdate_range(start_date or first, end_date or last)
+    requested = pd.DatetimeIndex([pd.Timestamp(value) for value in (start_date, end_date) if value])
+    expected = expected.union(requested)
     missing = expected.difference(pd.DatetimeIndex(daily["run_date"]))
     if len(missing):
-        warnings.append("Missing calendar observation dates (no interpolation): " +
+        warnings.append("Missing weekday or requested endpoint observation dates "
+                        "(may include market holidays; no interpolation): " +
                         ", ".join(missing.strftime("%Y-%m-%d")))
     if daily.empty:
         return warnings
