@@ -148,7 +148,8 @@ def build_watch_pool(*, listing_dir: Path, core_csv: Path, core_asof_date: str,
                 continue
             try:
                 url = chart_url(symbol, session_date)
-                payload = cache.get_asof(url, asof_date, not_before=session_date)
+                payload = cache.get_asof(url, asof_date, not_before=session_date,
+                                         observed_not_before=datetime.fromisoformat(cutoff))
                 row["ohlcv_source"] = {"url": url, "sha256": sha256(payload)}
                 bars = decode_chart(payload, symbol)
                 row.update(screen_bars(bars, session_date, params))

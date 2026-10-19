@@ -116,8 +116,15 @@ class ResearchCache:  # pylint: disable=too-many-instance-attributes
         self.used[key] = {k: v for k, v in entry.items() if k != "body"}
         return payload
 
-    def get_asof(self, url: str, asof_date: str, *, not_before: str | None = None) -> bytes:
-        """Reject source observations from later calendar days (no backfill)."""
+    def get_asof(self, url: str, asof_date: str, *, not_before: str | None = None,
+                 observed_not_before: datetime | None = None) -> bytes:
+        """Validate observation dates, with an optional aware timestamp lower bound.
+
+        Completed-session prices require the full cutoff; SEC evidence retains
+        calendar-day semantics. Rejected observations remain in source lineage.
+        """
+        if observed_not_before is not None and observed_not_before.utcoffset() is None:
+            raise ValueError("observation cutoff must be timezone-aware")
         payload = self.get(url)
         observed = datetime.fromisoformat(self.used[sha256(url.encode())]["observed_at_utc"])
         observed_day = observed.astimezone(ZoneInfo("America/New_York")).date()
@@ -128,6 +135,8 @@ class ResearchCache:  # pylint: disable=too-many-instance-attributes
             raise ResearchDataError("source_cache_stale")
         if not_before is not None and observed_day < date.fromisoformat(not_before):
             raise ResearchDataError("source_observed_before_data")
+        if observed_not_before is not None and observed < observed_not_before:
+            raise ResearchDataError("source_observed_before_cutoff")
         return payload
 
     def _download(self, url):

@@ -104,9 +104,12 @@ python -m tools.build_trend_expansion_watch_pool build \
 Run only after the chosen session has closed. `--session-date` explicitly
 identifies the last completed U.S. session, including holidays; a weekend
 quarter end may be up to four calendar days later. The reported price cutoff is
-16:00 America/New_York (DST aware; conservative on half days). Source capture
-timestamps are separate: after-close collection on the same as-of calendar day
-is permitted. Future bars, annual filings after as-of, and raw observations
+16:00 America/New_York (DST aware; conservative on half days). Yahoo price
+observations must be captured at or after that full timestamp, including when
+the as-of date falls on a later weekend. Earlier observations are rejected as
+`source_observed_before_cutoff`, retained in source lineage, and never silently
+refreshed. After-close collection on the same as-of calendar day is permitted.
+Future bars, annual filings after as-of, and raw observations
 from later New York calendar days are rejected. This deliberately prevents
 backfilling a historical quarter with today's listed universe, SEC mapping or
 split-adjusted prices. Capture inputs during the rebalance; retain them.
@@ -239,7 +242,9 @@ legacy `final_common_equity_count` cannot certify finalists.
 
 The annual filing must be filed by as-of and no more than 550 calendar days old.
 Raw observations must be captured by the as-of New York calendar date and no
-more than seven days old; OHLCV cannot predate the requested final session.
+more than seven days old; OHLCV cannot predate the requested final session's
+16:00 New York cutoff. SEC observations retain calendar-date validation,
+including the filing-date lower bound, without a price-session cutoff.
 Unmatched classes, unavailable/blocked SEC responses, missing SIC/entity/shell
 facts, transformed/continued inline facts, and unsupported formats produce
 `unknown`; skip/defer them and consider the next ranked symbol. This intentionally

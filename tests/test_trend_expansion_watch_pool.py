@@ -434,6 +434,92 @@ def test_source_observation_staleness_before_session_and_future_prices(tmp_path)
         assert result["metadata"]["counts"]["expansion"] == 0
 
 
+@pytest.mark.parametrize("session,utc_hour", [("2026-01-30", 21), ("2026-07-31", 20)])
+@pytest.mark.parametrize("offset,accepted", [(-21600, False), (-0.000001, False), (0, True), (1, True)])
+def test_price_observation_full_timestamp_cutoff(tmp_path, session, utc_hour, offset, accepted):
+    from datetime import timedelta
+    cutoff = datetime.fromisoformat(asof_cutoff(session, session))
+    assert cutoff.astimezone(timezone.utc).hour == utc_hour
+    observed = (cutoff.astimezone(timezone.utc) + timedelta(seconds=offset)).isoformat()
+    cache = ResearchCache(tmp_path)
+    url = chart_url("A", session)
+    cache_entry(cache, url, b"synthetic", observed=observed)
+    if accepted:
+        assert cache.get_asof(url, session, not_before=session,
+                              observed_not_before=cutoff) == b"synthetic"
+    else:
+        with pytest.raises(ResearchDataError, match="^source_observed_before_cutoff$"):
+            cache.get_asof(url, session, not_before=session, observed_not_before=cutoff)
+
+
+@pytest.mark.parametrize("asof", ["2026-08-01", "2026-08-02"])
+def test_friday_close_observation_valid_for_weekend(tmp_path, asof):
+    session = "2026-07-31"
+    cache = ResearchCache(tmp_path)
+    url = chart_url("A", session)
+    cache_entry(cache, url, b"synthetic", observed="2026-07-31T20:00:01+00:00")
+    assert cache.get_asof(url, asof, not_before=session,
+                          observed_not_before=datetime.fromisoformat(asof_cutoff(asof, session))) == b"synthetic"
+
+
+def test_intraday_sec_observations_remain_valid(tmp_path):
+    cache = ResearchCache(tmp_path)
+    seed_evidence(cache, ["A"], {"A": {"filed": DAY}})
+    for path in cache.directory.glob("*.json"):
+        entry = json.loads(path.read_bytes())
+        entry["observed_at_utc"] = "2026-09-30T14:00:00+00:00"  # 10:00 EDT, including filing day
+        path.write_bytes(canonical_bytes(entry))
+    result = SecVerifier(cache, DAY).verify("A")
+    assert result["status"] == "verified"
+    assert len(result["sources"]) == 3
+
+
+def test_intraday_chart_cannot_rank_or_enter_watch_pool(tmp_path):
+    args, cache = scenario(tmp_path, ["A"])
+    url = chart_url("A", DAY)
+    payload = seed_prices(cache, "A")
+    numeric = screen_bars(decode_chart(payload, "A"), DAY, PARAMS)
+    assert numeric["last_bar_date"] == DAY
+    assert numeric["reason"] is None
+    cache_entry(cache, url, payload, observed="2026-09-30T14:00:00+00:00")
+    original = {path.name: path.read_bytes() for path in cache.directory.iterdir()}
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unsafe cache must never refresh")
+    fetching = ResearchCache(cache.directory, fetch=True, opener=forbidden)
+    rejected = build_watch_pool(**args, cache=fetching)
+    row = rejected["audit"][0]
+    assert row["reason"] == "source_observed_before_cutoff"
+    assert row["ohlcv_validity"] == "unavailable"
+    assert row["verification"]["status"] == "not_evaluated"
+    assert "rank" not in row and "score" not in row
+    assert rejected["watch"] == []
+    counts = rejected["metadata"]["counts"]
+    assert counts["numeric_eligible"] == counts["verification_attempted"] == counts["expansion"] == 0
+    assert counts["excluded"] == 1
+    assert counts["reasons"] == {"source_observed_before_cutoff": 1}
+    assert rejected["metadata"]["raw_sources"][sha256(url.encode())]["sha256"] == sha256(payload)
+    assert fetching.requests == 0
+    assert original == {path.name: path.read_bytes() for path in cache.directory.iterdir()}
+    assert canonical_bytes(rejected) == canonical_bytes(build_watch_pool(**args, cache=fetching))
+    published = publish_watch_pool(tmp_path / "output", rejected)
+    assert inspect_watch_pool(published)["counts"]["excluded"] == 1
+    assert json.loads((published / "audit.json").read_bytes())[0]["reason"] == row["reason"]
+
+    # A separately supplied corrected observation uses exactly the same chart bytes.
+    corrected = ResearchCache(tmp_path / "corrected")
+    for path in cache.directory.iterdir():
+        entry = json.loads(path.read_bytes())
+        cache_entry(corrected, entry["url"], entry["body"].encode(), observed=entry["observed_at_utc"])
+    cache_entry(corrected, url, payload, observed="2026-09-30T20:00:00+00:00")
+    accepted = build_watch_pool(**args, cache=corrected)
+    admitted = accepted["audit"][0]
+    assert admitted["reason"] == "selected"
+    assert admitted["rank"] == 1
+    assert [r["symbol"] for r in accepted["watch"]] == ["A"]
+    assert all(admitted[key] == value for key, value in numeric.items() if key != "reason")
+    assert inspect_watch_pool(published)["counts"]["expansion"] == 0
+
+
 def test_immutable_repeat_refuses_corruption_and_metadata_tampering(tmp_path):
     args, cache = scenario(tmp_path, ["A"])
     result = build_watch_pool(**args, cache=cache)
