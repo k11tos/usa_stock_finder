@@ -180,7 +180,8 @@ def test_latest_valid_run_sorted_by_observation_time(broker_path):
     assert result.daily["total_asset_krw"].tolist() == [1500000, 3000000]
     assert result.daily["run_id"].tolist()[0] == "a"
     assert any("duplicate observation date" in warning for warning in result.warnings)
-    assert any("Missing calendar" in warning and "2026-01-02" in warning for warning in result.warnings)
+    assert any("Missing weekday or requested endpoint" in warning and "2026-01-02" in warning
+               for warning in result.warnings)
     assert any("discontinuity" in warning for warning in result.warnings)
     assert any("Stale observations" in warning for warning in result.warnings)
     assert result.original_csv.encode() == broker_path.read_bytes()
@@ -211,7 +212,7 @@ def test_valid_snapshot_corrupted_with_invalid_utf8_selects_nothing(broker_path)
     assert result.daily.empty
     assert result.original_csv_bytes == original
     assert any("Invalid UTF-8" in warning for warning in result.warnings)
-    assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
+    assert not any("Missing weekday or requested endpoint observation dates" in warning for warning in result.warnings)
 
 
 @pytest.fixture
@@ -249,7 +250,8 @@ def test_snapshot_filesystem_failure_is_sanitized_and_recovers(broker_path, monk
         assert result.original_csv == "" and result.original_csv_bytes is None
         description = "missing or empty" if stage == "disappeared" else "unavailable or unreadable"
         assert result.warnings == [f"Broker KRW snapshot CSV is {description}; no fallback source used."]
-        assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
+        assert not any("Missing weekday or requested endpoint observation dates" in warning
+                       for warning in result.warnings)
         if stage == "read":
             path.open.assert_called_once_with("rb")
             broker_equity.fcntl.flock.assert_called_once_with(path.open.return_value, broker_equity.fcntl.LOCK_SH)
@@ -436,7 +438,7 @@ def test_wrong_header_fails_closed(broker_path):
     result = load_broker_equity("2026-01-02", "2026-01-04", as_of=AS_OF)
     assert result.daily.empty
     assert any("header" in warning for warning in result.warnings)
-    assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
+    assert not any("Missing weekday or requested endpoint observation dates" in warning for warning in result.warnings)
 
 
 def test_period_filter_missing_boundaries_and_no_interpolation(broker_path):
@@ -447,14 +449,14 @@ def test_period_filter_missing_boundaries_and_no_interpolation(broker_path):
     assert "2026-01-05" in result.original_csv
 
 
-def test_empty_selected_period_reports_all_requested_dates_and_preserves_input(broker_path):
+def test_empty_selected_period_reports_weekdays_and_requested_endpoints_and_preserves_input(broker_path):
     write_records(broker_path, [record("2026-01-01"), record("2026-01-05")])
     original = broker_path.read_bytes()
 
     result = load_broker_equity("2026-01-02", "2026-01-04", as_of=AS_OF)
 
     assert result.daily.empty
-    assert any("2026-01-02, 2026-01-03, 2026-01-04" in warning
+    assert any("2026-01-02, 2026-01-04" in warning
                for warning in result.warnings)
     assert result.original_csv_bytes == original == broker_path.read_bytes()
 
@@ -469,7 +471,8 @@ def test_only_missing_requested_boundary_is_reported(broker_path, start_date, en
     result = load_broker_equity(start_date, end_date, as_of=AS_OF)
 
     assert len(result.daily) == len(rows)
-    assert any(f"Missing calendar observation dates (no interpolation): {missing}" == warning
+    assert any(f"Missing weekday or requested endpoint observation dates "
+               f"(may include market holidays; no interpolation): {missing}" == warning
                for warning in result.warnings)
 
 
@@ -481,7 +484,15 @@ def test_requested_interval_keeps_observations_and_reports_internal_and_end_gaps
     assert result.daily["run_date"].dt.strftime("%Y-%m-%d").tolist() == [
         "2026-01-01", "2026-01-03", "2026-01-05",
     ]
-    assert any("2026-01-02, 2026-01-04, 2026-01-06" in warning for warning in result.warnings)
+    assert any("2026-01-02, 2026-01-06" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize("days", [[9, 12], [9, 10, 11, 12]])
+def test_weekends_are_not_missing_weekdays_and_actual_observations_are_retained(broker_path, days):
+    write_records(broker_path, [record(f"2026-01-{day:02d}") for day in days])
+    result = load_broker_equity(as_of=datetime(2026, 1, 13, tzinfo=KST))
+    assert len(result.daily) == len(days)
+    assert not any("Missing weekday" in warning for warning in result.warnings)
 
 
 def test_all_requested_dates_present_have_no_missing_date_warning(broker_path):
@@ -490,7 +501,7 @@ def test_all_requested_dates_present_have_no_missing_date_warning(broker_path):
     result = load_broker_equity("2026-01-01", "2026-01-03", as_of=AS_OF)
 
     assert len(result.daily) == 3
-    assert not any("Missing calendar observation dates" in warning for warning in result.warnings)
+    assert not any("Missing weekday or requested endpoint observation dates" in warning for warning in result.warnings)
 
 
 def test_default_date_range_remains_bounded_by_selected_observations(broker_path):
@@ -564,7 +575,7 @@ def test_no_valid_krw_data_never_falls_back(broker_path, tmp_path, monkeypatch, 
     assert summary["num_days"] == 0 and summary["latest_equity_krw"] is None
     assert summary["cumulative_return_pct"] is None
     assert any("No valid broker KRW" in warning for warning in summary["data_quality_warnings"])
-    assert not any("Missing calendar observation dates" in warning
+    assert not any("Missing weekday or requested endpoint observation dates" in warning
                    for warning in summary["data_quality_warnings"])
     assert pd.read_csv(Path(args.output) / "equity_curve.csv").empty
 
@@ -635,8 +646,8 @@ def test_absent_requested_period_publishes_empty_diagnostic_and_missing_dates(
         assert summary["num_days"] == 0 and summary["latest_equity_krw"] is None
         assert summary["cumulative_return_pct"] is None
         warning = next(w for w in summary["data_quality_warnings"]
-                       if "Missing calendar observation dates" in w)
-        assert "2026-01-02, 2026-01-03, 2026-01-04" in warning
+                       if "Missing weekday or requested endpoint observation dates" in w)
+        assert "2026-01-02, 2026-01-04" in warning
         assert any("No valid broker KRW observations" in w
                    for w in summary["data_quality_warnings"])
         for metric in ["cash_flow_adjusted_return_pct", "cagr_pct", "max_drawdown_pct",

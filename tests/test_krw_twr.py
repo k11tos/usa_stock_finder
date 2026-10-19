@@ -1,4 +1,4 @@
-"""Synthetic broker-to-report regressions for Stage 4's accounting boundary."""
+"""Synthetic broker-to-report regressions for KRW interval accounting."""
 
 import argparse
 import csv
@@ -213,9 +213,155 @@ def test_incomplete_period_never_rechains_after_gap(inputs):
 def test_calendar_gap_is_not_one_daily_return(inputs):
     curve, summary = compute(inputs, [snapshot(1, 100), snapshot(3, 120)],
                              [attestation(3, interval_start=stamp(1))])
-    assert "calendar" in curve.iloc[1]["reason"]
+    assert curve.iloc[1]["interval_return"] == pytest.approx(.2)
+    assert pd.isna(curve.iloc[1]["daily_return"])
+    assert curve.iloc[1]["interval_days"] == 2
+    assert "2026-01-02" in curve.iloc[1]["gap_warning"]
+    assert summary["cumulative_return_pct"] == 20
+    assert summary["expected_interval_return_count"] == 1
+    assert summary["expected_daily_return_count"] == summary["valid_daily_return_count"] == 0
+
+
+@pytest.mark.parametrize("ending,amount,timing,expected", [
+    (105, 0, "end", .05),
+    (150, 50, "end", 0), (150, 50, "start", 0),
+    (60, -40, "end", 0), (60, -40, "start", 0),
+    (160, 50, "end", .1), (165, 50, "start", .1),
+])
+def test_friday_to_monday_verified_boundary_accounting(inputs, ending, amount, timing, expected):
+    rows = [attestation(12, interval_start=stamp(9))]
+    if amount:
+        rows.append(flow(amount, timing, day=12, interval_start=stamp(9),
+                         effective_at=stamp(9 if timing == "start" else 12)))
+    curve, summary = compute(inputs, [snapshot(9, 100), snapshot(12, ending)], rows)
+    assert curve["twr_index"].tolist() == pytest.approx([100, 100 * (1 + expected)])
+    assert curve.iloc[1]["interval_return"] == pytest.approx(expected)
+    assert pd.isna(curve.iloc[1]["daily_return"])
+    assert curve.iloc[1]["interval_start"] == stamp(9)
+    assert curve.iloc[1]["interval_end"] == stamp(12)
+    assert curve.iloc[1]["interval_days"] == curve.iloc[1]["calendar_days"] == 3
+    assert not summary["observation_gap_warnings"]
+    assert summary["cumulative_return_pct"] == pytest.approx(expected * 100)
+    assert summary["expected_interval_return_count"] == summary["valid_interval_return_count"] == 1
+    assert summary["expected_daily_return_count"] == summary["valid_daily_return_count"] == 0
+
+
+@pytest.mark.parametrize("rows", [None, [], [attestation(12, interval_start=stamp(9),
+                                                        classification="incomplete")],
+                                  [attestation(12, interval_start=stamp(9),
+                                               verification_status="pending")],
+                                  [attestation(12)],  # Only Sunday-to-Monday coverage.
+                                  [attestation(12, interval_start=stamp(9).replace("16:", "15:"))]])
+def test_weekend_requires_complete_exact_interval_verification(inputs, rows):
+    curve, summary = compute(inputs, [snapshot(9, 100), snapshot(12, 105)], rows)
+    assert pd.isna(curve.iloc[1]["interval_return"])
+    assert not curve.iloc[1]["return_valid"]
+    assert summary["cumulative_return_pct"] is summary["max_drawdown_pct"] is None
+    assert summary["external_cash_flow_completeness"] == "unknown"
+
+
+@pytest.mark.parametrize("start,end,missing,long_gap", [
+    (16, 20, "2026-01-19", False),  # MLK market holiday; no calendar API is assumed.
+    (12, 14, "2026-01-13", False),  # Missing scheduled weekday.
+    (9, 20, "2026-01-12", True),
+])
+def test_verified_holiday_or_missing_weekday_gap_warns_without_fabrication(inputs, start, end, missing, long_gap):
+    curve, summary = compute(inputs, [snapshot(start, 100), snapshot(end, 105)],
+                             [attestation(end, interval_start=stamp(start))])
+    assert len(curve) == 2
+    assert curve["run_date"].tolist() == list(pd.to_datetime([f"2026-01-{start:02d}", f"2026-01-{end:02d}"]))
+    assert curve.iloc[1]["interval_return"] == .05
+    assert summary["cumulative_return_pct"] == 5
+    assert missing in summary["observation_gap_warnings"][0]
+    assert ("Unusually long" in summary["observation_gap_warnings"][0]) == long_gap
+    assert "No snapshots or flows inferred" in curve.iloc[1]["gap_warning"]
+    # A warning alone never supplies the missing verification.
+    curve, summary = compute(inputs, [snapshot(start, 100), snapshot(end, 105)], [])
     assert summary["cumulative_return_pct"] is None
-    assert summary["expected_daily_return_count"] == 2
+    assert summary["observation_gap_warnings"]
+    assert pd.isna(curve.iloc[1]["interval_return"])
+
+
+@pytest.mark.parametrize("timing,effective", [("intraday", stamp(10)), ("unknown", "2026-01-10")])
+def test_weekend_unvalued_flow_is_unavailable_even_with_complete_verification(inputs, timing, effective):
+    rows = [attestation(12, interval_start=stamp(9)),
+            flow(50, timing, day=12, interval_start=stamp(9), effective_at=effective)]
+    curve, summary = compute(inputs, [snapshot(9, 100), snapshot(12, 150)], rows)
+    assert not curve.iloc[1]["return_valid"]
+    assert "timing" in curve.iloc[1]["reason"]
+    assert summary["external_cash_flow_completeness"] == "verified_nonzero"
+    assert summary["cumulative_return_pct"] is None
+
+
+def test_weekend_chain_compounds_and_draws_down_without_skipping_invalid_interval(inputs):
+    snapshots = [snapshot(8, 100), snapshot(9, 110), snapshot(12, 99), snapshot(13, 108.9)]
+    rows = [attestation(9), attestation(12, interval_start=stamp(9)), attestation(13)]
+    curve, summary = compute(inputs, snapshots, rows)
+    assert curve["twr_index"].tolist() == pytest.approx([100, 110, 99, 108.9])
+    assert curve["interval_return"].iloc[1:].tolist() == pytest.approx([.1, -.1, .1])
+    assert curve["drawdown_pct"].tolist() == pytest.approx([0, 0, -10, -1])
+    assert summary["cumulative_return_pct"] == 8.9
+    assert summary["max_drawdown_pct"] == -10
+    assert summary["valid_interval_return_count"] == summary["expected_interval_return_count"] == 3
+    assert summary["valid_daily_return_count"] == summary["expected_daily_return_count"] == 2
+    assert summary["annualized_volatility_pct"] is None
+    assert "Mixed elapsed interval durations" in summary["volatility_unavailable_reason"]
+    assert summary["volatility_interval_days"] is None
+    curve, summary = compute(inputs, snapshots, [rows[0], rows[2]])
+    assert curve["return_valid"].tolist() == [False, True, False, True]
+    assert curve["twr_index"].iloc[2:].isna().all()
+    assert curve["drawdown_pct"].iloc[2:].isna().all()
+    assert summary["cumulative_return_pct"] is summary["max_drawdown_pct"] is None
+    # A missing long-interval return cannot create a daily-only volatility subset.
+    assert summary["volatility_valid_return_count"] == 2
+    assert summary["annualized_volatility_pct"] is None
+
+
+def test_equal_multiday_durations_use_the_elapsed_sampling_period(inputs):
+    curve, summary = compute(inputs, [snapshot(1, 100), snapshot(3, 110), snapshot(5, 99)],
+                             [attestation(3, interval_start=stamp(1)), attestation(5, interval_start=stamp(3))])
+    assert summary["annualized_volatility_pct"] == pytest.approx(
+        pd.Series([.1, -.1]).std(ddof=1) * math.sqrt(365.25 / 2) * 100)
+    assert summary["volatility_interval_days"] == 2
+    assert summary["volatility_unavailable_reason"] is None
+    assert curve["daily_return"].isna().all()
+
+
+@pytest.mark.parametrize("days", [[], [9], [9, 12]])
+def test_insufficient_interval_volatility_is_explained(inputs, days):
+    _, summary = compute(inputs, [snapshot(day, 100) for day in days],
+                         [attestation(12, interval_start=stamp(9))])
+    assert summary["annualized_volatility_pct"] is None
+    assert "At least two valid interval returns" in summary["volatility_unavailable_reason"]
+
+
+def test_elapsed_time_is_not_rounded_to_a_calendar_day_for_volatility(inputs):
+    _, summary = compute(inputs, [snapshot(1, 100), snapshot(2, 110),
+                                  snapshot(3, 99, fetched_at_kst=stamp(3).replace("16:", "17:"))],
+                         [attestation(), attestation(3, interval_end=stamp(3).replace("16:", "17:"))])
+    assert summary["returns_validated"]
+    assert summary["valid_daily_return_count"] == 2
+    assert summary["annualized_volatility_pct"] is None
+    assert "Mixed elapsed" in summary["volatility_unavailable_reason"]
+
+
+def test_nonfinite_final_volatility_cannot_reuse_an_earlier_sample(inputs):
+    _, summary = compute(inputs, [snapshot(1, 100), snapshot(2, 110), snapshot(3, 99), snapshot(4, 1e308)],
+                         [attestation(), attestation(3), attestation(4)])
+    assert summary["valid_interval_return_count"] == 3
+    assert summary["annualized_volatility_pct"] is None
+    assert "Non-finite sample volatility" in summary["volatility_unavailable_reason"]
+
+
+@pytest.mark.parametrize("timestamp", [stamp(9), stamp(8), "bad", "2026-01-12T16:00:00", None])
+def test_invalid_or_nonincreasing_timestamps_break_the_chain(inputs, timestamp):
+    write_csv(inputs[1], FLOW_HEADERS, [attestation(12, interval_start=stamp(9)), attestation(13)])
+    daily = pd.DataFrame([snapshot(9, 100), snapshot(12, 105, fetched_at_kst=timestamp), snapshot(13, 110)])
+    curve, summary = calculate_twr(daily, load_external_flow_ledger(inputs[1]))
+    assert not curve.iloc[1]["return_valid"]
+    assert "timestamp" in curve.iloc[1]["reason"]
+    assert curve["twr_index"].iloc[1:].isna().all()
+    assert summary["cumulative_return_pct"] is summary["max_drawdown_pct"] is None
 
 
 def test_missing_requested_endpoint_is_not_partial_period_return(inputs):

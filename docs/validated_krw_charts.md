@@ -1,7 +1,8 @@
-# Validated KRW charts and benchmarks — Stage 5
+# Validated KRW charts and benchmarks — Stages 5 and 7
 
 Dependencies: Stage 1 #164, Stage 2 #165, Stage 3 #166 and Stage 4 #167 are
-merged in `main` through `fd83922`. This change implements Stage 5 only.
+merged in `main` through `fd83922`. Stage 7 updates interval continuity and
+volatility semantics without changing the benchmark methodology.
 Collection flags, production defaults, trading rules, quantities, Telegram
 content and daily workflow ordering are unchanged.
 
@@ -10,10 +11,12 @@ ledger described in [Stage 3](broker_equity_performance.md) and
 [Stage 4](krw_time_weighted_return.md). Raw total assets in KRW remain distinct
 from the cash-flow-adjusted TWR index. No legacy USD equity is joined to KRW
 history: the first validated broker observation is the new base of 100.
-Gaps or invalid intervals never restart or reconnect the TWR index. Full-period
-TWR and drawdown require every interval and requested endpoint; volatility uses
-only independently validated calendar-day returns, with its sample count and
-incomplete-period scope shown explicitly.
+Verified intervals across weekends/holidays continue the TWR index. Invalid
+intervals never restart or reconnect it. Full-period TWR and drawdown require
+every actual observation interval and requested endpoint. Volatility requires
+uniform elapsed interval durations and at least two valid interval returns;
+mixed durations are N/A with a reason. Sample count and incomplete-period scope
+remain explicit; see the [accounting convention](krw_time_weighted_return.md).
 
 ## Historical benchmark valuation
 
@@ -52,15 +55,15 @@ return is an arithmetic difference in cumulative **percentage points**, with
 both legs denominated in KRW. Benchmark failures do not invalidate otherwise
 verified portfolio TWR; the report carries warnings and per-symbol statuses.
 
-## Output contracts changed in Stage 5
+## Output contracts in Stages 5 and 7
 
 Existing filenames, fixed broker input path, CLI source selection and
 `latest/` / `history/<run-id>/` publishing remain. The following are additive
 or clarified changes; legacy USD numeric and CSV contracts remain unchanged.
 
-| Output | Stage 5 contract |
+| Output | Current contract |
 | --- | --- |
-| `equity_curve.csv`, `broker_equity_observations.csv`, `twr_curve.csv` | Schemas unchanged; selected raw KRW, original input bytes and validated TWR remain separate. |
+| `equity_curve.csv`, `broker_equity_observations.csv`, `twr_curve.csv` | Selected raw KRW, original input bytes and validated TWR remain separate. Stage 7 adds `interval_return`, `interval_days`, `calendar_days`, `gap_warning` to TWR; retained `daily_return` is blank for multi-day returns. Raw schemas are unchanged. |
 | `performance_summary.json` (KRW) | Existing benchmark/excess keys now contain validated KRW comparisons when available. New keys: `benchmark_methodology`, `benchmark_currency`, `benchmark_data_source`, `benchmark_status` (per symbol: `available`/`unavailable`), `valid_snapshot_count`, `performance_methodology`, `requested_start_date`, `requested_end_date`, `report_status`. `report_status` is `validated`, `validated_with_warnings`, or `invalid`; invalid reports include `error`. `returns_validated` continues to describe portfolio TWR. `best_benchmark` now identifies the best available KRW benchmark. |
 | `benchmark_comparison.csv` (KRW) | Retains `asset,cumulative_return_pct`; adds `valuation_currency,excess_return_pp`. Missing values are blank. |
 | `benchmark_curve.csv` (new; KRW only) | `date,asset,benchmark_date,fx_date,adjusted_close_usd,usdkrw,benchmark_value_krw,benchmark_index,excess_return_pp`. Records each aligned observation, including available source fields when a comparison fails. Header-only if portfolio TWR cannot be validated. |
@@ -68,7 +71,7 @@ or clarified changes; legacy USD numeric and CSV contracts remain unchanged.
 | `charts/cumulative_return.png` | Portfolio TWR index and available KRW benchmark total-return indices, base 100. Incomplete TWR displays only its unbroken prefix. |
 | `charts/drawdown.png` | Validated TWR drawdown only; full-period metric stays N/A if incomplete. |
 | `charts/excess_return.png` | Currency-consistent cumulative excess returns in percentage points; N/A panel when unavailable. |
-| `charts/twr_volatility.png` (new; KRW only) | Expanding sample TWR volatility, `std(ddof=1)*sqrt(365.25)*100`, at least two valid daily returns; full-period or incomplete valid-sample scope is labeled. No value is plotted on an invalid interval. |
+| `charts/twr_volatility.png` (KRW only) | Expanding sample interval TWR volatility, `std(ddof=1)*sqrt(365.25/d)*100`, with uniform positive elapsed interval days `d` and at least two valid returns. Mixed/unknown durations produce an N/A panel with a reason. Full-period or incomplete valid-sample scope is labeled; invalid intervals have no plotted value. |
 | HTML / Markdown | Currency, actual/requested periods, valid snapshot count, methodology, flow verification, data gaps, warnings and benchmark source/alignment policy are visible. HTML uses responsive images, wrapping text and compact metric cards. Chart dimensions, labels and legends improve small-screen readability, including shared legacy chart rendering. |
 | Python builder | `build_report(args)` now returns `True` for validated broker TWR, `False` for diagnostic-only broker output, and preserves legacy `None`. |
 | Optional runner | Returns `False` and logs diagnostic-only status on failed KRW validation; never logs that case as successful validated generation. Benchmark N/A alone still permits verified portfolio success. |
@@ -87,7 +90,13 @@ Tests use synthetic broker snapshots, explicit flow attestations, adjusted ETF
 prices and time-varying historical FX. No broker requests, notifications or live
 account state writes are required. Missing FX/benchmarks, provider failures,
 currency uncertainty, invalid/gapped equity, boundary behavior, chart values,
-labels, HTML resources, PNG generation and publishing are covered.
+labels, HTML resources, PNG generation and publishing are covered. Stage 7 also
+covers verified weekend/holiday intervals, missing weekdays, exact flow-boundary
+matching, multi-day flow adjustments, broken chains and duration-aware volatility.
+Benchmark/FX observations still align only to actual broker timestamps; no weekend
+portfolio rows or market/FX quotes are manufactured. Summary counts describe
+actual adjacent intervals rather than elapsed calendar days. Missing weekdays
+and gaps exceeding four calendar days warn without invalidating verified TWR.
 
 Live market data remains subject to provider availability, historical revisions
 and reference-time differences. N/A with warnings is the intended response to

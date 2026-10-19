@@ -199,14 +199,77 @@ def test_full_output_contract_twr_charts_html_and_publishing(scenario, monkeypat
     assert original == (equity_path.read_bytes(), ledger_path.read_bytes())
 
 
-@pytest.mark.parametrize("failure", ["invalid_equity", "gap", "missing_flow", "requested_boundary"])
+def test_weekend_only_report_keeps_valid_twr_chart_without_daily_returns(scenario, monkeypatch):
+    args, _, equity_path, ledger_path = scenario
+    args.benchmarks = []
+    write_csv(equity_path, HEADERS, [snapshot(9, 100), snapshot(12, 105)])
+    write_csv(ledger_path, FLOW_HEADERS, [attestation(12, interval_start="2026-01-09T16:00:00+09:00")])
+    capture = MagicMock()
+    monkeypatch.setattr(performance_report, "_save_line_chart", capture)
+    assert performance_report.build_report(args) is True
+    charts = {call.args[1].name: call.args[0] for call in capture.call_args_list}
+    assert charts["cumulative_return.png"]["Portfolio TWR (KRW)"].tolist() == [100, 105]
+    assert charts["drawdown.png"]["Portfolio TWR"].tolist() == [0, 0]
+    summary = json.loads((Path(args.output) / "performance_summary.json").read_text())
+    assert summary["valid_daily_return_count"] == 0 and summary["valid_interval_return_count"] == 1
+
+
+def test_weekend_report_preserves_benchmark_dates_and_marks_mixed_volatility_na(scenario, monkeypatch):
+    args, quotes, equity_path, ledger_path = scenario
+    args.report_run_id = "stage7"
+    write_csv(equity_path, HEADERS, [snapshot(8, 100), snapshot(9, 110), snapshot(12, 99), snapshot(13, 108.9)])
+    write_csv(ledger_path, FLOW_HEADERS,
+              [attestation(9), attestation(12, interval_start="2026-01-09T16:00:00+09:00"), attestation(13)])
+    dates = pd.to_datetime(["2026-01-07", "2026-01-08", "2026-01-09", "2026-01-12"])
+    quotes.update({"SPY": pd.Series([100., 110., 100., 105.], index=dates),
+                   "IWM": pd.Series([200., 200., 200., 200.], index=dates),
+                   "KRW=X": pd.Series([1000., 1000., 1100., 1100.], index=dates)})
+    original = equity_path.read_bytes(), ledger_path.read_bytes()
+    charts = {}
+    save_chart = performance_report._save_line_chart  # pylint: disable=protected-access
+
+    def capture(data, path, title, label):
+        charts[path.name] = (data.copy(), title)
+        save_chart(data, path, title, label)
+
+    monkeypatch.setattr(performance_report, "_save_line_chart", capture)
+    assert performance_report.build_report(args) is True
+    assert charts["cumulative_return.png"][0]["Portfolio TWR (KRW)"].tolist() == [100, 110, 99, 108.9]
+    assert charts["drawdown.png"][0]["Portfolio TWR"].tolist() == [0, 0, -10, -1]
+    assert charts["twr_volatility.png"][0].isna().all().all()
+    assert "Mixed elapsed interval durations" in charts["twr_volatility.png"][1]
+    for bundle in (Path(args.output), Path(args.output) / "latest", Path(args.output) / "history/stage7"):
+        summary = json.loads((bundle / "performance_summary.json").read_text())
+        assert summary["cumulative_return_pct"] == 8.9
+        assert summary["max_drawdown_pct"] == -10
+        assert summary["valid_interval_return_count"] == summary["expected_interval_return_count"] == 3
+        assert summary["annualized_volatility_pct"] is None
+        assert summary["cumulative_return_SPY_pct"] == pytest.approx(15.5)
+        assert summary["excess_return_vs_SPY"] == pytest.approx(-6.6)
+        audit = pd.read_csv(bundle / "benchmark_curve.csv")
+        spy = audit[audit.asset == "SPY"]
+        assert spy["date"].tolist() == ["2026-01-08", "2026-01-09", "2026-01-12", "2026-01-13"]
+        assert spy["benchmark_date"].tolist() == spy["fx_date"].tolist() == dates.strftime("%Y-%m-%d").tolist()
+        curve = pd.read_csv(bundle / "twr_curve.csv")
+        assert len(curve) == 4 and pd.isna(curve.iloc[2]["daily_return"])
+        assert curve.iloc[2]["interval_return"] == -.1
+        for report in ("index.html", "performance_report.md"):
+            text = (bundle / report).read_text()
+            assert "Annualized volatility: N/A" in text and "Mixed elapsed interval durations" in text
+            assert "3 / 3 actual observation intervals" in text
+            assert "Observation interval validation" in text
+    assert original == (equity_path.read_bytes(), ledger_path.read_bytes())
+
+
+@pytest.mark.parametrize("failure", ["invalid_equity", "gap_without_matching_verification",
+                                     "missing_flow", "requested_boundary"])
 def test_invalid_new_data_publishes_diagnostics_and_returns_failure(scenario, monkeypatch, failure, caplog):
     args, _, equity_path, ledger_path = scenario
     assert performance_report.build_report(args)
     old_history = (Path(args.output) / "history/stage5/performance_summary.json").read_bytes()
     if failure == "invalid_equity":
         write_csv(equity_path, HEADERS, [snapshot(1, 100), snapshot(2, 160), snapshot(3, -1)])
-    elif failure == "gap":
+    elif failure == "gap_without_matching_verification":
         write_csv(equity_path, HEADERS, [snapshot(1, 100), snapshot(3, 144)])
     elif failure == "missing_flow":
         ledger_path.unlink()
