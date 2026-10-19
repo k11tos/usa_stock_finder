@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
+from http.client import IncompleteRead
+from io import BytesIO
 from pathlib import Path
+from threading import Barrier, Event
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -13,7 +17,7 @@ import pandas as pd
 import pytest
 
 from tools import build_trend_expansion_watch_pool as cli
-from trend_expansion import universe_source, watch_pool
+from trend_expansion import research_cache, universe_source, watch_pool
 from trend_expansion.base_universe import write_filter_outputs
 from trend_expansion.research_cache import (
     ResearchCache, ResearchDataError, ResourceLimits, canonical_bytes, sha256,
@@ -337,6 +341,119 @@ def test_identical_fixed_inputs_produce_identical_bytes_and_generation(tmp_path)
         assert (one / name).read_bytes() == (two / name).read_bytes()
     assert publish_watch_pool(tmp_path / "one", second) == one
     assert inspect_watch_pool(one)["counts"]["watch"] == 5
+
+
+@pytest.mark.parametrize("source", ["price", "mapping", "submission", "filing"])
+def test_truncated_sources_have_explicit_audit_reasons_and_build_continues(tmp_path, source):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    url = {"price": chart_url("A", DAY), "mapping": TICKERS_URL,
+           "submission": "https://data.sec.gov/submissions/CIK0000002000.json",
+           "filing": "https://www.sec.gov/Archives/edgar/data/2000/000000200026000001/annual.htm"}[source]
+    key = sha256(url.encode())
+    (cache.directory / f"{key}.json").unlink()
+    calls = []
+    class Truncated(BytesIO):
+        def read(self, size=-1):
+            raise IncompleteRead(super().read(size), 10)
+    def open_mock(request, timeout):
+        assert request.full_url == url
+        calls.append(timeout)
+        return Truncated(b"partial")
+    def build():
+        fetching = ResearchCache(cache.directory, fetch=True, opener=open_mock, sleeper=lambda _: None)
+        result = build_watch_pool(**args, cache=fetching)
+        assert fetching.requests == 3
+        assert key not in fetching.used
+        return result
+    result = build()
+    first = result["audit"][0]
+    if source == "price":
+        assert first["reason"] == "network_failed"
+        assert first["ohlcv_validity"] == "unavailable"
+    else:
+        assert first["reason"] == "security_unknown"
+        assert first["verification"]["reason"] == "network_failed"
+    assert [row["symbol"] for row in result["watch"]] == ([] if source == "mapping" else ["B"])
+    assert not (cache.directory / f"{key}.json").exists()
+    assert len(calls) == 3
+    again = build()
+    assert canonical_bytes(result) == canonical_bytes(again)
+    one = publish_watch_pool(tmp_path / "one", result)
+    two = publish_watch_pool(tmp_path / "two", again)
+    assert one.name == two.name
+    for name in ("watch.csv", "audit.json", "metadata.json"):
+        assert (one / name).read_bytes() == (two / name).read_bytes()
+    assert inspect_watch_pool(one)["counts"]["expansion"] == (0 if source == "mapping" else 1)
+
+
+def test_concurrent_builds_publish_identical_artifacts_from_winning_cache(tmp_path, monkeypatch):
+    args, seeded = scenario(tmp_path, ["A"])
+    url = chart_url("A", DAY)
+    path = seeded.directory / f"{sha256(url.encode())}.json"
+    winner = seed_prices(seeded, "A", daily_bars(end_price=30))
+    loser = seed_prices(seeded, "A", daily_bars(end_price=15))
+    path.unlink()
+    original = {entry.name: entry.read_bytes() for entry in seeded.directory.iterdir()}
+    real_write = research_cache._atomic_write  # pylint: disable=protected-access
+    ready, published = Barrier(2), Event()
+    candidates = []
+    def synchronized_write(destination, content):
+        entry = json.loads(content)
+        candidates.append(entry)
+        ready.wait(timeout=10)
+        if entry["body"].encode() == winner:
+            try:
+                real_write(destination, content)
+            finally:
+                published.set()
+        else:
+            assert published.wait(timeout=10)
+            real_write(destination, content)
+    monkeypatch.setattr(research_cache, "_atomic_write", synchronized_write)
+    caches = [ResearchCache(seeded.directory, fetch=True,
+                            opener=lambda *_a, body=body, **_k: BytesIO(body), sleeper=lambda _: None)
+              for body in (winner, loser)]
+    with patch.object(research_cache, "datetime", wraps=datetime) as dates:
+        dates.now.side_effect = [datetime(2026, 9, 30, hour, tzinfo=timezone.utc) for hour in (21, 22)]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(build_watch_pool, **args, cache=cache) for cache in caches]
+            results = [future.result(timeout=15) for future in futures]
+    assert len({entry["observed_at_utc"] for entry in candidates}) == 2
+    winning_entry = json.loads(path.read_bytes())
+    assert winning_entry["body"].encode() == winner
+    assert winning_entry["sha256"] == sha256(winner)
+    assert caches[0].used == caches[1].used
+    assert all(cache.requests == 1 for cache in caches)
+    assert original == {entry.name: entry.read_bytes() for entry in seeded.directory.iterdir() if entry != path}
+    assert len(list(seeded.directory.iterdir())) == len(original) + 1  # No temporary files.
+    replay = build_watch_pool(**args, cache=ResearchCache(seeded.directory))
+    assert canonical_bytes(results[0]) == canonical_bytes(results[1]) == canonical_bytes(replay)
+    assert replay["audit"][0]["ohlcv_source"]["sha256"] == sha256(winner)
+    assert replay["metadata"]["raw_sources"][sha256(url.encode())] == {
+        key: value for key, value in winning_entry.items() if key != "body"}
+    assert replay["audit"][0]["reason"] == "selected"
+    directories = [publish_watch_pool(tmp_path / name, result)
+                   for name, result in zip(("one", "two", "replay"), [*results, replay])]
+    assert len({directory.name for directory in directories}) == 1
+    for name in ("watch.csv", "audit.json", "metadata.json"):
+        assert len({(directory / name).read_bytes() for directory in directories}) == 1
+    assert inspect_watch_pool(directories[0])["counts"]["expansion"] == 1
+
+
+def test_corrupt_cache_retains_explicit_audit_reason_without_refetch(tmp_path):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    url = chart_url("A", DAY)
+    path = cache.directory / f"{sha256(url.encode())}.json"
+    path.write_bytes(b"corrupt")
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("must not repair corrupted inputs")
+    result = build_watch_pool(**args, cache=ResearchCache(cache.directory, fetch=True, opener=forbidden))
+    assert result["audit"][0]["reason"] == "cache_invalid"
+    assert [row["symbol"] for row in result["watch"]] == ["B"]
+    published = publish_watch_pool(tmp_path / "output", result)
+    assert json.loads((published / "audit.json").read_bytes())[0]["reason"] == "cache_invalid"
+    assert inspect_watch_pool(published)["counts"]["expansion"] == 1
+    assert path.read_bytes() == b"corrupt"
 
 
 def test_atomic_failure_and_integrity_detection(tmp_path, monkeypatch):

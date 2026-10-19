@@ -5,14 +5,31 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from http.client import BadStatusLine, IncompleteRead, LineTooLong, UnknownProtocol, UnknownTransferEncoding
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from trend_expansion.universe_source import _atomic_write
+
+def _atomic_write(path: Path, content: bytes) -> None:
+    """Publish a complete entry exclusively, including across independent processes.
+
+    A same-directory hard link atomically creates the destination or raises
+    FileExistsError. Readers never see the private file before it is complete.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(content)
+        os.link(temporary_name, path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -87,19 +104,7 @@ class ResearchCache:  # pylint: disable=too-many-instance-attributes
         """Read a validated cache entry or explicitly fetch within resource bounds."""
         key = sha256(url.encode())
         path = self.directory / f"{key}.json"
-        if path.exists():
-            try:
-                if path.stat().st_size > self.limits.max_response_bytes * 6 + 4096:
-                    raise ValueError("oversized cache entry")
-                entry = json.loads(path.read_bytes())
-                payload = entry["body"].encode("utf-8")
-                observed = datetime.fromisoformat(entry["observed_at_utc"])
-                if (entry["url"] != url or entry["sha256"] != sha256(payload)
-                        or len(payload) > self.limits.max_response_bytes or observed.tzinfo is None):
-                    raise ValueError("invalid cache provenance")
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                raise ResearchDataError("cache_invalid") from exc
-        else:
+        if not path.exists():
             if not self.fetch:
                 raise ResearchDataError("cache_missing")
             payload = self._download(url)
@@ -111,10 +116,32 @@ class ResearchCache:  # pylint: disable=too-many-instance-attributes
                      "observed_at_utc": datetime.now(timezone.utc).isoformat()}
             try:
                 _atomic_write(path, canonical_bytes(entry))
+            except FileExistsError:
+                # A concurrent publisher won. Validate its bytes and provenance
+                # together below; never retain this download's metadata.
+                pass
             except OSError as exc:
                 raise ResearchDataError("cache_write_failed") from exc
+        entry, payload = self._read_entry(path, url)
         self.used[key] = {k: v for k, v in entry.items() if k != "body"}
         return payload
+
+    def _read_entry(self, path: Path, url: str) -> tuple[dict, bytes]:
+        """Use the same validation for existing entries and publication winners."""
+        try:
+            if path.stat().st_size > self.limits.max_response_bytes * 6 + 4096:
+                raise ValueError("oversized cache entry")
+            entry = json.loads(path.read_bytes())
+            if not isinstance(entry, dict) or not isinstance(entry["body"], str):
+                raise ValueError("invalid cache format")
+            payload = entry["body"].encode("utf-8")
+            observed = datetime.fromisoformat(entry["observed_at_utc"])
+            if (entry["url"] != url or entry["sha256"] != sha256(payload)
+                    or len(payload) > self.limits.max_response_bytes or observed.tzinfo is None):
+                raise ValueError("invalid cache provenance")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ResearchDataError("cache_invalid") from exc
+        return entry, payload
 
     def get_asof(self, url: str, asof_date: str, *, not_before: str | None = None,
                  observed_not_before: datetime | None = None) -> bytes:
@@ -153,18 +180,29 @@ class ResearchCache:  # pylint: disable=too-many-instance-attributes
                 read_limit = min(self.limits.max_response_bytes, remaining_bytes)
                 with self.opener(request, timeout=min(self.limits.timeout_seconds, remaining)) as response:
                     payload = response.read(read_limit + 1)
-                self.downloaded_bytes += len(payload)
-                if self.downloaded_bytes > self.limits.max_total_bytes:
-                    raise ResearchDataError("resource_byte_budget_exhausted")
-                if len(payload) > self.limits.max_response_bytes:
-                    raise ResearchDataError("response_too_large")
+                    # Bounded HTTPResponse.read(size) can return a short body
+                    # without raising when a Content-Length response ends early.
+                    if len(payload) <= read_limit and getattr(response, "length", None):
+                        raise IncompleteRead(payload, response.length)
+                self._record_bytes(len(payload))
                 self._pause(self.limits.pause_seconds)
                 return payload
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, IncompleteRead, BadStatusLine, LineTooLong,
+                    UnknownProtocol, UnknownTransferEncoding) as exc:
+                if isinstance(exc, IncompleteRead):
+                    self._record_bytes(len(exc.partial))
                 if attempt + 1 == self.limits.attempts:
                     raise ResearchDataError("network_failed") from exc
                 self._pause(min(2 ** attempt, 8))
         raise AssertionError("unreachable")
+
+    def _record_bytes(self, size: int):
+        """Partial bodies consume the same budgets as complete responses."""
+        self.downloaded_bytes += size
+        if self.downloaded_bytes > self.limits.max_total_bytes:
+            raise ResearchDataError("resource_byte_budget_exhausted")
+        if size > self.limits.max_response_bytes:
+            raise ResearchDataError("response_too_large")
 
     def _pause(self, seconds):
         if self.clock() - self.started + seconds > self.limits.max_seconds:

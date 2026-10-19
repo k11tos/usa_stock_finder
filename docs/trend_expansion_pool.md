@@ -266,6 +266,17 @@ unknown. Individual symbol failures stay in audit and do not pass screening.
 Invalid A/B lineage or an oversized universe aborts before OHLCV collection.
 No automatic background refresh runs in the daily process.
 
+Truncated HTTP bodies and response protocol failures use the same bounded
+retry/backoff path as network errors; exhaustion records `network_failed`.
+Partial bytes consume response/total byte budgets and never become cached input.
+URL-addressed cache entries are published with an atomic same-directory hard
+link, which requires filesystem hard-link support and never replaces an existing
+entry. A concurrent loser validates and reuses the winning body, checksum, and
+observation timestamp together. Invalid winners record `cache_invalid`; other
+publication failures record `cache_write_failed`. Private temporary files are
+removed after success or failure. The completed-session timestamp checks apply
+to the winning observation, just as for any existing cache entry.
+
 ### Immutable artifacts and repeatability
 
 One `research-watch-YYYY-MM-DD-<sha256>/` directory contains:
