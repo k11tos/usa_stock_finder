@@ -98,7 +98,7 @@ def _market_cap(symbol: str, caps: dict, asof_date: str, params: WatchParameters
                     and 0 < value < float("inf")):
                 output.update(market_cap=value, market_cap_status="above_minimum" if value >= params.min_market_cap
                               else "below_minimum")
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             pass
     output["market_cap_gate_reason"] = (
         "market_cap_unknown" if output["market_cap_status"] == "unknown"

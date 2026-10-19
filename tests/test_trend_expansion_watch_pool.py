@@ -306,6 +306,40 @@ def test_market_cap_policy_missing_unknown_not_verified(tmp_path):
     assert strict["audit"][0]["reason"] == "market_cap_unknown"
 
 
+def test_overflowing_market_caps_are_unknown_without_aborting_build(tmp_path):
+    args, cache = scenario(tmp_path, ["A", "B", "C"])
+    # Parse JSON integers to exercise the same input type used by supplied JSON evidence.
+    huge_positive, huge_negative = json.loads(f"[{10 ** 400}, {-10 ** 400}]")
+    caps = {
+        "A": {"value": huge_positive, "asof_date": DAY, "currency": "USD",
+              "source_url": "https://example.com/a", "coverage_verified": True},
+        "B": {"value": huge_negative, "asof_date": DAY, "currency": "USD",
+              "source_url": "https://example.com/b", "coverage_verified": True},
+        "C": {"value": 300_000_000, "asof_date": DAY, "currency": "USD",
+              "source_url": "https://example.com/c", "coverage_verified": True},
+    }
+
+    # Diagnostic policy continues to admit unknown coverage as before.
+    permissive = build_watch_pool(**args, cache=cache, market_caps=caps)
+    by_symbol = {row["symbol"]: row for row in permissive["audit"]}
+    for symbol in ("A", "B"):
+        assert by_symbol[symbol]["market_cap_status"] == "unknown"
+        assert by_symbol[symbol]["market_cap"] is None
+        assert by_symbol[symbol]["reason"] == "selected"
+    assert by_symbol["C"]["market_cap_status"] == "above_minimum"
+
+    # Strict policy excludes only the two affected symbols; valid coverage proceeds.
+    strict = build_watch_pool(**args, cache=cache, market_caps=caps,
+                              params=replace(PARAMS, market_cap_policy="require_known"))
+    by_symbol = {row["symbol"]: row for row in strict["audit"]}
+    for symbol in ("A", "B"):
+        assert by_symbol[symbol]["market_cap_status"] == "unknown"
+        assert by_symbol[symbol]["market_cap"] is None
+        assert by_symbol[symbol]["reason"] == "market_cap_unknown"
+    assert by_symbol["C"]["market_cap_status"] == "above_minimum"
+    assert by_symbol["C"]["reason"] == "selected"
+
+
 def test_candidate_failing_actual_minervini_today_still_admitted(tmp_path):
     from stock_analysis import UsaStockFinder
     args, cache = scenario(tmp_path, ["FBRT"])
