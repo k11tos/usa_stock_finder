@@ -90,7 +90,10 @@ def decode_chart(payload: bytes, symbol: str) -> list[dict]:
         if data.get("error"):
             raise ResearchDataError("provider_error")
         result = data["result"][0]
-        if result["meta"]["symbol"].upper() != symbol.replace(".", "-"):
+        provider_symbol = result["meta"]["symbol"]
+        if not isinstance(provider_symbol, str):
+            raise ResearchDataError("ohlcv_malformed")
+        if provider_symbol.upper() != symbol.replace(".", "-"):
             raise ResearchDataError("provider_symbol_mismatch")
         zone = ZoneInfo("America/New_York")
         values = result["indicators"]["quote"][0]
@@ -125,7 +128,7 @@ def screen_bars(bars: list[dict], session_date: str, params: WatchParameters) ->
             if day > date.fromisoformat(session_date):
                 return {**result, "reason": "future_bar"}
             values = [float(daily[key]) for key in ("open", "high", "low", "close", "volume")]
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, OverflowError):
             return {**result, "reason": "missing_or_invalid_bar"}
         if not all(math.isfinite(value) for value in values):
             return {**result, "reason": "nonfinite_bar"}

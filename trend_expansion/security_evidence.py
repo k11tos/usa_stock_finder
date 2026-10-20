@@ -103,6 +103,10 @@ class SecVerifier:
                     raise ResearchDataError(self.mapping_error) from exc
             evidence["sources"].append({"url": TICKERS_URL,
                                         "sha256": self.cache.used[sha256(TICKERS_URL.encode())]["sha256"]})
+            # Do not infer identity or uniqueness from a partially malformed map.
+            if any(not isinstance(row, dict) or not isinstance(row.get("ticker"), str)
+                   for row in self.mapping.values()):
+                raise ResearchDataError("sec_mapping_invalid")
             matches = {int(row["cik_str"]) for row in self.mapping.values()
                        if row["ticker"].upper().replace(".", "-") == symbol.replace(".", "-")}
             if len(matches) != 1:

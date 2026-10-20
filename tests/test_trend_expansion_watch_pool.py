@@ -725,3 +725,99 @@ def test_watch_affordability_proxy_does_not_change_daily_whole_share_sizing():
     assert result["CEILING"]["shares_to_buy"] == 1
     assert result["CEILING"]["actual_investment"] == 90
     assert "LATER" not in result
+
+
+@pytest.mark.parametrize("field", ["open", "high", "low", "close", "volume"])
+@pytest.mark.parametrize("sign", [1, -1])
+def test_json_integer_ohlcv_overflow_excludes_only_bad_symbol(tmp_path, field, sign):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    bars = daily_bars()
+    bars[-1][field] = sign * 10**400
+    payload = seed_prices(cache, "A", bars)
+    decoded = decode_chart(payload, "A")
+    assert decoded[-1][field] == sign * 10**400  # No coercion or clamping.
+    assert screen_bars(decoded, DAY, PARAMS)["reason"] == "missing_or_invalid_bar"
+    result = build_watch_pool(**args, cache=cache)
+    bad, good = result["audit"][0], result["audit"][1]
+    assert bad["reason"] == "missing_or_invalid_bar"
+    assert bad["ohlcv_validity"] == "invalid"
+    assert bad["verification"]["status"] == "not_evaluated"
+    assert "rank" not in bad
+    expected = screen_bars(daily_bars(), DAY, PARAMS)
+    assert good["reason"] == "selected"
+    assert all(good[key] == value for key, value in expected.items() if key != "reason")
+    assert [row["symbol"] for row in result["watch"]] == ["B"]
+    counts = result["metadata"]["counts"]
+    assert counts["numeric_eligible"] == counts["verification_attempted"] == counts["expansion"] == 1
+    assert counts["excluded"] == 1
+    assert counts["reasons"] == {"missing_or_invalid_bar": 1, "selected": 1}
+    assert counts["ohlcv_validity"] == {"invalid": 1, "valid": 1}
+
+
+@pytest.mark.parametrize("provider_symbol,reason", [
+    (None, "ohlcv_malformed"), (123, "ohlcv_malformed"), ({"symbol": "A"}, "ohlcv_malformed"),
+    ("OTHER", "provider_symbol_mismatch"), ("a", None),
+])
+def test_yahoo_symbol_types_and_mismatch_do_not_abort_build(tmp_path, provider_symbol, reason):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    original = seed_prices(cache, "A")
+    payload = json.loads(original)
+    payload["chart"]["result"][0]["meta"]["symbol"] = provider_symbol
+    encoded = json.dumps(payload).encode()
+    cache_entry(cache, chart_url("A", DAY), encoded)
+    if reason:
+        with pytest.raises(ResearchDataError, match=f"^{reason}$"):
+            decode_chart(encoded, "A")
+    else:
+        assert decode_chart(encoded, "A") == decode_chart(original, "A")
+    result = build_watch_pool(**args, cache=cache)
+    first = result["audit"][0]
+    assert first["reason"] == (reason or "selected")
+    assert first["ohlcv_validity"] == ("unavailable" if reason else "valid")
+    assert [row["symbol"] for row in result["watch"]] == (["B"] if reason else ["A", "B"])
+    counts = result["metadata"]["counts"]
+    admitted = 1 if reason else 2
+    assert counts["numeric_eligible"] == counts["verification_attempted"] == counts["expansion"] == admitted
+    assert counts["excluded"] + counts["expansion"] == counts["preliminary"] == 2
+    assert counts["reasons"] == ({reason: 1, "selected": 1} if reason else {"selected": 2})
+
+
+@pytest.mark.parametrize("ticker", [None, 123, {"ticker": "A"}, "a"])
+def test_sec_ticker_types_fail_closed_without_aborting_finalists(tmp_path, ticker):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    mapping = {"0": {"ticker": ticker, "cik_str": 2000}, "1": {"ticker": "B", "cik_str": 2001}}
+    cache_entry(cache, TICKERS_URL, canonical_bytes(mapping))
+    verifier = SecVerifier(cache, DAY)
+    valid = isinstance(ticker, str)
+    for symbol in ("A", "B"):
+        evidence = verifier.verify(symbol)
+        assert evidence["status"] == ("verified" if valid else "unknown")
+        assert evidence["reason"] == ("operating_common_equity" if valid else "sec_mapping_invalid")
+        assert len(evidence["sources"]) == (3 if valid else 1)
+    result = build_watch_pool(**args, cache=cache)
+    assert [row["symbol"] for row in result["watch"]] == (["A", "B"] if valid else [])
+    counts = result["metadata"]["counts"]
+    assert counts["numeric_eligible"] == counts["verification_attempted"] == 2
+    assert counts["expansion"] == (2 if valid else 0)
+    assert counts["excluded"] + counts["expansion"] == counts["preliminary"] == 2
+    assert counts["reasons"] == ({"selected": 2} if valid else {"security_unknown": 2})
+    if not valid:
+        assert all(row["verification"]["reason"] == "sec_mapping_invalid" for row in result["audit"])
+
+
+def test_malformed_sec_cik_allows_next_ranked_valid_class_share(tmp_path):
+    args, cache = scenario(tmp_path, ["A", "BRK.B"])
+    mapping = {"0": {"ticker": "A", "cik_str": {}},
+               "1": {"ticker": "BRK-B", "cik_str": 2001}}
+    cache_entry(cache, TICKERS_URL, canonical_bytes(mapping))
+    result = build_watch_pool(**args, cache=cache, params=replace(PARAMS, target_total=1))
+    bad, good = result["audit"][0], result["audit"][1]
+    assert bad["reason"] == "security_unknown"
+    assert bad["verification"]["reason"] == "sec_evidence_malformed"
+    assert good["verification"]["cik"] == 2001
+    assert good["verification"]["status"] == "verified"
+    assert [row["symbol"] for row in result["watch"]] == ["BRK.B"]
+    counts = result["metadata"]["counts"]
+    assert counts["verification_attempted"] == 2
+    assert counts["expansion"] == counts["excluded"] == 1
+    assert counts["reasons"] == {"security_unknown": 1, "selected": 1}
