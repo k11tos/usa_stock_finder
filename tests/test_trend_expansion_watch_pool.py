@@ -442,6 +442,46 @@ def test_market_cap_policy_missing_unknown_not_verified(tmp_path):
     assert strict["audit"][0]["reason"] == "market_cap_unknown"
 
 
+@pytest.mark.parametrize("field", [
+    "min_bars", "liquidity_sessions", "short_sessions", "long_sessions",
+    "target_total", "max_expansion", "max_verifications",
+])
+@pytest.mark.parametrize("value", [True, False])
+def test_cli_rejects_boolean_integer_parameter_overrides_before_build(
+        tmp_path, monkeypatch, field, value):
+    """JSON bools must not silently act as integer lookback or pool settings."""
+    parameter_file = tmp_path / "parameters.json"
+    parameter_file.write_text(json.dumps({field: value}))
+    monkeypatch.setattr(cli, "ResearchCache", lambda *args, **kwargs: pytest.fail("cache initialized"))
+    monkeypatch.setattr(cli, "build_watch_pool", lambda *args, **kwargs: pytest.fail("pool build started"))
+
+    with pytest.raises(ValueError, match="invalid session or size parameter"):
+        cli.main([
+            "build", "--asof-date", DAY, "--session-date", DAY, "--core-asof-date", DAY,
+            "--parameters", str(parameter_file),
+        ])
+
+
+@pytest.mark.parametrize("field", [
+    "min_price", "max_price", "min_dollar_volume", "min_market_cap",
+    "short_weight", "long_weight",
+])
+@pytest.mark.parametrize("value", [True, False])
+def test_cli_rejects_boolean_numeric_parameter_overrides_before_build(
+        tmp_path, monkeypatch, field, value):
+    """JSON bools are not valid numeric threshold or weight overrides either."""
+    parameter_file = tmp_path / "parameters.json"
+    parameter_file.write_text(json.dumps({field: value}))
+    monkeypatch.setattr(cli, "ResearchCache", lambda *args, **kwargs: pytest.fail("cache initialized"))
+    monkeypatch.setattr(cli, "build_watch_pool", lambda *args, **kwargs: pytest.fail("pool build started"))
+
+    with pytest.raises(ValueError, match="parameters must be finite and nonnegative"):
+        cli.main([
+            "build", "--asof-date", DAY, "--session-date", DAY, "--core-asof-date", DAY,
+            "--parameters", str(parameter_file),
+        ])
+
+
 def test_overflowing_market_caps_are_unknown_without_aborting_build(tmp_path):
     args, cache = scenario(tmp_path, ["A", "B", "C"])
     # Parse JSON integers to exercise the same input type used by supplied JSON evidence.
@@ -511,6 +551,27 @@ def test_identical_fixed_inputs_produce_identical_bytes_and_generation(tmp_path)
         assert (one / name).read_bytes() == (two / name).read_bytes()
     assert publish_watch_pool(tmp_path / "one", second) == one
     assert inspect_watch_pool(one)["counts"]["watch"] == 5
+
+
+def test_cli_valid_json_parameters_preserve_deterministic_pool(tmp_path, capsys):
+    """Explicit valid integer defaults preserve the same momentum and pool bytes."""
+    args, cache = scenario(tmp_path, ["A", "B", "FBRT"])
+    params_file = tmp_path / "parameters.json"
+    params_file.write_text(json.dumps(PARAMS.__dict__))
+    common = [
+        "build", "--asof-date", DAY, "--session-date", DAY, "--core-asof-date", DAY,
+        "--listing-dir", str(args["listing_dir"]), "--core-csv", str(args["core_csv"]),
+        "--cache-dir", str(cache.directory),
+    ]
+    cli.main([*common, "--output-dir", str(tmp_path / "default")])
+    default_snapshot = next((tmp_path / "default").iterdir())
+    cli.main([*common, "--parameters", str(params_file), "--output-dir", str(tmp_path / "configured")])
+    configured_snapshot = next((tmp_path / "configured").iterdir())
+    capsys.readouterr()
+
+    assert default_snapshot.name == configured_snapshot.name
+    for name in ("watch.csv", "audit.json", "metadata.json"):
+        assert (default_snapshot / name).read_bytes() == (configured_snapshot / name).read_bytes()
 
 
 @pytest.mark.parametrize("source", ["price", "mapping", "submission", "filing"])

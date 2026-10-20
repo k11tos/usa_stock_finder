@@ -36,14 +36,14 @@ class WatchParameters:  # pylint: disable=too-many-instance-attributes
     def __post_init__(self):
         for value in (self.min_price, self.max_price, self.min_dollar_volume,
                       self.min_market_cap, self.short_weight, self.long_weight):
-            if not math.isfinite(value) or value < 0:
+            if isinstance(value, bool) or not math.isfinite(value) or value < 0:
                 raise ValueError("parameters must be finite and nonnegative")
         if (self.min_price <= 0 or self.max_price < self.min_price
                 or not math.isclose(self.short_weight + self.long_weight, 1, abs_tol=1e-12)):
             raise ValueError("invalid prices or weights")
         for value in (self.min_bars, self.liquidity_sessions, self.short_sessions,
                       self.long_sessions, self.target_total, self.max_expansion, self.max_verifications):
-            if not isinstance(value, int) or not 1 <= value <= 10000:
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 10000:
                 raise ValueError("invalid session or size parameter")
         if (self.min_bars < max(252, self.long_sessions + 1, self.short_sessions + 1, self.liquidity_sessions)
                 or self.max_expansion > 50 or self.max_verifications > 200):
