@@ -957,3 +957,138 @@ def test_malformed_sec_cik_allows_next_ranked_valid_class_share(tmp_path):
     assert counts["verification_attempted"] == 2
     assert counts["expansion"] == counts["excluded"] == 1
     assert counts["reasons"] == {"security_unknown": 1, "selected": 1}
+
+
+@pytest.mark.parametrize("value", [True, False])
+@pytest.mark.parametrize("minimum", [0, 0.5, 1])
+def test_boolean_market_caps_are_unknown_and_cannot_pass_strict_gate(tmp_path, value, minimum):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    caps = {symbol: {"value": cap, "asof_date": DAY, "currency": "USD",
+                     "source_url": "https://example.com/cap", "coverage_verified": True}
+            for symbol, cap in (("A", value), ("B", 1))}
+    for policy in ("diagnostic", "require_known"):
+        result = build_watch_pool(**args, cache=cache, market_caps=caps,
+                                  params=replace(PARAMS, market_cap_policy=policy, min_market_cap=minimum))
+        bad, good = result["audit"][0], result["audit"][1]
+        assert bad["market_cap_status"] == "unknown"
+        assert bad["market_cap"] is None
+        assert bad["market_cap_evidence"] == caps["A"]
+        assert good["market_cap_status"] == "above_minimum"
+        assert good["reason"] == "selected"
+        if policy == "require_known":
+            assert bad["reason"] == "market_cap_unknown"
+            assert bad["verification"]["status"] == "not_evaluated"
+            assert "rank" not in bad
+            assert [row["symbol"] for row in result["watch"]] == ["B"]
+            assert result["metadata"]["counts"]["numeric_eligible"] == 1
+        else:
+            assert bad["reason"] == "selected"
+            assert [row["symbol"] for row in result["watch"]] == ["A", "B"]
+
+
+@pytest.mark.parametrize("value", [300_000_000, 300_000_000.0, "300000000", "300000000.0", "3e8"])
+def test_market_cap_numeric_representations_keep_strict_admission(tmp_path, value):
+    args, cache = scenario(tmp_path, ["A"])
+    caps = {"A": {"value": value, "asof_date": DAY, "currency": "USD",
+                  "source_url": "https://example.com/cap", "coverage_verified": True}}
+    result = build_watch_pool(**args, cache=cache, market_caps=caps,
+                              params=replace(PARAMS, market_cap_policy="require_known"))
+    assert result["audit"][0]["market_cap"] == 300_000_000
+    assert result["audit"][0]["market_cap_status"] == "above_minimum"
+    assert [row["symbol"] for row in result["watch"]] == ["A"]
+
+
+@pytest.mark.parametrize("source", ["mapping", "submission"])
+@pytest.mark.parametrize("value", [2000.9, 2000.0, True, False, "+2000", "-2000", "2000.9", "2000.0",
+                                   " 2000", "2000 ", "2e3", "２０００", "", None, {}, []])
+def test_malformed_cik_never_certifies_or_looks_up_coerced_issuer(tmp_path, source, value):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    # Seed the issuer int(value) would select, including CIK 1 for true.
+    cik = 1 if value is True else 2000
+    seed_evidence(cache, ["A", "B"], {"A": {"cik": cik}})
+    url = TICKERS_URL if source == "mapping" else f"https://data.sec.gov/submissions/CIK{cik:010d}.json"
+    raw = json.loads(cache.get(url))
+    if source == "mapping":
+        raw["0"]["cik_str"] = value
+    else:
+        raw["cik"] = value
+    cache_entry(cache, url, canonical_bytes(raw))
+    result = build_watch_pool(**args, cache=cache, params=replace(PARAMS, target_total=1))
+    bad, good = result["audit"][0], result["audit"][1]
+    evidence = bad["verification"]
+    assert bad["reason"] == "security_unknown"
+    assert evidence["status"] == "unknown"
+    assert evidence["reason"] == "sec_evidence_malformed"
+    assert "classification" not in evidence and "cik" not in evidence
+    assert len(evidence["sources"]) == (1 if source == "mapping" else 2)
+    assert good["verification"]["classification"] == "operating_common_equity"
+    assert [row["symbol"] for row in result["watch"]] == ["B"]
+    if source == "mapping":
+        issuer_url = f"https://data.sec.gov/submissions/CIK{cik:010d}.json"
+        assert sha256(issuer_url.encode()) not in result["metadata"]["raw_sources"]
+
+
+@pytest.mark.parametrize("source", ["mapping", "submission"])
+@pytest.mark.parametrize("cik", [1, 2000, 9_999_999_999])
+@pytest.mark.parametrize("representation", ["integer", "digits", "padded_digits"])
+def test_legitimate_cik_representations_and_boundaries_verify(tmp_path, source, cik, representation):
+    cache = ResearchCache(tmp_path / "cache")
+    seed_evidence(cache, ["A"], {"A": {"cik": cik}})
+    url = TICKERS_URL if source == "mapping" else f"https://data.sec.gov/submissions/CIK{cik:010d}.json"
+    raw = json.loads(cache.get(url))
+    value = cik if representation == "integer" else str(cik) if representation == "digits" else f"{cik:010d}"
+    if source == "mapping":
+        raw["0"]["cik_str"] = value
+    else:
+        raw["cik"] = value
+    payload = canonical_bytes(raw)
+    cache_entry(cache, url, payload)
+    evidence = SecVerifier(cache, DAY).verify("A")
+    assert evidence["status"] == "verified"
+    assert evidence["classification"] == "operating_common_equity"
+    assert evidence["cik"] == cik
+    assert len(evidence["sources"]) == 3
+    assert {"url": url, "sha256": sha256(payload)} in evidence["sources"]
+    assert cache.requests == 0
+
+
+@pytest.mark.parametrize("source", ["mapping", "submission"])
+@pytest.mark.parametrize("value", [0, "0", "0000000000", -1, 10_000_000_000, "10000000000"])
+def test_cik_out_of_range_fails_closed(tmp_path, source, value):
+    cache = ResearchCache(tmp_path / "cache")
+    seed_evidence(cache, ["A"])
+    url = TICKERS_URL if source == "mapping" else "https://data.sec.gov/submissions/CIK0000002000.json"
+    raw = json.loads(cache.get(url))
+    if source == "mapping":
+        raw["0"]["cik_str"] = value
+    else:
+        raw["cik"] = value
+    cache_entry(cache, url, canonical_bytes(raw))
+    evidence = SecVerifier(cache, DAY).verify("A")
+    assert evidence["status"] == "unknown"
+    assert "classification" not in evidence
+    assert len(evidence["sources"]) == (1 if source == "mapping" else 2)
+
+
+@pytest.mark.parametrize("value", [2001, "2001", "0000002001"])
+def test_submission_cik_mismatch_still_fails_closed(tmp_path, value):
+    cache = ResearchCache(tmp_path / "cache")
+    seed_evidence(cache, ["A"])
+    url = "https://data.sec.gov/submissions/CIK0000002000.json"
+    raw = json.loads(cache.get(url))
+    raw["cik"] = value
+    cache_entry(cache, url, canonical_bytes(raw))
+    evidence = SecVerifier(cache, DAY).verify("A")
+    assert evidence["status"] == "unknown"
+    assert evidence["reason"] == "sec_cik_mismatch"
+    assert len(evidence["sources"]) == 2
+
+
+def test_conflicting_valid_cik_matches_do_not_choose_an_issuer(tmp_path):
+    cache = ResearchCache(tmp_path / "cache")
+    mapping = {"0": {"ticker": "A", "cik_str": 2000}, "1": {"ticker": "A", "cik_str": "2001"}}
+    cache_entry(cache, TICKERS_URL, canonical_bytes(mapping))
+    evidence = SecVerifier(cache, DAY).verify("A")
+    assert evidence["status"] == "unknown"
+    assert evidence["reason"] == "sec_cik_unknown"
+    assert len(evidence["sources"]) == 1

@@ -88,7 +88,7 @@ def _market_cap(symbol: str, caps: dict, asof_date: str, params: WatchParameters
     """
     row = caps.get(symbol)
     output = {"market_cap_status": "unknown", "market_cap": None, "market_cap_evidence": row}
-    if isinstance(row, dict):
+    if isinstance(row, dict) and not isinstance(row.get("value"), bool):
         try:
             value = float(row["value"])
             valid_date = date.fromisoformat(row["asof_date"])

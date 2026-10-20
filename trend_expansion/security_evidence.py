@@ -166,6 +166,21 @@ def classify_cover(payload: bytes, symbol: str) -> tuple[str, dict]:
     return "verified", {**evidence, "classification": "operating_common_equity", "class_titles": sorted(titles)}
 
 
+def _validated_cik(value: object) -> int:
+    """Accept integer CIKs or ASCII decimal digits (including SEC zero padding)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        cik = value
+    elif isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+        if len(value) > 10:
+            raise ResearchDataError("sec_cik_invalid")
+        cik = int(value)
+    else:
+        raise ValueError("malformed CIK representation")
+    if not 0 < cik < 10_000_000_000:
+        raise ResearchDataError("sec_cik_invalid")
+    return cik
+
+
 class SecVerifier:
     """One cached CIK map plus at most two requests per considered finalist.
 
@@ -201,18 +216,16 @@ class SecVerifier:
             if any(not isinstance(row, dict) or not isinstance(row.get("ticker"), str)
                    for row in self.mapping.values()):
                 raise ResearchDataError("sec_mapping_invalid")
-            matches = {int(row["cik_str"]) for row in self.mapping.values()
+            matches = {_validated_cik(row["cik_str"]) for row in self.mapping.values()
                        if row["ticker"].upper().replace(".", "-") == symbol.replace(".", "-")}
             if len(matches) != 1:
                 return {**evidence, "reason": "sec_cik_unknown"}
             cik = matches.pop()
-            if not 0 < cik < 10_000_000_000:
-                raise ResearchDataError("sec_cik_invalid")
             url = f"https://data.sec.gov/submissions/CIK{cik:010d}.json"
             raw = self.cache.get_asof(url, self.asof_date)
             evidence["sources"].append({"url": url, "sha256": sha256(raw)})
             submission = json.loads(raw)
-            if int(submission["cik"]) != cik:
+            if _validated_cik(submission["cik"]) != cik:
                 raise ResearchDataError("sec_cik_mismatch")
             evidence.update(cik=cik, entity_type=submission.get("entityType"), sic=str(submission.get("sic", "")))
             if submission.get("entityType") == "investment" or str(submission.get("sic")) in {"6722", "6726", "6770"}:
