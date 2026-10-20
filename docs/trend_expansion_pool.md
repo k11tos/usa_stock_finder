@@ -233,7 +233,7 @@ one submissions response and one latest available 10-K/20-F cover page. It
 checks CIK identity, `entityType=operating`, known SIC, a non-investment/non-shell
 classification, and a cover-page `dei:TradingSymbol` matched to
 `dei:Security12bTitle` in the **same class context**. The title must explicitly
-identify common/ordinary shares, and `dei:EntityShellCompanyBoolean` must be
+identify common/ordinary shares, and `dei:EntityShellCompany` must be
 explicitly false. REIT SIC 6798 remains possible. Investment-company
 classification or SIC 6722/6726, shell SIC 6770, a shell declaration, and explicit
 non-common class titles deny admission. Class-title checks apply to the
@@ -246,12 +246,42 @@ more than seven days old; OHLCV cannot predate the requested final session's
 16:00 New York cutoff. SEC observations retain calendar-date validation,
 including the filing-date lower bound, without a price-session cutoff.
 Unmatched classes, unavailable/blocked SEC responses, missing SIC/entity/shell
-facts, transformed/continued inline facts, and unsupported formats produce
+facts, continued inline facts, and unsupported formats produce
 `unknown`; skip/defer them and consider the next ranked symbol. This intentionally
 sacrifices coverage rather than guessing. No ticker blocklist, brand rule,
 licensed master, LLM, companyfacts crawl or historical-submissions pagination
 is used. SEC throttling/blocking or unfamiliar inline markup can cause a short
 or empty expansion pool; inspect the audit before treating it as usable.
+
+Shell facts accept XML boolean literals (`true`, `false`, `1`, `0`), the 2015
+XBRL registry's `booleantrue`/`booleanfalse`, the 2020/2022 registries'
+`fixed-true`/`fixed-false`, and the SEC's 2015 `boolballotbox`. Transformations
+are resolved by their declared namespace, with an explicit allowlist; unfamiliar
+registries/functions never fall back to the displayed text. Fixed boolean
+transforms supply the value regardless of displayed text: a checked **No** box
+tagged `booleanfalse` means false, while `boolballotbox` maps only ☐ to false
+and ☑/☒ to true. Bare `yes`/`no` are not XML boolean values.
+
+The audit records `shell_status` (`explicit_true`, `explicit_false`, `missing`,
+`ambiguous`, `unsupported`, or `contradictory`) and each fact's context, text,
+format, resolved format namespace and decoded value. Only unanimous explicit
+false evidence can proceed to the existing class/operating-company checks.
+Any explicit true denies admission, including contradictory true/false facts;
+false mixed with ambiguous/unsupported evidence stays unknown. Nil, malformed,
+continued and unrecognized evidence cannot certify non-shell status. Raw source
+URLs, checksums, timestamps and cache-only replay remain unchanged.
+
+The [SEC EDGAR XBRL Guide §3.1.10](https://www.sec.gov/files/edgar/filer-information/specifications/xbrl-guide-2024-12-16.pdf)
+defines `EntityShellCompany` as `xs:boolean`. The
+[SEC registry list](https://www.sec.gov/files/ixbrl-transform-registries.json),
+[XBRL registry 3 §§4.3–4.4](https://www.xbrl.org/Specification/inlineXBRL-transformationRegistry/REC-2015-02-26%2Berrata-2019-04-17/inlineXBRL-transformationRegistry-REC-2015-02-26%2Bcorrected-errata-2019-04-17.html),
+[registry 4 §§4.91–4.92](https://www.xbrl.org/Specification/inlineXBRL-transformationRegistry/REC-2020-02-12/inlineXBRL-transformationRegistry-REC-2020-02-12.html),
+and [SEC ballot-box description](https://xbrl.sec.gov/cef/2024/cef-taxonomy-guide-2024-03-18.pdf)
+define the supported transformation semantics. Offline reduced fact fixtures in
+`tests/fixtures/sec_shell_cover_cases.json` document the official filing URLs
+and indexed markup sources for DeltaSoft/Spirits Time 10-K and Digital Currency X/
+ReTo 20-F examples, plus explicitly labeled synthetic mutations. These fixtures
+verify fact handling, not those issuers' complete eligibility or live coverage.
 
 Defaults: 8,000 preliminary symbols (configurable to <=12,000), batches of 10
 (<=25), one HTTP response / one symbol history in memory at a time, 25,000

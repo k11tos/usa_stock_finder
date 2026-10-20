@@ -127,7 +127,10 @@ def screen_bars(bars: list[dict], session_date: str, params: WatchParameters) ->
                 return {**result, "reason": "invalid_bar_date"}
             if day > date.fromisoformat(session_date):
                 return {**result, "reason": "future_bar"}
-            values = [float(daily[key]) for key in ("open", "high", "low", "close", "volume")]
+            raw_values = [daily[key] for key in ("open", "high", "low", "close", "volume")]
+            if any(isinstance(value, bool) for value in raw_values):
+                return {**result, "reason": "missing_or_invalid_bar"}
+            values = [float(value) for value in raw_values]
         except (ValueError, TypeError, KeyError, OverflowError):
             return {**result, "reason": "missing_or_invalid_bar"}
         if not all(math.isfinite(value) for value in values):

@@ -13,6 +13,37 @@ from trend_expansion.research_cache import ResearchCache, ResearchDataError, sha
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _COMMON = re.compile(r"\b(?:common (?:stock|shares?)|ordinary shares?)\b", re.I)
 _NONCOMMON = re.compile(r"\b(?:preferred|preference|warrant|units?|rights?|notes?|closed.end|fund|etf|etn)\b", re.I)
+_XBRL_TRANSFORM = "http://www.xbrl.org/inlineXBRL/transformation/"
+_SEC_TRANSFORM = "http://www.sec.gov/inlineXBRL/transformation/2015-08-31"
+_FIXED_BOOLEANS = {
+    (_XBRL_TRANSFORM + "2015-02-26", "booleantrue"): True,
+    (_XBRL_TRANSFORM + "2015-02-26", "booleanfalse"): False,
+    **{(_XBRL_TRANSFORM + version, name): value
+       for version in ("2020-02-12", "2022-02-16")
+       for name, value in (("fixed-true", True), ("fixed-false", False))},
+}
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+              "source", "track", "wbr"}
+
+
+def _shell_value(fact: dict) -> tuple[bool | None, str]:
+    """Decode only XML booleans and the SEC-listed boolean transformations."""
+    if fact["malformed"] or not fact["context_ref"] or fact["nil"]:
+        return None, "ambiguous"
+    if fact["continued"] or fact["tag"] != "ix:nonnumeric":
+        return None, "unsupported"
+    if fact["format"] is None:
+        values = {"true": True, "1": True, "false": False, "0": False}
+        value = values.get(fact["text"])
+    else:
+        transform = (fact["format_namespace"], fact["format"].split(":")[-1])
+        if transform in _FIXED_BOOLEANS:
+            value = _FIXED_BOOLEANS[transform]
+        elif transform == (_SEC_TRANSFORM, "boolballotbox"):
+            value = {"☐": False, "☑": True, "☒": True}.get(fact["text"])
+        else:
+            return None, "unsupported"
+    return value, "ambiguous" if value is None else "explicit_true" if value else "explicit_false"
 
 
 class CoverPage(HTMLParser):
@@ -21,55 +52,118 @@ class CoverPage(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.facts = []
+        self.shell_facts = []
         self.active = None
-        self.depth = 0
+        self.fact_tags = []
+        self.namespaces = {}
+        self.scopes = []
+        self.malformed = False
 
     def handle_starttag(self, tag, attrs):
-        if self.active is not None:
-            self.depth += 1
-            return
+        duplicate_attrs = len(attrs) != len(dict(attrs))
         attrs = dict(attrs)
+        previous = self.namespaces
+        declared = {key[6:]: value for key, value in attrs.items() if key.startswith("xmlns:")}
+        self.namespaces = {**previous, **declared} if declared else previous
+        if tag not in _VOID_TAGS:
+            self.scopes.append((tag, previous))
+        if self.active is not None:
+            if tag.startswith("ix:"):
+                self.active["malformed"] = True  # No nested facts or ix:exclude inference.
+            if tag not in _VOID_TAGS:
+                self.fact_tags.append(tag)
+            return
         name = attrs.get("name", "").lower()
         if tag in {"ix:nonnumeric", "ix:nonfraction"} and name.startswith("dei:"):
-            # Continued/transformed facts require more evidence.
-            if attrs.get("continuedat") or attrs.get("format"):
+            shell = name == "dei:entityshellcompany"
+            # Only shell booleans have a narrowly supported transformation path.
+            if not shell and ("continuedat" in attrs or "format" in attrs):
                 return
-            self.active = [name.split(":")[-1], attrs.get("contextref", ""), []]
-            self.depth = 1
+            fmt = (attrs.get("format") or "") if "format" in attrs else None
+            self.active = {"name": name.split(":")[-1], "context_ref": attrs.get("contextref", ""),
+                           "text": [], "format": fmt,
+                           "format_namespace": self.namespaces.get(fmt.split(":")[0])
+                           if fmt and fmt.count(":") == 1 else None,
+                           "continued": "continuedat" in attrs,
+                           "nil": any(key.endswith(":nil") and value not in {"false", "0"}
+                                      for key, value in attrs.items()),
+                           "malformed": duplicate_attrs, "tag": tag}
+            self.fact_tags = [tag]
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in _VOID_TAGS:
+            self.handle_endtag(tag)
 
     def handle_endtag(self, tag):
         if self.active is not None:
-            self.depth -= 1
-            if self.depth == 0:
-                name, context, text = self.active
-                self.facts.append((name, context, " ".join("".join(text).split())))
-                self.active = None
+            if self.fact_tags[-1] == tag:
+                self.fact_tags.pop()
+            else:
+                self.active["malformed"] = True
+                if tag in self.fact_tags:
+                    while self.fact_tags.pop() != tag:
+                        pass
+            if not self.fact_tags:
+                self._finish_fact()
+        while self.scopes:
+            opened, self.namespaces = self.scopes.pop()
+            if opened == tag:
+                break
 
     def handle_data(self, data):
         if self.active is not None:
-            self.active[2].append(data)
+            self.active["text"].append(data)
+
+    def _finish_fact(self):
+        fact = self.active
+        self.malformed = self.malformed or fact["malformed"]
+        fact["text"] = " ".join("".join(fact["text"]).split())
+        name = fact.pop("name")
+        if name == "entityshellcompany":
+            fact["value"], fact["status"] = _shell_value(fact)
+            self.shell_facts.append(fact)
+        elif not fact["malformed"]:
+            self.facts.append((name, fact["context_ref"], fact["text"]))
+        self.active = None
+
+    def close(self):
+        super().close()
+        if self.active is not None:
+            self.active["malformed"] = True
+            self._finish_fact()
 
 
 def classify_cover(payload: bytes, symbol: str) -> tuple[str, dict]:
     """Require matched class context, common title and explicit non-shell fact."""
     parser = CoverPage()
     parser.feed(payload.decode("utf-8"))
-    shells = [text.lower() for name, _, text in parser.facts if name == "entityshellcompanyboolean"]
-    if "true" in shells or "yes" in shells:
-        return "not_common", {"classification": "shell_company"}
-    if not shells or any(value not in {"false", "no"} for value in shells):
-        return "unknown", {"classification": "shell_status_unknown"}
+    parser.close()
+    shells = {fact["status"] for fact in parser.shell_facts}
+    if parser.malformed:
+        shells.add("ambiguous")  # A malformed outer fact may have swallowed a shell fact.
+    shell_status = ("contradictory" if {"explicit_true", "explicit_false"} <= shells
+                    else "explicit_true" if "explicit_true" in shells
+                    else "ambiguous" if "ambiguous" in shells
+                    else "unsupported" if "unsupported" in shells
+                    else "explicit_false" if shells else "missing")
+    evidence = {"shell_status": shell_status, "shell_facts": parser.shell_facts,
+                "cover_structure_ambiguous": parser.malformed}
+    if shell_status in {"explicit_true", "contradictory"}:
+        return "not_common", {**evidence, "classification": "shell_company"}
+    if shell_status != "explicit_false":
+        return "unknown", {**evidence, "classification": "shell_status_unknown"}
     contexts = {context for name, context, text in parser.facts
                 if name == "tradingsymbol" and text.upper().replace(".", "-") == symbol.replace(".", "-")}
     titles = [text for name, context, text in parser.facts
               if name == "security12btitle" and context and context in contexts]
     if not titles:
-        return "unknown", {"classification": "class_context_unmatched"}
+        return "unknown", {**evidence, "classification": "class_context_unmatched"}
     if any(_NONCOMMON.search(title) for title in titles):
-        return "not_common", {"classification": "non_common_class", "class_titles": sorted(titles)}
+        return "not_common", {**evidence, "classification": "non_common_class", "class_titles": sorted(titles)}
     if not all(_COMMON.search(title) for title in titles):
-        return "unknown", {"classification": "class_type_unknown", "class_titles": sorted(titles)}
-    return "verified", {"classification": "operating_common_equity", "class_titles": sorted(titles)}
+        return "unknown", {**evidence, "classification": "class_type_unknown", "class_titles": sorted(titles)}
+    return "verified", {**evidence, "classification": "operating_common_equity", "class_titles": sorted(titles)}
 
 
 class SecVerifier:

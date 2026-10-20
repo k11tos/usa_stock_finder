@@ -31,6 +31,7 @@ from trend_expansion.watch_prices import (
 DAY = "2026-09-30"
 PARAMS = WatchParameters()
 CASES = json.loads((Path(__file__).parent / "fixtures/watch_security_cases.json").read_text())["cases"]
+SHELL_CASES = json.loads((Path(__file__).parent / "fixtures/sec_shell_cover_cases.json").read_text())["cases"]
 
 
 def daily_bars(*, count=270, start_price=10, end_price=20, volume=300_000, end=DAY):
@@ -61,8 +62,18 @@ def cover(symbol, *, title="Common Stock", shell="false", context="class-a", tit
     return (f'<html><ix:nonNumeric name="dei:TradingSymbol" contextRef="{context}">{symbol}</ix:nonNumeric>'
             f'<ix:nonNumeric name="dei:Security12bTitle" contextRef="{title_context or context}">'
             f'<b>{title}</b></ix:nonNumeric>'
-            f'<ix:nonNumeric name="dei:EntityShellCompanyBoolean" contextRef="entity">{shell}</ix:nonNumeric>'
+            f'<ix:nonNumeric name="dei:EntityShellCompany" contextRef="entity">{shell}</ix:nonNumeric>'
             '</html>').encode()
+
+
+def fixture_cover(case, symbol="ABC"):
+    """Keep class evidence synthetic; shell structures have documented filing sources."""
+    page = cover(symbol)
+    page = page[:page.index(b'<ix:nonNumeric name="dei:EntityShellCompany"')]
+    namespaces = (f'<html xmlns:ixt="http://www.xbrl.org/inlineXBRL/transformation/{case["registry_version"]}" '
+                  'xmlns:ixt-sec="http://www.sec.gov/inlineXBRL/transformation/2015-08-31" '
+                  'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">').encode()
+    return page.replace(b"<html>", namespaces) + case["shell_markup"].encode() + b"</html>"
 
 
 def seed_evidence(cache, symbols, overrides=None):
@@ -75,7 +86,7 @@ def seed_evidence(cache, symbols, overrides=None):
         accession = f"{cik:010d}-26-000001"
         submission = {"cik": str(cik), "entityType": case.get("entityType", "operating"),
                       "sic": case.get("sic", "3571"), "filings": {"recent": {
-                          "form": ["10-K"], "filingDate": [case.get("filed", "2026-03-01")],
+                          "form": [case.get("form", "10-K")], "filingDate": [case.get("filed", "2026-03-01")],
                           "accessionNumber": [accession], "primaryDocument": ["annual.htm"]}}}
         cache_entry(cache, f"https://data.sec.gov/submissions/CIK{cik:010d}.json", canonical_bytes(submission))
         cache_entry(cache, f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace('-', '')}/annual.htm",
@@ -141,6 +152,46 @@ def test_bad_bar_diagnoses(field, value, reason):
     result = screen_bars(bars, DAY, PARAMS)
     assert result["reason"] == reason
     assert result["ohlcv_validity"] == "invalid"
+
+
+@pytest.mark.parametrize("field", ["open", "high", "low", "close", "volume"])
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_ohlcv_never_ranks_or_enters_watch_pool(tmp_path, field, value):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    bars = daily_bars()
+    bars[0][field] = value  # Outside liquidity/momentum windows; still invalid evidence.
+    payload = seed_prices(cache, "A", bars)
+    decoded = decode_chart(payload, "A")
+    assert decoded[0][field] is value  # Real JSON booleans, before numeric conversion.
+    assert screen_bars(decoded, DAY, PARAMS)["reason"] == "missing_or_invalid_bar"
+    original = {p.name: p.read_bytes() for p in cache.directory.iterdir()}
+    result = build_watch_pool(**args, cache=cache)
+    bad, good = result["audit"][0], result["audit"][1]
+    assert bad["reason"] == "missing_or_invalid_bar"
+    assert bad["ohlcv_validity"] == "invalid"
+    assert bad["verification"]["status"] == "not_evaluated"
+    assert "rank" not in bad and "score" not in bad
+    assert good["reason"] == "selected" and good["rank"] == 1
+    expected = screen_bars(daily_bars(), DAY, PARAMS)
+    assert all(good[key] == value for key, value in expected.items() if key != "reason")
+    assert [row["symbol"] for row in result["watch"]] == ["B"]
+    counts = result["metadata"]["counts"]
+    assert counts["numeric_eligible"] == counts["verification_attempted"] == counts["expansion"] == 1
+    assert counts["reasons"] == {"missing_or_invalid_bar": 1, "selected": 1}
+    assert bad["ohlcv_source"]["sha256"] == sha256(payload)
+    replay = build_watch_pool(**args, cache=ResearchCache(cache.directory))
+    assert canonical_bytes(result) == canonical_bytes(replay)
+    one = publish_watch_pool(tmp_path / "one", result)
+    two = publish_watch_pool(tmp_path / "two", replay)
+    for name in ("watch.csv", "audit.json", "metadata.json"):
+        assert (one / name).read_bytes() == (two / name).read_bytes()
+    assert original == {p.name: p.read_bytes() for p in cache.directory.iterdir()}
+
+
+def test_numeric_ohlcv_strings_and_numbers_keep_identical_screen_results():
+    bars = daily_bars()
+    strings = [{key: str(value) for key, value in row.items()} for row in bars]
+    assert screen_bars(strings, DAY, PARAMS) == screen_bars(bars, DAY, PARAMS)
 
 
 def test_missing_stale_duplicate_and_suspension_gap():
@@ -265,6 +316,91 @@ def test_cover_requires_class_level_common_and_nonshell_evidence(title, shell, s
     assert classify_cover(cover("ABC", title=title, shell=shell), "ABC")[0] == status
     assert classify_cover(cover("ABC", title_context="different"), "ABC")[0] == "unknown"
     assert classify_cover(cover("OTHER"), "ABC")[0] == "unknown"
+
+
+@pytest.mark.parametrize("case", SHELL_CASES, ids=lambda case: case["id"])
+def test_filing_derived_shell_evidence_and_cache_only_admission(tmp_path, case):
+    args, cache = scenario(tmp_path, ["ABC", "ZZZ"])
+    seed_evidence(cache, ["ABC", "ZZZ"],
+                  {"ABC": {"form": "20-F" if case["source"].endswith("_20f") else "10-K"}})
+    raw = fixture_cover(case)
+    status, evidence = classify_cover(raw, "ABC")
+    assert status == case["status"]
+    assert evidence["shell_status"] == case["shell_status"]
+    url = "https://www.sec.gov/Archives/edgar/data/2000/000000200026000001/annual.htm"
+    cache_entry(cache, url, raw)
+    original = {p.name: p.read_bytes() for p in cache.directory.iterdir()}
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("regressions must use frozen cache only")
+    result = build_watch_pool(**args, cache=ResearchCache(cache.directory, opener=forbidden),
+                              params=replace(PARAMS, target_total=1))
+    first = result["audit"][0]
+    assert first["verification"]["shell_status"] == case["shell_status"]
+    assert first["verification"]["sources"][-1] == {"url": url, "sha256": sha256(raw)}
+    assert first["verification"]["shell_facts"] == evidence["shell_facts"]
+    assert result["metadata"]["raw_sources"][sha256(url.encode())]["sha256"] == sha256(raw)
+    assert first["reason"] == ("selected" if status == "verified" else "security_" + status)
+    assert [row["symbol"] for row in result["watch"]] == (["ABC"] if status == "verified" else ["ZZZ"])
+    replay = build_watch_pool(**args, cache=ResearchCache(cache.directory, opener=forbidden),
+                              params=replace(PARAMS, target_total=1))
+    assert canonical_bytes(result) == canonical_bytes(replay)
+    directories = [publish_watch_pool(tmp_path / name, build) for name, build in (("one", result), ("two", replay))]
+    assert directories[0].name == directories[1].name
+    for name in ("watch.csv", "audit.json", "metadata.json"):
+        assert (directories[0] / name).read_bytes() == (directories[1] / name).read_bytes()
+    assert inspect_watch_pool(directories[0])["counts"]["expansion"] == 1
+    assert original == {p.name: p.read_bytes() for p in cache.directory.iterdir()}
+
+
+@pytest.mark.parametrize("registry", ["2015-02-26", "2020-02-12", "2022-02-16"])
+@pytest.mark.parametrize("value", [True, False])
+def test_only_namespace_qualified_registered_boolean_transforms(registry, value):
+    suffix = "true" if value else "false"
+    transform = "boolean" + suffix if registry == "2015-02-26" else "fixed-" + suffix
+    case = {"registry_version": registry, "shell_markup":
+            f'<ix:nonNumeric name="dei:EntityShellCompany" contextRef="entity" '
+            f'format="ixt:{transform}"><span>&#9746;</span></ix:nonNumeric>'}
+    raw = fixture_cover(case)
+    expected = "not_common" if value else "verified"
+    assert classify_cover(raw, "ABC")[0] == expected
+    assert classify_cover(raw.replace(b"ixt", b"alias"), "ABC")[0] == expected
+    spoofed = raw.replace(b"http://www.xbrl.org/inlineXBRL/transformation/", b"https://example.com/")
+    assert classify_cover(spoofed, "ABC")[1]["shell_status"] == "unsupported"
+    # A local namespace override is scoped; a later false cannot hide unsupported evidence.
+    bad = b'<div xmlns:ixt="https://example.com/unknown">' + case["shell_markup"].encode() + b'</div>'
+    mixed = raw.replace(b"</html>", bad + case["shell_markup"].encode() + b"</html>")
+    status, evidence = classify_cover(mixed, "ABC")
+    assert status != "verified"
+    assert evidence["shell_facts"][1]["status"] == "unsupported"
+    assert evidence["shell_facts"][0]["value"] is value
+    assert evidence["shell_facts"][2]["value"] is value  # Restore the outer namespace after the div.
+
+
+@pytest.mark.parametrize("title,title_context,expected", [
+    ("Common Stock", "other-class", "unknown"), ("Preferred Stock", "class-a", "not_common"),
+    ("Depositary Receipts", "class-a", "unknown"), ("Ordinary Shares", "class-a", "verified"),
+])
+def test_transformed_nonshell_preserves_class_context_and_title_checks(title, title_context, expected):
+    raw = fixture_cover(SHELL_CASES[0])
+    raw = raw.replace(b"<b>Common Stock</b>", f"<b>{title}</b>".encode())
+    raw = raw.replace(b'name="dei:Security12bTitle" contextRef="class-a"',
+                      f'name="dei:Security12bTitle" contextRef="{title_context}"'.encode())
+    assert classify_cover(raw, "ABC")[0] == expected
+
+
+@pytest.mark.parametrize("entity_type,sic,reason", [
+    ("investment", "6726", "investment_company_or_shell"),
+    ("operating", "6770", "investment_company_or_shell"),
+    ("other", "3571", "operating_status_unknown"), ("operating", "", "operating_status_unknown"),
+])
+def test_transformed_nonshell_does_not_bypass_operating_verification(tmp_path, entity_type, sic, reason):
+    args, cache = scenario(tmp_path, ["ABC", "ZZZ"])
+    seed_evidence(cache, ["ABC", "ZZZ"], {"ABC": {"entityType": entity_type, "sic": sic}})
+    url = "https://www.sec.gov/Archives/edgar/data/2000/000000200026000001/annual.htm"
+    cache_entry(cache, url, fixture_cover(SHELL_CASES[0]))
+    result = build_watch_pool(**args, cache=cache, params=replace(PARAMS, target_total=1))
+    assert result["audit"][0]["verification"]["reason"] == reason
+    assert [row["symbol"] for row in result["watch"]] == ["ZZZ"]
 
 
 def test_future_filing_and_future_observation_fail_closed(tmp_path):
