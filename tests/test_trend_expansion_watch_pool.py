@@ -486,6 +486,58 @@ def test_market_cap_policy_missing_unknown_not_verified(tmp_path):
     assert strict["audit"][0]["reason"] == "market_cap_unknown"
 
 
+@pytest.mark.parametrize("market_caps", [
+    [], ["A"], False, True, 0, 1, "", "invalid", None,
+])
+def test_build_rejects_non_object_market_cap_documents(tmp_path, market_caps):
+    args, cache = scenario(tmp_path, ["A"])
+    if market_caps is None:
+        # None is the API's explicit representation of omitted optional evidence.
+        result = build_watch_pool(**args, cache=cache, market_caps=market_caps)
+        assert result["metadata"]["market_cap_input_sha256"] == sha256(canonical_bytes({}))
+        return
+
+    with pytest.raises(ValueError, match="market_caps must be a mapping"):
+        build_watch_pool(**args, cache=cache, market_caps=market_caps)
+
+
+def test_market_cap_empty_and_populated_mappings_have_stable_canonical_checksums(tmp_path):
+    args, cache = scenario(tmp_path, ["A"])
+    empty = build_watch_pool(**args, cache=cache, market_caps={})
+    omitted = build_watch_pool(**args, cache=cache)
+    assert empty["metadata"]["market_cap_input_sha256"] == sha256(canonical_bytes({}))
+    assert empty["metadata"]["market_cap_input_sha256"] == omitted["metadata"]["market_cap_input_sha256"]
+
+    first = {"A": {"value": 350_000_000, "currency": "USD", "asof_date": DAY,
+                   "source_url": "https://example.com/a", "coverage_verified": True},
+             "B": {"value": 400_000_000, "currency": "USD", "asof_date": DAY,
+                   "source_url": "https://example.com/b", "coverage_verified": True}}
+    second = {"B": first["B"], "A": first["A"]}
+    result_one = build_watch_pool(**args, cache=cache, market_caps=first)
+    result_two = build_watch_pool(**args, cache=cache, market_caps=second)
+    expected = sha256(canonical_bytes(first))
+    assert result_one["metadata"]["market_cap_input_sha256"] == expected
+    assert result_two["metadata"]["market_cap_input_sha256"] == expected
+    assert result_one["metadata"]["market_cap_input_sha256"] == result_two["metadata"]["market_cap_input_sha256"]
+
+
+@pytest.mark.parametrize("document", ["null", "[]", "false", "0", '""'])
+def test_cli_rejects_non_object_market_cap_json_before_build_or_publication(
+        tmp_path, monkeypatch, document):
+    market_cap_file = tmp_path / "market_caps.json"
+    market_cap_file.write_text(document)
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(cli, "build_watch_pool", lambda *args, **kwargs: pytest.fail("pool build started"))
+    monkeypatch.setattr(cli, "publish_watch_pool", lambda *args, **kwargs: pytest.fail("pool published"))
+
+    with pytest.raises(ValueError, match="--market-caps must contain a JSON object"):
+        cli.main([
+            "build", "--asof-date", DAY, "--session-date", DAY, "--core-asof-date", DAY,
+            "--market-caps", str(market_cap_file), "--output-dir", str(output_dir),
+        ])
+    assert not output_dir.exists()
+
+
 @pytest.mark.parametrize("field", [
     "min_bars", "liquidity_sessions", "short_sessions", "long_sessions",
     "target_total", "max_expansion", "max_verifications",

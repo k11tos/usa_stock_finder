@@ -43,6 +43,11 @@ def main(argv=None):
     else:
         if args.fetch and (not args.sec_user_agent or "@" not in args.sec_user_agent):
             raise ValueError("--fetch requires SEC organization/contact --sec-user-agent")
+        market_caps = None
+        if args.market_caps is not None:
+            market_caps = json.loads(args.market_caps.read_bytes())
+            if not isinstance(market_caps, dict):
+                raise ValueError("--market-caps must contain a JSON object")
         params = WatchParameters(**(json.loads(args.parameters.read_bytes()) if args.parameters else {}))
         cache_dir = args.cache_dir or Path("data/trend_expansion/research_cache") / args.asof_date
         cache = ResearchCache(cache_dir, fetch=args.fetch, user_agent=args.sec_user_agent,
@@ -51,7 +56,7 @@ def main(argv=None):
         result = build_watch_pool(listing_dir=args.listing_dir, core_csv=args.core_csv,
                                   core_asof_date=args.core_asof_date, asof_date=args.asof_date,
                                   session_date=args.session_date, cache=cache, params=params,
-                                  market_caps=json.loads(args.market_caps.read_bytes()) if args.market_caps else None)
+                                  market_caps=market_caps)
         snapshot = publish_watch_pool(args.output_dir, result)
         metadata = inspect_watch_pool(snapshot)
         print(f"research_snapshot: {snapshot}")

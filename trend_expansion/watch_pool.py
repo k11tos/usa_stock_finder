@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -111,6 +112,8 @@ def build_watch_pool(*, listing_dir: Path, core_csv: Path, core_asof_date: str,
                      asof_date: str, session_date: str, cache: ResearchCache,
                      params: WatchParameters | None = None, market_caps: dict | None = None) -> dict:
     """Build entirely in research memory; raw cache is the only write side effect."""
+    if market_caps is not None and not isinstance(market_caps, Mapping):
+        raise ValueError("market_caps must be a mapping/object when supplied")
     params = params or WatchParameters()
     cutoff = asof_cutoff(asof_date, session_date)
     base, core, lineage = load_inputs(Path(listing_dir), Path(core_csv),
@@ -118,7 +121,7 @@ def build_watch_pool(*, listing_dir: Path, core_csv: Path, core_asof_date: str,
     if len(base) > cache.limits.max_symbols:
         raise ValueError("preliminary symbol count exceeds resource bound")
     cache.used.clear()
-    caps = market_caps or {}
+    caps = {} if market_caps is None else dict(market_caps)
     # Validate optional evidence can be serialized without nonfinite numbers.
     caps_checksum = sha256(canonical_bytes(caps))
     core_set = set(core)
