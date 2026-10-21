@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import asdict
 import io
 import json
 from pathlib import Path
@@ -15,6 +16,18 @@ from trend_expansion.watch_pool import inspect_watch_pool
 from trend_expansion.watch_prices import WatchParameters
 
 
+def validate_stage_c_parameters(params: dict) -> None:
+    """Require the full Stage C schema and the expected research configuration."""
+    expected = asdict(WatchParameters())
+    if not isinstance(params, dict) or params.keys() != expected.keys():
+        raise ValueError("Stage C parameter schema differs.")
+    # Validate types and resource bounds before comparing values (bool == 1).
+    WatchParameters(**params)
+    for key, value in expected.items():
+        if params[key] != value:
+            raise ValueError("Stage C hypotheses differ: " + key)
+
+
 def load_stage_c(directory: Path, cache_dir: Path | None = None) -> dict:
     """Reuse frozen ranking, optionally verifying additional research-only names.
 
@@ -25,11 +38,7 @@ def load_stage_c(directory: Path, cache_dir: Path | None = None) -> dict:
     """
     metadata = inspect_watch_pool(directory)
     params = metadata["parameters"]
-    expected = WatchParameters()
-    for key in ("min_price", "max_price", "min_bars", "liquidity_sessions", "min_dollar_volume",
-                "short_sessions", "long_sessions", "short_weight", "long_weight", "target_total"):
-        if params[key] != getattr(expected, key):
-            raise ValueError("Stage C hypotheses differ: " + key)
+    validate_stage_c_parameters(params)
     audit = json.loads((directory / "audit.json").read_bytes())
     watch = list(csv.DictReader(io.StringIO((directory / "watch.csv").read_text(encoding="utf-8"))))
     core = sorted(row["symbol"] for row in watch if row["source_pool"] == "core_quant")
@@ -73,8 +82,7 @@ def load_stage_c(directory: Path, cache_dir: Path | None = None) -> dict:
         "listing_asof_at": metadata["lineage"]["stage_a"]["metadata"]["created_at_utc"],
         "asof_date": metadata["asof_date"], "ranked_coverage_complete": complete,
         "ranked_finalists": selected, "verification_exclusions": exclusions,
-        "parameters": {"target_watch": 100, "price_min": 5, "price_max": 90,
-                       "liquidity_sessions": 20, "min_dollar_volume": 2000000, "rank_weights": [.4, .6]},
+        "parameters": dict(params),
         "stage_c_counts": metadata["counts"], "stage_c_limitations": metadata["point_in_time_limitations"],
         "price_convention": metadata["price_convention"], "core_symbols": core,
         "supplemental_cache_sources": cache.used if cache else {},

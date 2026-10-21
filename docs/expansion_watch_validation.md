@@ -53,8 +53,14 @@ python -m tools.compare_expansion_watch_pool \
 
 No refresh/network flag exists. Output beneath repository `data/` or
 `portfolio/` is rejected. Input bytes and all relevant implementation files are
-SHA-256 fingerprinted; effective strategy configuration is recorded without
-credentials. Files are stable for identical inputs/configuration/code.
+SHA-256 fingerprinted. `resolved_strategy_config` records effective strategy
+settings; `resolved_data_quality_config` records the effective
+`DataQualityConfig.MIN_PRICE_THRESHOLD` used by the live trend checks, including
+its environment override resolved at configuration import time. Other data-quality
+settings are not consumed by the offline finder. No credentials or unrelated
+environment variables are recorded. Files are stable for identical
+inputs/configuration/code. Previously published immutable artifacts are not
+rewritten; use a new output directory to capture the corrected provenance.
 
 Outputs: `comparison.json`, `comparison.md`, `coverage.csv`, `cohorts.csv`,
 `symbols.csv`, `daily.csv`, `source_daily.csv`, `quarterly.csv`, and
@@ -136,6 +142,13 @@ retains Stage C counts and source failures for review. A target of 100 is a
 hypothesis, not an obligation: Core 60 makes cap 50 and 100 both add at most 40.
 
 The Stage C inspector verifies immutable metadata, watch and audit checksums.
+The adapter and replay require the complete `WatchParameters()` schema and
+default values, including market-cap policy/minimum, history/liquidity windows,
+price bounds, momentum windows/weights, target size, expansion cap and verification
+budget. Missing, unknown, invalid or nondefault parameters fail closed. The full
+validated parameters are retained in quarter evidence; older abbreviated
+normalized parameter summaries must be regenerated from the original Stage C
+generation. Compatible default Stage C generations remain accepted.
 The adapter reuses frozen **coarse** ranks; it never adds a quarterly Minervini
 gate. Stage C's hard max 50 stays unchanged. Numeric candidates outside capacity
 have unverified security types. For experimental 100, an optional **frozen**

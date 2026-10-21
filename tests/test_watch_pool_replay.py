@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from unittest.mock import Mock
 
 import pandas as pd
@@ -37,8 +40,7 @@ def sample_bundle():
                    'available_at': "2025-01-02T21:30:00Z", 'data_cutoff_at': "2025-01-02T21:00:00Z",
                    'listing_asof_at': "2025-01-02T15:00:00Z", 'ranked_coverage_complete': True,
                    'ranked_finalists': [{'symbol': "BBB", 'rank': 1, 'verification': "verified_common_equity"}],
-                   'parameters': {'target_watch': 100, 'price_min': 5, 'price_max': 90, 'liquidity_sessions': 20,
-                                   'min_dollar_volume': 2000000, 'rank_weights': [.4, .6]}}
+                   'parameters': vars_from_parameters()}
     bundle["quarters"] = [{'rebalance_at': "2025-01-02T22:00:00Z", 'stage_c': stage_c}]
     state = {'available_at': "2025-01-03T13:00:00Z", 'asof_at': "2025-01-03T13:00:00Z",
                  'cash': 1000, 'holdings_value': 0, 'held_symbols': [], 'cooldown_complete': True, 'stop_losses': []}
@@ -277,7 +279,7 @@ def test_deterministic_comparison_artifacts_and_zero_denominators(tmp_path):
     assert all(row["mean_capacity_entries"] is None for row in replay(bundle)["quarterly"])
 
 
-def stage_c_fixture(tmp_path, *, outside=False):
+def stage_c_fixture(tmp_path, *, outside=False, parameters=None):
     """A tiny genuine Stage C publisher format; contents are explicitly synthetic."""
     core = tmp_path / "core.csv"
     core.write_text("symbol\nAAA\n", encoding="utf-8")
@@ -286,7 +288,8 @@ def stage_c_fixture(tmp_path, *, outside=False):
     status = "not_evaluated" if outside else "verified"
     audit = [{'symbol': "BBB", 'rank': 1, 'verification': {'status': status}, 'reason': "outside_watch_capacity"}]
     metadata = {'schema_version': 1, 'research_only': True, 'asof_date': "2025-01-02",
-                    'asof_timestamp': "2025-01-02T21:00:00Z", 'parameters': vars_from_parameters(),
+                    'asof_timestamp': "2025-01-02T21:00:00Z",
+                    'parameters': vars_from_parameters() if parameters is None else parameters,
                     'lineage': {'core': {'unique_count': 1, 'sha256': core_sha, 'asof_date': "2025-01-02"},
                                  'stage_a': {'metadata': {'created_at_utc': "2025-01-02T15:00:00Z"}}},
                     'raw_sources': {"fixture": {'observed_at_utc': "2025-01-02T21:30:00Z"}},
@@ -301,9 +304,124 @@ def vars_from_parameters():
     return asdict(WatchParameters())
 
 
+@pytest.mark.parametrize(("key", "value"), [
+    ("min_price", 6), ("max_price", 89), ("min_bars", 253),
+    ("liquidity_sessions", 21), ("min_dollar_volume", 3_000_000),
+    ("short_sessions", 64), ("long_sessions", 127),
+    ("short_weight", .5), ("long_weight", .5),
+    ("market_cap_policy", "require_known"), ("min_market_cap", 400_000_000),
+    ("target_total", 99), ("max_expansion", 49), ("max_verifications", 149),
+])
+def test_stage_c_rejects_every_changed_parameter(tmp_path, key, value):
+    params = vars_from_parameters()
+    params[key] = value
+    # Publish valid nondefault weight pairs rather than testing invalid sums.
+    if key in {"short_weight", "long_weight"}:
+        params.update(short_weight=.5, long_weight=.5)
+    WatchParameters(**params)
+    directory, _ = stage_c_fixture(tmp_path, parameters=params)
+    with pytest.raises(ValueError, match="Stage C hypotheses differ: " + key
+                       if key != "long_weight" else "Stage C hypotheses differ: short_weight"):
+        load_stage_c(directory)
+    bundle = sample_bundle()
+    bundle["quarters"][0]["stage_c"]["parameters"] = params
+    result = replay(bundle)
+    assert result["coverage"][0]["reason"] == "incompatible_stage_c_hypotheses"
+    assert not result["daily"]
+    assert not result["cohorts"]
+
+
+@pytest.mark.parametrize("change", ["missing", "unknown", "boolean", "null"])
+def test_stage_c_rejects_incomplete_or_invalid_parameter_schema(tmp_path, change):
+    params = vars_from_parameters()
+    if change == "missing":
+        del params["market_cap_policy"]
+    elif change == "unknown":
+        params["unknown_gate"] = 1
+    elif change == "boolean":
+        params["min_price"] = True
+    else:
+        params["min_market_cap"] = None
+    directory, _ = stage_c_fixture(tmp_path, parameters=params)
+    with pytest.raises((ValueError, TypeError)):
+        load_stage_c(directory)
+    bundle = sample_bundle()
+    bundle["quarters"][0]["stage_c"]["parameters"] = params
+    assert replay(bundle)["coverage"][0]["reason"] == "incompatible_stage_c_hypotheses"
+
+
+def test_incompatible_stage_c_bundle_fails_closed(tmp_path):
+    params = vars_from_parameters()
+    params["market_cap_policy"] = "require_known"
+    directory, core = stage_c_fixture(tmp_path, parameters=params)
+    bundle = sample_bundle()
+    bundle["quantus_snapshots"][0]["path"] = core.name
+    bundle["quarters"][0] = {
+        "rebalance_at": "2025-01-02T22:00:00Z",
+        "stage_c_path": str(directory.relative_to(tmp_path)),
+        "stage_c_available_at": "2025-01-02T21:40:00Z",
+    }
+    manifest = tmp_path / "bundle.json"
+    manifest.write_text(json.dumps(bundle))
+    loaded, provenance = load_bundle(manifest)
+    assert loaded["quarters"][0]["stage_c"] is None
+    assert str(directory.relative_to(tmp_path)) not in provenance
+    result = replay(loaded)
+    assert result["coverage"][0]["reason"] == "invalid_or_missing_stage_c:ValueError"
+    assert not result["daily"]
+
+
+def test_data_quality_provenance_records_consumed_value(monkeypatch):
+    monkeypatch.setattr(replay_module.DataQualityConfig, "MIN_PRICE_THRESHOLD", .02)
+    # Config resolves at import time; a later env change must not mislabel it.
+    monkeypatch.setenv("MIN_PRICE_THRESHOLD", "999")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "irrelevant-test-secret")
+    result = replay(sample_bundle())
+    assert result["resolved_data_quality_config"] == {"MIN_PRICE_THRESHOLD": .02}
+    assert "irrelevant-test-secret" not in json.dumps(result)
+
+
+def test_environment_data_quality_provenance_and_byte_stable_artifacts(tmp_path):
+    # Fresh processes exercise config.py's real environment resolution without
+    # reloading shared config classes in the pytest process.
+    script = '''
+import json
+from pathlib import Path
+import sys
+from unittest.mock import patch
+from backtests.watch_pool_replay import replay, write_outputs
+with patch("yfinance.download", side_effect=AssertionError("network forbidden")), \\
+     patch("requests.sessions.Session.request", side_effect=AssertionError("network forbidden")), \\
+     patch("trend_expansion.research_cache.urlopen", side_effect=AssertionError("network forbidden")):
+    write_outputs(replay(json.load(sys.stdin)), Path(sys.argv[1]))
+'''
+    artifacts = {}
+    for threshold in ("0.01", "100"):
+        env = dict(os.environ, MIN_PRICE_THRESHOLD=threshold)
+        for repeat in range(2):
+            destination = tmp_path / f"{threshold}-{repeat}"
+            subprocess.run([sys.executable, "-c", script, str(destination)],
+                           input=json.dumps(sample_bundle()), text=True, env=env,
+                           check=True, capture_output=True, timeout=60)
+            current = {path.name: path.read_bytes() for path in destination.iterdir()}
+            if repeat == 0:
+                artifacts[threshold] = current
+            else:
+                assert current == artifacts[threshold]
+    low = json.loads(artifacts["0.01"]["comparison.json"])
+    high = json.loads(artifacts["100"]["comparison.json"])
+    assert low["resolved_data_quality_config"] == {"MIN_PRICE_THRESHOLD": .01}
+    assert high["resolved_data_quality_config"] == {"MIN_PRICE_THRESHOLD": 100.0}
+    assert low["resolved_strategy_config"] == high["resolved_strategy_config"]
+    assert [row["capacity_entries"] for row in low["daily"]] == [1, 2, 2, 2]
+    assert [row["capacity_entries"] for row in high["daily"]] == [0, 0, 0, 0]
+    assert all(row["reason"] == "trend_failed" for row in high["symbols"])
+
+
 def test_stage_c_artifact_adapter_and_lineage_cli(tmp_path):
     directory, core = stage_c_fixture(tmp_path)
     normalized = load_stage_c(directory)
+    assert normalized["parameters"] == vars_from_parameters()
     assert normalized["ranked_finalists"] == [{'symbol': "BBB", 'rank': 1, 'verification': "verified_common_equity"}]
     bundle = sample_bundle()
     bundle["quantus_snapshots"][0] = {'asof_date': "2025-01-02", 'available_at': "2025-01-02T21:00:00Z",

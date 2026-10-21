@@ -19,7 +19,8 @@ import tempfile
 import numpy as np
 import pandas as pd
 
-from config import StrategyConfig
+from backtests.watch_pool_inputs import validate_stage_c_parameters
+from config import DataQualityConfig, StrategyConfig
 from main import (
     _filter_buy_candidates_by_event_quarantine,
     _filter_buy_candidates_by_special_situation,
@@ -320,11 +321,9 @@ def _quarter_inputs(bundle: dict, quarter: dict) -> tuple[dict | None, str]:  # 
             return None, "future_stage_c_" + field
     if stage_c.get("ranked_coverage_complete") is not True:
         return None, "truncated_expansion_ranking"
-    if stage_c.get("parameters") != {
-        "target_watch": 100, "price_min": 5, "price_max": 90,
-        "liquidity_sessions": 20, "min_dollar_volume": 2000000,
-        "rank_weights": [0.4, 0.6],
-    }:
+    try:
+        validate_stage_c_parameters(stage_c.get("parameters"))
+    except (ValueError, TypeError):
         return None, "incompatible_stage_c_hypotheses"
     return {"core": latest[0]["symbols"], "expansion": stage_c["ranked_finalists"],
             "core_sha256": latest[0]["sha256"], "stage_c_sha256": stage_c["sha256"]}, ""
@@ -490,6 +489,9 @@ def replay(bundle: dict) -> dict:
         "limitations": LIMITATIONS, "assumptions": bundle["assumptions"],
         "resolved_strategy_config": {name: getattr(StrategyConfig, name) for name in dir(StrategyConfig)
                                      if name.isupper()},
+        # The offline finder bypasses download-time data checks. Only this
+        # DataQualityConfig value is consumed by its live trend methods.
+        "resolved_data_quality_config": {"MIN_PRICE_THRESHOLD": DataQualityConfig.MIN_PRICE_THRESHOLD},
         "price_convention": bundle["price_convention"], "corporate_action_policy": bundle["corporate_action_policy"],
         "coverage": coverage, "cohorts": cohorts, "symbols": symbol_rows,
         "quarter_evidence": quarter_evidence,
