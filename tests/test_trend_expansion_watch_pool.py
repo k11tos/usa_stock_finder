@@ -318,6 +318,50 @@ def test_cover_requires_class_level_common_and_nonshell_evidence(title, shell, s
     assert classify_cover(cover("OTHER"), "ABC")[0] == "unknown"
 
 
+def test_cover_ignores_missing_and_valueless_ordinary_html_names():
+    valid_cover = cover("ABC")
+    for element in (b"<div></div>", b"<a name></a>"):
+        payload = valid_cover.replace(b"<html>", b"<html>" + element, 1)
+        status, evidence = classify_cover(payload, "ABC")
+        assert status == "verified"
+        assert evidence["classification"] == "operating_common_equity"
+
+
+def test_valueless_inline_fact_name_cannot_supply_shell_evidence():
+    payload = (b'<html><ix:nonNumeric name="dei:TradingSymbol" contextRef="class-a">ABC</ix:nonNumeric>'
+               b'<ix:nonNumeric name="dei:Security12bTitle" contextRef="class-a">Common Stock</ix:nonNumeric>'
+               b'<ix:nonNumeric name contextRef="entity">false</ix:nonNumeric></html>')
+    status, evidence = classify_cover(payload, "ABC")
+    assert status == "unknown"
+    assert evidence["shell_status"] == "missing"
+    assert evidence["classification"] == "shell_status_unknown"
+
+
+def test_malformed_sec_finalist_does_not_abort_ranked_fallback(tmp_path):
+    args, cache = scenario(tmp_path, ["A", "B"])
+    seed_evidence(cache, ["A", "B"])
+    malformed_top_cover = (
+        b'<html><ix:nonNumeric name="dei:TradingSymbol" contextRef="class-a">A</ix:nonNumeric>'
+        b'<ix:nonNumeric name="dei:Security12bTitle" contextRef="class-a">Common Stock</ix:nonNumeric>'
+        b'<ix:nonNumeric name contextRef="entity">false</ix:nonNumeric></html>')
+    url = "https://www.sec.gov/Archives/edgar/data/2000/000000200026000001/annual.htm"
+    cache_entry(cache, url, malformed_top_cover)
+
+    result = build_watch_pool(**args, cache=cache, params=replace(PARAMS, target_total=1))
+
+    bad, good = result["audit"][0], result["audit"][1]
+    assert bad["symbol"] == "A"
+    assert bad["verification"]["status"] == "unknown"
+    assert bad["verification"]["reason"] == "shell_status_unknown"
+    assert bad["reason"] == "security_unknown"
+    assert good["symbol"] == "B"
+    assert good["verification"]["status"] == "verified"
+    assert good["verification"]["classification"] == "operating_common_equity"
+    assert good["reason"] == "selected"
+    assert [row["symbol"] for row in result["watch"]] == ["B"]
+    assert result["metadata"]["counts"]["verification_attempted"] == 2
+
+
 @pytest.mark.parametrize("case", SHELL_CASES, ids=lambda case: case["id"])
 def test_filing_derived_shell_evidence_and_cache_only_admission(tmp_path, case):
     args, cache = scenario(tmp_path, ["ABC", "ZZZ"])

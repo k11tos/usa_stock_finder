@@ -73,7 +73,8 @@ class CoverPage(HTMLParser):
             if tag not in _VOID_TAGS:
                 self.fact_tags.append(tag)
             return
-        name = attrs.get("name", "").lower()
+        raw_name = attrs.get("name")
+        name = raw_name.lower() if isinstance(raw_name, str) else ""
         if tag in {"ix:nonnumeric", "ix:nonfraction"} and name.startswith("dei:"):
             shell = name == "dei:entityshellcompany"
             # Only shell booleans have a narrowly supported transformation path.
