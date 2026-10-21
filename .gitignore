@@ -7,6 +7,7 @@ data.json
 *.ipynb
 # 모든 CSV 파일 (포트폴리오 포함)
 *.csv
+!docs/research/expansion_watch_validation/*.csv
 run.sh
 # API 인증 토큰
 token.dat

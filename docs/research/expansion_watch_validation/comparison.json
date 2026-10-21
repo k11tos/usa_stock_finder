@@ -1,0 +1,120 @@
+{
+  "assumptions": {
+    "fee_per_order": 0,
+    "reserve_ratio": 0,
+    "slippage_bps": 0
+  },
+  "cohorts": [],
+  "conclusion": "INCONCLUSIVE",
+  "conclusion_reason": "No comparable counterfactual portfolio performance; Stage E requires reviewed evidence.",
+  "corporate_action_policy": "Unknown historical adjustments/delistings; no performance calculated.",
+  "coverage": [
+    {
+      "comparable_inputs": false,
+      "quarter": null,
+      "reason": "no_replay_manifest_or_historical_inputs",
+      "requested_sessions": 0
+    }
+  ],
+  "daily": [],
+  "implementation_sha256": {
+    "backtests/watch_pool_inputs.py": "92839e1bfb6adbbf1551df671ddb40d840a8f96ab89427c4b02404a8d49353de",
+    "backtests/watch_pool_replay.py": "a8ba923bf8a1113e7163c718e48608ba32039d4e9018c19572b3e00266bd89d8",
+    "config.py": "b49903d11d1e84ee3b44f8baf76ddcae5d04698dcddff09061e98a8089bc498f",
+    "main.py": "9964bf6ff80a998a20584c5b069c275d251176f582f7f0da5fa10d19718baaec",
+    "stock_analysis.py": "f748277ffa4c931a4a047318c0c97de91a66fd7fb684ae7b4e2dfad1647a3f31",
+    "stop_loss_cooldown.py": "ffda0711a6283d9e00145503549fbac868870580b426a3f9e3b252ae6cd890df",
+    "tools/compare_expansion_watch_pool.py": "2309df3a9ea3d332d32659b746b9108e25f4d8897ce07cf2eda8393935b1ebbb",
+    "trend_expansion/research_cache.py": "cc795b88c01655a62604df073e631280e84f073c06e4ac0b1615f5e2a2276a62",
+    "trend_expansion/security_evidence.py": "20e526cd1a702d86721d334b1669fa3b60fede5fe370d97688771246522b77fb",
+    "trend_expansion/watch_pool.py": "a2a5881ce5ada0c32e6eb5530624f3ee00e3484e122606a6ac9621d7c69cc77f",
+    "trend_expansion/watch_prices.py": "68c44b4670765b924b3e2a9c873e31bc78c557a3955d8c99df88c3a36130f3de"
+  },
+  "input_inventory": {
+    "current_core_csv_present": false,
+    "daily_account_metadata_ohlcv_history": "not supplied; live account state is not used",
+    "dated_quantus_history": "not supplied; no historical snapshots inferred from current CSV",
+    "stage_c_generations_present": 0
+  },
+  "input_sha256": {},
+  "limitations": [
+    "Capacity diagnostics only; independent daily states are not a counterfactual portfolio.",
+    "No simulated or executed positions, exits, reinvestment, B-plan, or realized cash-day improvement.",
+    "Performance NOT COMPARABLE: sell/holding/corporate-action history and deployed sizing are unverified.",
+    "Stage C reviewed artifacts and real multi-quarter Quantus history are prerequisites for evidence review.",
+    "Current listings or current metadata cannot reconstruct delisted or historical constituents."
+  ],
+  "mode": "daily_signal_cash_capacity_only",
+  "performance": {
+    "cagr": null,
+    "hit_rate": null,
+    "iwm_return": null,
+    "max_drawdown": null,
+    "portfolio_concentration": null,
+    "spy_return": null,
+    "total_return": null,
+    "trade_count": null,
+    "turnover": null,
+    "volatility": null
+  },
+  "performance_comparable": false,
+  "price_convention": "asof_auto_adjusted",
+  "quarter_evidence": [],
+  "quarterly": [],
+  "research_arms": [
+    {
+      "cap": 0,
+      "comparable_quarters": 0,
+      "experiment_only": false
+    },
+    {
+      "cap": 30,
+      "comparable_quarters": 0,
+      "experiment_only": false
+    },
+    {
+      "cap": 50,
+      "comparable_quarters": 0,
+      "experiment_only": false
+    },
+    {
+      "cap": 100,
+      "comparable_quarters": 0,
+      "experiment_only": true
+    }
+  ],
+  "resolved_data_quality_config": {
+    "MIN_PRICE_THRESHOLD": 0.01
+  },
+  "resolved_strategy_config": {
+    "CORRELATION_THRESHOLD_RELAXED": 40.0,
+    "CORRELATION_THRESHOLD_STRICT": 50.0,
+    "EVENT_QUARANTINE_ENABLED": true,
+    "EVENT_QUARANTINE_LOOKBACK_DAYS": 5,
+    "EVENT_QUARANTINE_MAX_CURRENT_VS_GAP_CLOSE_PCT": 0.05,
+    "EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT": 0.07,
+    "EVENT_QUARANTINE_MIN_GAP_UP_PCT": 0.15,
+    "HIGH_THRESHOLD_RATIO": 0.75,
+    "LOW_INCREASE_PERCENT": 30.0,
+    "MARGIN": 0.0,
+    "MARGIN_RELAXED": 0.1,
+    "MA_150_DAYS": 150,
+    "MA_200_DAYS": 200,
+    "MA_50_DAYS": 50,
+    "MA_INCREASE_CHECK_DAYS": 21,
+    "SPECIAL_SITUATION_TAKE_PROFIT_ENABLED": true,
+    "SPECIAL_SITUATION_TAKE_PROFIT_MIN_PROFIT_PCT": 0.05,
+    "STOP_LOSS_COOLDOWN_BASE_DAYS": 5,
+    "STOP_LOSS_COOLDOWN_EXTRA_DAYS_PER_10PCT": 5,
+    "STOP_LOSS_COOLDOWN_MAX_DAYS": 60,
+    "STOP_LOSS_PCT": 0.1,
+    "TRAILING_ATR_MULTIPLIER": 3.0,
+    "TRAILING_ATR_PERIOD": 20,
+    "TRAILING_ENABLED": true,
+    "TRAILING_MIN_PROFIT_PCT": 0.1
+  },
+  "schema_version": 1,
+  "source_daily": [],
+  "source_quarterly": [],
+  "symbols": []
+}
