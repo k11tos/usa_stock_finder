@@ -286,7 +286,7 @@ verify fact handling, not those issuers' complete eligibility or live coverage.
 Defaults: 8,000 preliminary symbols (configurable to <=12,000), batches of 10
 (<=25), one HTTP response / one symbol history in memory at a time, 25,000
 HTTP attempts total (<=40,000), 3 attempts/request (<=4), 15-second request
-timeouts (<=30), 8 MB/response (<=16 MB), 512 MB total downloaded bytes
+timeouts (<=30), 8 MB/response (<=16 MB), 512 MB aggregate payload bytes
 (<=1,024 MB), 0.25-second minimum request pause,
 1s/2s retry backoff, and a 7,200-second network budget (<=14,400). The byte
 limit also bounds cached inputs. The budget includes retries and evidence;
@@ -295,6 +295,24 @@ exhaustion is an explicit diagnostic. Finalist verifications default to 150
 unknown. Individual symbol failures stay in audit and do not pass screening.
 Invalid A/B lineage or an oversized universe aborts before OHLCV collection.
 No automatic background refresh runs in the daily process.
+
+The aggregate byte budget belongs to one `ResearchCache` instance for its entire
+lifetime; calls, failures and lineage resets never replenish it. Charge all bytes
+returned by HTTP reads (including partial bodies, retries and downloads discarded
+after a publication race), plus each decoded cached payload read, including repeated
+access and bodies subsequently rejected by provenance or observation checks.
+Only validation readback of this call's successfully published, identical download
+is credited, because those bytes were already charged. A concurrent publisher's
+winning payload is a separate cache read, even if identical to the losing download.
+`downloaded_bytes` counts HTTP bytes; `total_bytes` includes cached payloads too.
+No payload may be returned after the total exceeds `max_total_bytes`; crossing
+raises `ResearchDataError("resource_byte_budget_exhausted")` without refunding bytes.
+HTTP reads retain their one-byte overflow probe. Cache reads check the remaining
+allowance before opening the file and bound the JSON envelope to six times the
+available payload allowance plus 4,096 bytes (and a one-byte overflow probe),
+within the existing per-entry ceiling. JSON escaping/metadata bytes are not charged
+as payload, and malformed envelopes without a decodable body retain `cache_invalid`.
+An exhausted budget prevents further cache body reads or network access.
 
 Truncated HTTP bodies and response protocol failures use the same bounded
 retry/backoff path as network errors; exhaustion records `network_failed`.

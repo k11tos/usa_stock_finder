@@ -649,6 +649,29 @@ def test_identical_fixed_inputs_produce_identical_bytes_and_generation(tmp_path)
     assert inspect_watch_pool(one)["counts"]["watch"] == 5
 
 
+def test_cache_only_byte_exhaustion_stays_in_audit_and_lineage_clear_does_not_reset(tmp_path):
+    args, seeded = scenario(tmp_path, ["A", "B"])
+    # A's entire price payload fits exactly; B and all verification evidence
+    # must fail closed without reading more bodies. No accounting path is mocked.
+    payload = seed_prices(seeded, "A")
+    cache = ResearchCache(seeded.directory, limits=ResourceLimits(max_total_bytes=len(payload)))
+    result = build_watch_pool(**args, cache=cache)
+    first, second = result["audit"][0], result["audit"][1]
+    assert first["ohlcv_validity"] == "valid"
+    assert first["reason"] == "security_unknown"
+    assert first["verification"]["reason"] == "resource_byte_budget_exhausted"
+    assert second["ohlcv_validity"] == "unavailable"
+    assert second["reason"] == "resource_byte_budget_exhausted"
+    assert result["watch"] == []
+    assert cache.total_bytes == len(payload)
+    assert cache.requests == cache.downloaded_bytes == 0
+    assert set(result["metadata"]["raw_sources"]) == {sha256(chart_url("A", DAY).encode())}
+    replay = build_watch_pool(**args, cache=cache)  # build_watch_pool clears used.
+    assert all(row["reason"] == "resource_byte_budget_exhausted" for row in replay["audit"])
+    assert not replay["metadata"]["raw_sources"]
+    assert cache.total_bytes == len(payload)
+
+
 def test_cli_valid_json_parameters_preserve_deterministic_pool(tmp_path, capsys):
     """Explicit valid integer defaults preserve the same momentum and pool bytes."""
     args, cache = scenario(tmp_path, ["A", "B", "FBRT"])

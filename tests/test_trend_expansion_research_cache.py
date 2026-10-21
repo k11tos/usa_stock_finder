@@ -9,6 +9,7 @@ from http.client import (
     ResponseNotReady, UnknownProtocol, UnknownTransferEncoding,
 )
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -156,10 +157,290 @@ def test_total_download_byte_budget_is_finite(tmp_path):
     assert len(list(tmp_path.iterdir())) == 1
 
 
+def seed_cached_payload(directory, url, payload):
+    """Write the real frozen format; leave reading and accounting unmocked."""
+    path = directory / f"{sha256(url.encode())}.json"
+    path.write_bytes(canonical_bytes({"url": url, "body": payload.decode(), "sha256": sha256(payload),
+                                     "observed_at_utc": "2026-09-30T21:00:00+00:00"}))
+    return path
+
+
+@pytest.mark.parametrize("budget", [5, 6])
+def test_cache_only_aggregate_boundary(tmp_path, budget):
+    urls = [f"https://example.org/{name}" for name in ("a", "b")]
+    original = [seed_cached_payload(tmp_path, url, b"123").read_bytes() for url in urls]
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("cache replay accessed network")
+    cache = ResearchCache(tmp_path, limits=ResourceLimits(max_total_bytes=budget), opener=forbidden)
+    assert cache.get(urls[0]) == b"123"
+    if budget == 6:
+        assert cache.get(urls[1]) == b"123"
+        assert len(cache.used) == 2
+    else:
+        with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$") as error:
+            cache.get(urls[1])
+        assert error.value.reason == "resource_byte_budget_exhausted"
+        assert len(cache.used) == 1
+    assert cache.total_bytes == 6
+    assert cache.downloaded_bytes == cache.requests == 0
+    assert [path.read_bytes() for path in (tmp_path / f"{sha256(url.encode())}.json" for url in urls)] == original
+
+
+def test_repeated_cache_reads_charge_again_and_do_not_reset_with_lineage(tmp_path):
+    url = "https://example.org/repeated"
+    seed_cached_payload(tmp_path, url, b"123")
+    cache = ResearchCache(tmp_path, limits=ResourceLimits(max_total_bytes=6))
+    assert cache.get(url) == cache.get(url) == b"123"
+    cache.used.clear()
+    with patch.object(Path, "open", side_effect=AssertionError("exhausted cache opened")) as opened:
+        for _ in range(2):
+            with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+                cache.get(url)
+        opened.assert_not_called()
+    assert cache.total_bytes == 6
+    assert not cache.used
+
+
+@pytest.mark.parametrize("download_first", [False, True])
+@pytest.mark.parametrize("budget", [5, 6])
+def test_cache_hits_and_downloads_share_one_budget(tmp_path, download_first, budget):
+    cached, downloaded = "https://example.org/cached", "https://example.org/downloaded"
+    seed_cached_payload(tmp_path, cached, b"123")
+    reads = []
+    class MeasuredResponse(Response):
+        def read(self, size=-1):
+            reads.append(size)
+            return super().read(size)
+    cache = ResearchCache(tmp_path, fetch=True, limits=ResourceLimits(max_total_bytes=budget),
+                          opener=lambda *_a, **_k: MeasuredResponse(b"456"), sleeper=lambda _: None)
+    first, second = (downloaded, cached) if download_first else (cached, downloaded)
+    assert cache.get(first) in (b"123", b"456")
+    if budget == 6:
+        assert cache.get(second) in (b"123", b"456")
+        assert len(cache.used) == 2
+    else:
+        with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+            cache.get(second)
+        assert len(cache.used) == 1
+    assert cache.total_bytes == 6
+    assert cache.downloaded_bytes == 3
+    assert cache.requests == 1
+    assert reads == ([budget + 1] if download_first else [budget - 3 + 1])
+
+
+def test_download_validation_readback_has_only_a_local_credit(tmp_path):
+    url = "https://example.org/download"
+    cache = ResearchCache(tmp_path, fetch=True, limits=ResourceLimits(max_total_bytes=3),
+                          opener=lambda *_a, **_k: Response(b"123"), sleeper=lambda _: None)
+    # The actual readback validates and populates provenance even at the limit.
+    assert cache.get(url) == b"123"
+    assert cache.used[sha256(url.encode())]["sha256"] == sha256(b"123")
+    assert cache.total_bytes == cache.downloaded_bytes == 3
+    with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+        cache.get(url)
+    with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+        cache.get("https://example.org/another")
+    assert cache.downloaded_bytes == 3
+
+
+def test_download_credit_does_not_survive_to_next_cached_read(tmp_path):
+    url = "https://example.org/download"
+    cache = ResearchCache(tmp_path, fetch=True, limits=ResourceLimits(max_total_bytes=6),
+                          opener=lambda *_a, **_k: Response(b"123"), sleeper=lambda _: None)
+    assert cache.get(url) == cache.get(url) == b"123"
+    assert cache.total_bytes == 6
+    assert cache.downloaded_bytes == 3
+    assert cache.requests == 1
+
+
+@pytest.mark.parametrize("budget", [1, 5000])
+def test_cache_budget_preflight_rejects_large_envelope_before_open(tmp_path, budget):
+    url = "https://example.org/large-cache"
+    seed_cached_payload(tmp_path, url, b"x" * (budget * 6 + 4096))
+    cache = ResearchCache(tmp_path, limits=ResourceLimits(max_total_bytes=budget))
+    with patch.object(Path, "open", side_effect=AssertionError("oversized cache opened")) as opened:
+        with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+            cache.get(url)
+        opened.assert_not_called()
+    assert cache.total_bytes == cache.requests == 0
+    assert not cache.used
+
+
+@pytest.mark.parametrize("budget,reason", [(2, "resource_byte_budget_exhausted"), (10, "cache_invalid")])
+def test_cache_read_remains_bounded_if_file_grows_after_stat(tmp_path, monkeypatch, budget, reason):
+    url = "https://example.org/growing"
+    path = seed_cached_payload(tmp_path, url, b"a")
+    real_open = Path.open
+    reads = []
+    class GrowingReader:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def read(self, size):
+            result = self.stream.read(size)
+            reads.append((size, len(result)))
+            return result
+
+        def __exit__(self, *_args):
+            self.stream.close()
+    def grow_before_open(file_path, mode, *args, **kwargs):
+        assert file_path == path and mode == "rb"
+        # Controlled local mutation only; accounting and the actual file read
+        # still run. This verifies stat is not the only read-size guard.
+        with real_open(file_path, "ab") as stream:
+            stream.write(b" " * 10_000)
+        return GrowingReader(real_open(file_path, mode, *args, **kwargs))
+    monkeypatch.setattr(Path, "open", grow_before_open)
+    cache = ResearchCache(tmp_path, limits=ResourceLimits(max_total_bytes=budget, max_response_bytes=10))
+    with pytest.raises(ResearchDataError, match=f"^{reason}$"):
+        cache.get(url)
+    bound = budget * 6 + 4096 + 1
+    assert reads == [(bound, bound)]
+    assert not cache.used
+
+
+def test_cached_utf8_payload_bytes_exclude_json_escaping_and_envelope(tmp_path):
+    url = "https://example.org/unicode"
+    payload = '\x00"\\\n한😀'.encode()
+    path = seed_cached_payload(tmp_path, url, payload)
+    assert path.stat().st_size > len(payload)
+    cache = ResearchCache(tmp_path, limits=ResourceLimits(max_total_bytes=len(payload)))
+    assert cache.get(url) == payload
+    assert cache.total_bytes == len(payload)
+
+
+@pytest.mark.parametrize("rejection", ["checksum", "observation"])
+def test_cache_validation_failure_does_not_refund_payload(tmp_path, rejection):
+    url = "https://example.org/rejected"
+    path = seed_cached_payload(tmp_path, url, b"123")
+    if rejection == "checksum":
+        entry = json.loads(path.read_bytes())
+        entry["sha256"] = "wrong"
+        path.write_bytes(canonical_bytes(entry))
+    cache = ResearchCache(tmp_path, limits=ResourceLimits(max_total_bytes=3))
+    reason = "cache_invalid" if rejection == "checksum" else "source_observed_after_asof"
+    with pytest.raises(ResearchDataError, match=f"^{reason}$"):
+        cache.get_asof(url, "2026-09-29")
+    assert cache.total_bytes == 3
+    with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+        cache.get(url)
+
+
+@pytest.mark.parametrize("winner", [b"win", b"123"])
+@pytest.mark.parametrize("budget", [5, 6])
+def test_publication_race_charges_download_and_winner_even_if_identical(tmp_path, monkeypatch, winner, budget):
+    from trend_expansion import research_cache
+    real_link = research_cache.os.link
+    url = "https://example.org/race"
+    def publish_winner(source, destination):
+        seed_cached_payload(tmp_path, url, winner)
+        real_link(source, destination)  # Real FileExistsError and temporary-file cleanup.
+    monkeypatch.setattr(research_cache.os, "link", publish_winner)
+    cache = ResearchCache(tmp_path, fetch=True, limits=ResourceLimits(max_total_bytes=budget),
+                          opener=lambda *_a, **_k: Response(b"123"), sleeper=lambda _: None)
+    if budget == 6:
+        assert cache.get(url) == winner
+        assert cache.used[sha256(url.encode())]["observed_at_utc"] == "2026-09-30T21:00:00+00:00"
+        assert cache.used[sha256(url.encode())]["sha256"] == sha256(winner)
+    else:
+        with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+            cache.get(url)
+        assert not cache.used
+    assert cache.total_bytes == 6
+    assert cache.downloaded_bytes == 3
+    assert cache.requests == 1
+    assert [path.name for path in tmp_path.iterdir()] == [f"{sha256(url.encode())}.json"]
+
+
 class TruncatedResponse(Response):
     def read(self, size=-1):
         partial = super().read(size)
         raise IncompleteRead(partial, 10)
+
+
+@pytest.mark.parametrize("budget,reason,total,requests,read_sizes", [
+    (8, None, 8, 2, [7, 5]),
+    (7, "resource_byte_budget_exhausted", 8, 2, [6, 4]),
+    (4, "resource_byte_budget_exhausted", 4, 1, [3]),
+])
+@pytest.mark.parametrize("short_body", [False, True])
+def test_cached_bytes_and_partial_retry_attempts_share_budget(
+        tmp_path, budget, reason, total, requests, read_sizes, short_body):
+    cached, fetched = "https://example.org/cached", "https://example.org/partial"
+    seed_cached_payload(tmp_path, cached, b"12")
+    responses, reads, pauses = [], [], []
+    class PartialResponse(Response):
+        length = 10 if short_body else None
+
+        def read(self, size=-1):
+            reads.append(size)
+            partial = super().read(size)
+            if short_body:
+                return partial
+            raise IncompleteRead(partial, 10)
+    class CompleteResponse(Response):
+        def read(self, size=-1):
+            reads.append(size)
+            return super().read(size)
+    def open_mock(*_args, **_kwargs):
+        response = PartialResponse(b"ab") if not responses else CompleteResponse(b"cdef")
+        responses.append(response)
+        return response
+    cache = ResearchCache(tmp_path, fetch=True, limits=ResourceLimits(max_total_bytes=budget),
+                          opener=open_mock, sleeper=pauses.append, clock=lambda: 0)
+    assert cache.get(cached) == b"12"
+    if reason:
+        with pytest.raises(ResearchDataError, match=f"^{reason}$"):
+            cache.get(fetched)
+        assert sha256(fetched.encode()) not in cache.used
+        assert not (tmp_path / f"{sha256(fetched.encode())}.json").exists()
+    else:
+        assert cache.get(fetched) == b"cdef"
+    assert cache.total_bytes == total
+    assert cache.downloaded_bytes == total - 2
+    assert len(responses) == requests
+    assert reads == read_sizes
+    assert pauses == ([1, 0.25] if reason is None else [1])
+    assert all(response.closed for response in responses)
+    with pytest.raises(ResearchDataError, match="^resource_byte_budget_exhausted$"):
+        cache.get(cached)
+
+
+@pytest.mark.parametrize("failure", ["network", "close", "encoding", "publication", "pause"])
+def test_failed_downloads_keep_charges_for_subsequent_cache_reads(tmp_path, monkeypatch, failure):
+    from trend_expansion import research_cache
+    cached = "https://example.org/cached"
+    seed_cached_payload(tmp_path, cached, b"12")
+    def write_failure(*_args):
+        raise OSError("disk full")
+    if failure == "publication":
+        monkeypatch.setattr(research_cache, "_atomic_write", write_failure)
+    payload = b"\xff\xff" if failure == "encoding" else b"ab"
+    limits = ResourceLimits(max_total_bytes=4, attempts=1, max_seconds=0.1 if failure == "pause" else 10)
+    reasons = {"network": "network_failed", "close": "network_failed", "encoding": "response_encoding",
+               "publication": "cache_write_failed", "pause": "resource_budget_exhausted"}
+    class CloseFailureResponse(Response):
+        def __exit__(self, *_args):
+            self.close()
+            raise OSError("close failed after reading")
+    def open_mock(*_args, **_kwargs):
+        if failure == "network":
+            return TruncatedResponse(payload)
+        if failure == "close":
+            return CloseFailureResponse(payload)
+        return Response(payload)
+    cache = ResearchCache(tmp_path, fetch=True, limits=limits,
+                          opener=open_mock,
+                          sleeper=lambda _: None, clock=lambda: 0)
+    with pytest.raises(ResearchDataError, match=f"^{reasons[failure]}$"):
+        cache.get("https://example.org/failed")
+    assert cache.total_bytes == cache.downloaded_bytes == 2
+    assert cache.get(cached) == b"12"
+    assert cache.total_bytes == 4
+    assert not (tmp_path / f"{sha256(b'https://example.org/failed')}.json").exists()
 
 
 def test_incomplete_read_retries_without_publishing_partial_bytes(tmp_path):
