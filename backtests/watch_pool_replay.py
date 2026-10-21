@@ -451,32 +451,39 @@ def replay(bundle: dict) -> dict:
                                  'comparable_inputs': False, 'reason': "session_without_quarter_inputs",
                                  'requested_sessions': 1})
     # A missing expansion observation must not leave a more favorable denominator
-    # in one arm. Cash-day comparisons use the intersection of complete days.
+    # in one arm. All capacity comparisons use the intersection of complete days.
     incomplete_days = {row["signal_at"] for row in daily
                        if not row["data_complete"] or row["capacity_cash_ratio"] is None}
     complete_days = {row["signal_at"] for row in daily} - incomplete_days
     for row in daily:
         row["paired_complete_day"] = row["signal_at"] in complete_days
+    for row in source_daily:
+        row["paired_complete_day"] = row["signal_at"] in complete_days
     summary, source_quarterly = [], []
     for cohort in cohorts:
         rows = [row for row in daily if (row["quarter"], row["cap"]) == (cohort["quarter"], cohort["cap"])]
-        ratios = [row["capacity_cash_ratio"] for row in rows
-                  if row["paired_complete_day"]]
+        capacity_rows = [row for row in rows if row["paired_complete_day"]]
+        ratios = [row["capacity_cash_ratio"] for row in capacity_rows]
         summary.append({"quarter": cohort["quarter"], "cap": cohort["cap"], "days": len(rows),
                         "cash_ratio_days": len(ratios),
+                        "capacity_days": len(capacity_rows),
                         "capacity_fraction_days_cash_gt_50": sum(ratio > .5 for ratio in ratios) / len(ratios)
                         if ratios else None,
                         "actual_fraction_days_cash_gt_50": None,
-                        "mean_capacity_entries": sum(row["capacity_entries"] for row in rows) / len(rows)
-                        if rows else None})
+                        "mean_capacity_entries": sum(row["capacity_entries"] for row in capacity_rows)
+                        / len(capacity_rows) if capacity_rows else None})
         for source in SOURCES:
             selected = [row for row in source_daily if (row["quarter"], row["cap"], row["source_pool"])
                         == (cohort["quarter"], cohort["cap"], source)]
+            capacity_selected = [row for row in selected if row["paired_complete_day"]]
             source_quarterly.append({"quarter": cohort["quarter"], "cap": cohort["cap"],
                                      "source_pool": source, "days": len(selected),
+                                     "capacity_days": len(capacity_selected),
                                      **{"mean_" + field: sum(row[field] for row in selected) / len(selected)
                                         if selected else None for field in (
-                                            "watch_count", "trend_ok", "safety_survivors", "new_buy_signals",
+                                            "watch_count", "trend_ok", "safety_survivors", "new_buy_signals")},
+                                     **{"mean_" + field: sum(row[field] for row in capacity_selected)
+                                        / len(capacity_selected) if capacity_selected else None for field in (
                                             "affordable_new_entries", "capacity_entries",
                                             "hypothetical_dollars_invested")}})
     return {
@@ -513,10 +520,11 @@ def write_outputs(result: dict, destination: Path) -> None:
     artifacts = {"comparison.json": (json.dumps(result, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()}
     schemas = {
         "daily": ["quarter", "cap", "signal_at", "capacity_entries", "capacity_cash_ratio", "new_positions"],
-        "source_daily": ["quarter", "cap", "signal_at", "source_pool", "watch_count", "capacity_entries"],
-        "source_quarterly": ["quarter", "cap", "source_pool", "days", "mean_capacity_entries"],
+        "source_daily": ["quarter", "cap", "signal_at", "source_pool", "watch_count", "capacity_entries",
+                         "paired_complete_day"],
+        "source_quarterly": ["quarter", "cap", "source_pool", "days", "capacity_days", "mean_capacity_entries"],
         "symbols": ["quarter", "cap", "signal_at", "symbol", "source_pool", "reason"],
-        "quarterly": ["quarter", "cap", "days", "capacity_fraction_days_cash_gt_50"],
+        "quarterly": ["quarter", "cap", "days", "capacity_days", "capacity_fraction_days_cash_gt_50"],
         "coverage": ["quarter", "comparable_inputs", "reason", "requested_sessions"],
         "cohorts": ["quarter", "cap", "core_count", "expansion_count", "overlap", "watch_names"],
     }

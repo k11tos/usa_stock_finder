@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -213,6 +214,70 @@ def test_data_failures_not_signal_scarcity_and_paired_denominators(change, reaso
     assert result["daily"][1]["cash_cause"] == "data_unavailable"
     assert all(row["cash_ratio_days"] == 0 for row in result["quarterly"])
     assert all(row["capacity_fraction_days_cash_gt_50"] is None for row in result["quarterly"])
+    assert all(row["capacity_days"] == 0 and row["mean_capacity_entries"] is None
+               for row in result["quarterly"])
+    for row in result["source_quarterly"]:
+        assert row["days"] == 1
+        assert row["capacity_days"] == 0
+        for field in ("affordable_new_entries", "capacity_entries", "hypothetical_dollars_invested"):
+            assert row["mean_" + field] is None
+
+
+@pytest.mark.parametrize("missing", [None, "bars", "metadata", "execution_quotes"])
+@pytest.mark.parametrize("symbol", ["AAA", "BBB"])
+@pytest.mark.parametrize("first_core_price", [30, 101])
+def test_capacity_means_use_paired_days_under_asymmetric_missingness(missing, symbol, first_core_price):
+    bundle = sample_bundle()
+    first = bundle["sessions"][0]
+    second = deepcopy(first)
+    second["signal_at"] = "2025-01-06T14:00:00Z"
+    second["state"].update(asof_at="2025-01-06T13:00:00Z", available_at="2025-01-06T13:00:00Z")
+    for quote in second["execution_quotes"]:
+        quote.update(asof_at="2025-01-06T13:00:00Z", available_at="2025-01-06T13:00:00Z")
+    bundle["sessions"].append(second)
+    first["execution_quotes"][0]["price"] = first_core_price
+    if missing == "execution_quotes":
+        first["execution_quotes"] = [row for row in first["execution_quotes"] if row["symbol"] != symbol]
+    elif missing:
+        # The same frozen observations are unavailable on day one, available
+        # on day two. No future information repairs the earlier evaluation.
+        for row in bundle[missing]:
+            if row["symbol"] == symbol:
+                row["available_at"] = "2025-01-04T13:00:00Z"
+    result = replay(bundle)
+    paired_days = 1 if missing else 2
+    for row in result["quarterly"]:
+        assert row["days"] == 2
+        assert row["capacity_days"] == row["cash_ratio_days"] == paired_days
+        expected = 1 if row["cap"] == 0 else 2
+        if not missing and first_core_price == 101:
+            expected -= .5
+        assert row["mean_capacity_entries"] == expected
+    for row in result["source_quarterly"]:
+        assert row["days"] == 2
+        assert row["capacity_days"] == paired_days
+        expected = int(row["source_pool"] == "core_quant" or row["cap"] != 0)
+        if not missing and row["source_pool"] == "core_quant" and first_core_price == 101:
+            expected = .5
+        assert row["mean_capacity_entries"] == expected
+        assert row["mean_affordable_new_entries"] == expected
+        assert row["mean_hypothetical_dollars_invested"] == expected * 90
+        # Signal/coverage means retain their established all-observation denominator.
+        selected = [daily for daily in result["source_daily"]
+                    if (daily["cap"], daily["source_pool"]) == (row["cap"], row["source_pool"])]
+        for field in ("watch_count", "trend_ok", "safety_survivors", "new_buy_signals"):
+            assert row["mean_" + field] == sum(day[field] for day in selected) / 2
+        assert sum(day["paired_complete_day"] for day in selected) == paired_days
+    if missing:
+        incomplete = [row for row in result["daily"] if row["signal_at"] == first["signal_at"]]
+        assert all(not row["paired_complete_day"] for row in incomplete)
+        affected = next(row for row in incomplete if row["cap"] == 30)
+        assert affected["data_failure_count"] == 1
+        assert affected["cash_cause"] == "data_unavailable"
+        assert affected["signal_capacity_gap_dollars"] is None
+        assert affected["signal_scarcity"] is False
+        # Partial/zero counts stay visible as diagnostics, excluded from means.
+        assert affected["capacity_entries"] == int(symbol == "AAA" or first_core_price == 30)
 
 
 def test_future_bars_and_late_observations_cannot_leak():
@@ -260,6 +325,13 @@ def test_empty_inputs_stable_artifacts_cli_and_no_fake_metrics(tmp_path):
     assert main(["--output", str(second)]) == 0
     assert {p.name: p.read_bytes() for p in first.iterdir()} == {p.name: p.read_bytes() for p in second.iterdir()}
     result = json.loads((first / "comparison.json").read_bytes())
+    root = Path(__file__).resolve().parents[1]
+    for name, digest in result["implementation_sha256"].items():
+        assert digest == hashlib.sha256((root / name).read_bytes()).hexdigest()
+    assert result["resolved_data_quality_config"] == {
+        "MIN_PRICE_THRESHOLD": replay_module.DataQualityConfig.MIN_PRICE_THRESHOLD}
+    assert (first / "comparison.json").read_text() == json.dumps(
+        result, sort_keys=True, indent=2, allow_nan=False) + "\n"
     assert result["conclusion"] == "INCONCLUSIVE"
     assert not result["cohorts"]
     assert result["performance"]["total_return"] is None
@@ -493,6 +565,8 @@ def test_strict_cash_threshold_and_zero_equity_denominators():
     result = replay(bundle)
     assert all(row["capacity_entries"] == 0 for row in result["daily"])
     assert all(row["cash_ratio_days"] == 0 for row in result["quarterly"])
+    assert all(row["capacity_days"] == 0 and row["mean_capacity_entries"] is None
+               for row in result["quarterly"] + result["source_quarterly"])
 
 
 def test_unqualified_watch_name_remains_watch_name():

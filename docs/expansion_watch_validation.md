@@ -208,6 +208,18 @@ Cash-day fractions use **strict >50%** and only the intersection of complete,
 nonzero-equity dates across all arms. Denominators and excluded dates remain
 visible. There is no fabricated source-specific cash account.
 
+Quarterly `mean_capacity_entries` and source-level `mean_affordable_new_entries`,
+`mean_capacity_entries` and `mean_hypothetical_dollars_invested` use that same
+`paired_complete_day` intersection. Their denominator is `capacity_days`, equal
+to `cash_ratio_days` in the arm summary; no eligible paired dates means **null**,
+including sources with no watched names. A genuinely empty source on a complete
+paired day contributes zero. `days` still counts every observed session.
+Source watch/trend/safety/new-buy-signal means retain their existing `days`
+denominator and describe observed funnel diagnostics, not comparable capacity.
+Daily and source-daily counts retain partial observations; the paired flag,
+exclusion reasons, failure counts and coverage distinguish them from complete
+observations. Missing data must not be read as zero qualified signals.
+
 ## Evidence gate for Stage E review
 
 Register thresholds and intended reserve/budget/cost policies **before** forward
@@ -256,7 +268,7 @@ risk outcomes; it cannot emit a favorable activation verdict.
    volatility, turnover, hit rate, concentration and SPY/IWM. No Stage E rollout
    until that evidence has been reviewed.
 
-## Verification of this implementation
+## Original implementation verification
 
 Python: `/workspace/venvs/usa_stock_finder/bin/python` (3.12).
 
@@ -289,3 +301,49 @@ Files added: `backtests/watch_pool_inputs.py`, `backtests/watch_pool_replay.py`,
 contract/report and the nine coverage artifacts. Documentation status and a
 narrow CSV gitignore exception were updated. The generic backtest engine and
 all production trading files remain unchanged.
+
+## PR #174 review follow-up (2026-10-21)
+
+Starting PR HEAD exactly matched reviewed commit `4b27a58327`; no intervening
+changes or unrelated local edits were present. Independently verified findings:
+
+- Review `5596108070` P1: **valid**. Completeness already excluded missing OHLCV,
+  metadata and execution quotes from paired cash-day fractions, but quarterly
+  capacity means still included their zero/partial counts. Capacity means now
+  share that paired denominator, with explicit `capacity_days` and null means
+  when no complete pairs exist. Raw diagnostics and other denominators remain.
+- Review `5596108070` P2: **valid**. The documented no-bundle command reproduced
+  stale input-adapter/replay hashes and missing `resolved_data_quality_config`.
+  Regenerated all nine artifacts from the final implementation. Four changed:
+  comparison JSON and the quarterly, source-daily and source-quarterly CSVs.
+  The latter headers include the additive denominator/eligibility fields.
+- Review `5595557278`: Stage C full parameter validation and effective
+  data-quality provenance were **already fixed in code**, with existing
+  regressions covering market-cap gates, schema/type failures, environment
+  overrides and retained parameter evidence. No duplicate fixes were made.
+  Regenerated artifacts now reflect those corrections too.
+
+Validation using the documented Python environment and commands:
+
+- Focused eight-file suite listed above: **483 passed**.
+- Full `python -m pytest -q`: **1,598 passed, 35 subtests passed**.
+- `pylint $(git ls-files '*.py')`: **10.00/10**, exit 0.
+- `python -m compileall -q .` and `git diff --check`: passed.
+- Added 32 deterministic two-session replay cases spanning complete pairs,
+  missing Core/Expansion OHLCV, metadata or quotes, and partial/zero capacity.
+  Extended no-complete-pair, zero-equity and CLI provenance/serialization tests.
+- Ran the documented coverage CLI into two fresh directories; all nine files
+  matched byte for byte and matched the checked-in outputs. All 11 implementation
+  hashes were checked against source bytes; canonical sorted JSON retained
+  schema version 1 and the resolved threshold `0.01`.
+- Reviewed commit [PR Check run 39559074227](https://github.com/k11tos/usa_stock_finder/actions/runs/39559074227)
+  passed syntax/tests, lint and linux/amd64 + linux/arm64 Docker builds. This is
+  evidence for the reviewed commit, not hosted validation of this follow-up.
+  Local Docker inspection failed on daemon-socket permissions, so no local
+  image build was run. No Docker files changed.
+
+The workspace still lacks genuine replay inputs. Coverage remains zero and
+the conclusion remains **INCONCLUSIVE**; no historical data or metrics were
+invented. Production candidate selection, entries/exits, quantities, Telegram,
+B-plan, schedules, Stage C cap 50 and research $100/caps 30/50/100 contracts are
+unchanged. Stage E remains inactive.

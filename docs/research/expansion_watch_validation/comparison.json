@@ -18,8 +18,8 @@
   ],
   "daily": [],
   "implementation_sha256": {
-    "backtests/watch_pool_inputs.py": "23edabe13caab3932a877fbd4fc9477345d9bd17a06d87e86927073c3a7fc239",
-    "backtests/watch_pool_replay.py": "d260d25cae575f0f2fd84fa5a1ecd06af2906ac9d3772f46e1360dc41e0b0905",
+    "backtests/watch_pool_inputs.py": "92839e1bfb6adbbf1551df671ddb40d840a8f96ab89427c4b02404a8d49353de",
+    "backtests/watch_pool_replay.py": "a8ba923bf8a1113e7163c718e48608ba32039d4e9018c19572b3e00266bd89d8",
     "config.py": "b49903d11d1e84ee3b44f8baf76ddcae5d04698dcddff09061e98a8089bc498f",
     "main.py": "9964bf6ff80a998a20584c5b069c275d251176f582f7f0da5fa10d19718baaec",
     "stock_analysis.py": "f748277ffa4c931a4a047318c0c97de91a66fd7fb684ae7b4e2dfad1647a3f31",
@@ -83,6 +83,9 @@
       "experiment_only": true
     }
   ],
+  "resolved_data_quality_config": {
+    "MIN_PRICE_THRESHOLD": 0.01
+  },
   "resolved_strategy_config": {
     "CORRELATION_THRESHOLD_RELAXED": 40.0,
     "CORRELATION_THRESHOLD_STRICT": 50.0,
