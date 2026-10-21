@@ -1,0 +1,414 @@
+{
+  "fixture_notice": "Offline reduced fact structures, checked 2026-10-20. SEC cover-page rendered declarations were checked against indexed filing markup at markup_url. Styling/IDs omitted; synthetic class/ticker wrappers are supplied by tests. Mutation cases intentionally alter these structures; they are not genuine filings or investment evidence.",
+  "sources": {
+    "deltasoft_10k": {
+      "filing_url": "https://www.sec.gov/Archives/edgar/data/2020919/000168316825006862/deltasoft_i10k-033125.htm",
+      "markup_url": "https://www.secinfo.com/d1jbnf.I6M1.f.htm?Show=1",
+      "structure": "2015 registry booleanfalse on a checked No box."
+    },
+    "dcx_20f": {
+      "filing_url": "https://www.sec.gov/Archives/edgar/data/1957413/000149315226020595/form20-f.htm",
+      "markup_url": "https://www.secinfo.com/d1DY5f.NK3s.f.htm?Show=1",
+      "structure": "2015 registry booleanfalse on a checked No box."
+    },
+    "spirits_10k": {
+      "filing_url": "https://www.sec.gov/Archives/edgar/data/1434737/000147793226000787/srsg_10k.htm",
+      "markup_url": "https://www.secinfo.com/d1D393.NXs.f.htm?Show=1",
+      "structure": "SEC boolballotbox on a checked Yes box."
+    },
+    "reto_20f": {
+      "filing_url": "https://www.sec.gov/Archives/edgar/data/1687277/000121390025041195/ea0241187-20f_retoeco.htm",
+      "markup_url": "https://www.secinfo.com/d151E3.I1874.f.htm?Show=All",
+      "structure": "fixed-false on a checked No box with nested span."
+    }
+  },
+  "cases": [
+    {
+      "id": "deltasoft_checked_no",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": false,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"From2024-04-01to2025-03-31\" format=\"ixt:booleanfalse\">&#9746;</ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "dcx_checked_no",
+      "source": "dcx_20f",
+      "synthetic_mutation": false,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"From2025-01-01to2025-12-31\" format=\"ixt:booleanfalse\">&#9746;</ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "spirits_checked_yes",
+      "source": "spirits_10k",
+      "synthetic_mutation": false,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"From2024-01-01to2024-12-31\" format=\"ixt-sec:boolballotbox\">&#9746;</ix:nonNumeric>",
+      "shell_status": "explicit_true",
+      "status": "not_common"
+    },
+    {
+      "id": "reto_checked_no",
+      "source": "reto_20f",
+      "synthetic_mutation": false,
+      "registry_version": "2020-02-12",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"c0\" format=\"ixt:fixed-false\"><span>&#9746;</span></ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "literal_true",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">true</ix:nonNumeric>",
+      "shell_status": "explicit_true",
+      "status": "not_common"
+    },
+    {
+      "id": "literal_1",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">1</ix:nonNumeric>",
+      "shell_status": "explicit_true",
+      "status": "not_common"
+    },
+    {
+      "id": "literal_false",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "literal_0",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">0</ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "booleantrue_checked_yes",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:booleantrue\"><span>&#9746;</span></ix:nonNumeric>",
+      "shell_status": "explicit_true",
+      "status": "not_common"
+    },
+    {
+      "id": "fixed_true",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2020-02-12",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:fixed-true\">&#9746;</ix:nonNumeric>",
+      "shell_status": "explicit_true",
+      "status": "not_common"
+    },
+    {
+      "id": "fixed_false_2022",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2022-02-16",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:fixed-false\">&#9745;</ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "fixed_transform_ignores_text",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:booleanfalse\">true</ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "ballot_empty",
+      "source": "spirits_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt-sec:boolballotbox\"><span>&#9744;</span></ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "ballot_tick",
+      "source": "spirits_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt-sec:boolballotbox\"><span>&#9745;</span></ix:nonNumeric>",
+      "shell_status": "explicit_true",
+      "status": "not_common"
+    },
+    {
+      "id": "ballot_cross",
+      "source": "spirits_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt-sec:boolballotbox\"><span>&#9746;</span></ix:nonNumeric>",
+      "shell_status": "explicit_true",
+      "status": "not_common"
+    },
+    {
+      "id": "missing",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "",
+      "shell_status": "missing",
+      "status": "unknown"
+    },
+    {
+      "id": "literal_empty",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\"></ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "literal_no",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">no</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "literal_mixed",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false true</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "literal_malformed",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">maybe</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "malformed_ballot",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt-sec:boolballotbox\">false</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "unsupported_transform_false",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:unknown-boolean\">false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "wrong_registry_function",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:fixed-false\">false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "unsupported_registry",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2099-01-01",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:booleanfalse\">false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "unbound_prefix",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"unbound:booleanfalse\">false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "empty_format",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"\">false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "nil_false_text",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" xsi:nil=\"true\">false</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "nil_fixed_false",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:booleanfalse\" xsi:nil=\"true\">&#9746;</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "missing_context",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"\">false</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "continued",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" continuedAt=\"next\">false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "unfinished",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "mismatched_closing_tag",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\"><span>false</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "contradictory",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:booleanfalse\">&#9746;</ix:nonNumeric><ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt-sec:boolballotbox\">&#9746;</ix:nonNumeric>",
+      "shell_status": "contradictory",
+      "status": "not_common"
+    },
+    {
+      "id": "false_plus_unsupported",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonNumeric><ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:unknown-boolean\">false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "false_plus_malformed",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonNumeric><ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">maybe</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "duplicate_false",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonNumeric><ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">0</ix:nonNumeric>",
+      "shell_status": "explicit_false",
+      "status": "verified"
+    },
+    {
+      "id": "synthetic_old_name_only",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompanyBoolean\" contextRef=\"entity\">false</ix:nonNumeric>",
+      "shell_status": "missing",
+      "status": "unknown"
+    },
+    {
+      "id": "false_then_nested_shell",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonNumeric><ix:nonNumeric name=\"dei:EntityRegistrantName\" contextRef=\"entity\">Issuer <ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">true</ix:nonNumeric></ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "false_then_unfinished_fact",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonNumeric><ix:nonNumeric name=\"dei:EntityRegistrantName\" contextRef=\"entity\">Issuer",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "false_then_excluded_content",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonNumeric><ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\">false<ix:exclude>true</ix:exclude></ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    },
+    {
+      "id": "nonfraction_shell",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonFraction name=\"dei:EntityShellCompany\" contextRef=\"entity\">false</ix:nonFraction>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "valueless_format",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format>false</ix:nonNumeric>",
+      "shell_status": "unsupported",
+      "status": "unknown"
+    },
+    {
+      "id": "duplicate_format",
+      "source": "deltasoft_10k",
+      "synthetic_mutation": true,
+      "registry_version": "2015-02-26",
+      "shell_markup": "<ix:nonNumeric name=\"dei:EntityShellCompany\" contextRef=\"entity\" format=\"ixt:unknown\" format=\"ixt:booleanfalse\">false</ix:nonNumeric>",
+      "shell_status": "ambiguous",
+      "status": "unknown"
+    }
+  ]
+}
