@@ -60,6 +60,7 @@ from stock_analysis import UsaStockFinder
 from stock_operations import APIError, fetch_account_balance, fetch_holdings_detail, fetch_us_stock_holdings
 from stop_loss_cooldown import is_in_cooldown
 from telegram_utils import build_daily_report_message, build_performance_summary_message, send_telegram_message
+from trend_expansion.live_watch import combine_watch
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,7 @@ def evaluate_symbol_eligibility(metadata: dict[str, Any] | None) -> tuple[bool, 
 def is_tradable_common_stock(
     metadata: dict[str, Any] | None,
     price_history: pd.DataFrame | None = None,
+    *, verified_common_equity: bool = False,
 ) -> tuple[bool, str | None]:
     """Conservative tradability filter that avoids non-common stock instruments."""
     is_eligible, reason = evaluate_symbol_eligibility(metadata)
@@ -185,7 +187,7 @@ def is_tradable_common_stock(
         return False, "missing_metadata"
 
     normalized = {str(key).lower(): value for key, value in metadata.items()}
-    reason = _get_non_common_stock_reason(normalized)
+    reason = _get_non_common_stock_reason(normalized, verified_common_equity=verified_common_equity)
     if reason:
         return False, reason
     reason = _get_invalid_market_price_reason(normalized)
@@ -198,7 +200,9 @@ def is_tradable_common_stock(
     return True, None
 
 
-def _get_non_common_stock_reason(normalized_metadata: dict[str, Any]) -> str | None:
+def _get_non_common_stock_reason(
+    normalized_metadata: dict[str, Any], *, verified_common_equity: bool = False,
+) -> str | None:
     quote_type = str(normalized_metadata.get("quotetype", "")).strip().lower()
     if quote_type and quote_type not in {"equity"}:
         return f"quote_type_not_equity:{quote_type}"
@@ -206,6 +210,8 @@ def _get_non_common_stock_reason(normalized_metadata: dict[str, Any]) -> str | N
     category_fields = ("shortname", "longname", "category", "instrumenttype", "securityname", "typedisp")
     searchable_text = " ".join(str(normalized_metadata.get(field, "")) for field in category_fields).lower()
     for pattern, term_reason in _NON_COMMON_STOCK_PATTERNS:
+        if verified_common_equity and term_reason == "non_common_stock:trust":
+            continue
         if pattern.search(searchable_text):
             return term_reason
     return None
@@ -291,12 +297,16 @@ def _fetch_symbol_exchange(symbol: str) -> str | None:
     return None
 
 
-def _filter_entry_symbols_by_exchange(entry_symbols: list[str]) -> list[str]:
+def _filter_entry_symbols_by_exchange(
+    entry_symbols: list[str], *, verified_symbols: set[str] | None = None,
+) -> list[str]:
     """Filter entry symbols to conservative allowed exchanges before deeper analysis."""
     allowed_symbols: list[str] = []
     for symbol in entry_symbols:
         metadata = _fetch_symbol_metadata(symbol)
-        is_eligible, skip_reason = is_tradable_common_stock(metadata)
+        is_eligible, skip_reason = is_tradable_common_stock(
+            metadata, verified_common_equity=symbol in (verified_symbols or set())
+        )
         if not is_eligible:
             logger.info("Skipping %s: %s.", symbol, skip_reason)
             continue
@@ -625,6 +635,7 @@ def build_buy_funnel_lines(stage_counts: dict[str, Any]) -> list[str]:
 
 def log_buy_funnel(stage_counts: dict[str, Any]) -> list[str]:
     """Log and return buy-funnel diagnostics for operational reporting."""
+    logger.info("BUY_FUNNEL %s", json.dumps(stage_counts, sort_keys=True))
     lines = build_buy_funnel_lines(stage_counts)
     for line in lines:
         logger.info(line)
@@ -1264,11 +1275,15 @@ def _load_and_validate_runtime_prerequisites() -> bool:
 
 def _prepare_finder_and_candidates(
     current_holding_symbols: list[str],
-) -> tuple[UsaStockFinder, list[str], list[str], set[str], dict[str, int]] | None:
+) -> tuple[UsaStockFinder, list[str], list[str], set[str], dict[str, Any]] | None:
     """Prepare stock finder and initial buy/hold candidates."""
     raw_entry_symbols = read_csv_first_column(os.path.join(".", "portfolio/portfolio.csv"))
-    entry_symbols = _filter_entry_symbols_by_exchange(raw_entry_symbols)
-    source_pool_by_symbol = _build_source_pool_map(entry_symbols)
+    combined_symbols, source_pool_by_symbol, source_counts = combine_watch(raw_entry_symbols)
+    verified_symbols = {symbol for symbol, source in source_pool_by_symbol.items() if source == "trend_expansion"}
+    if verified_symbols:
+        entry_symbols = _filter_entry_symbols_by_exchange(combined_symbols, verified_symbols=verified_symbols)
+    else:
+        entry_symbols = _filter_entry_symbols_by_exchange(combined_symbols)
 
     seen_symbols: set[str] = set()
     analysis_symbols: list[str] = []
@@ -1285,7 +1300,8 @@ def _prepare_finder_and_candidates(
     )
 
     finder = UsaStockFinder(analysis_symbols)
-    finder.source_pool_by_symbol = source_pool_by_symbol
+    finder.source_pool_by_symbol = {symbol: source_pool_by_symbol[symbol] for symbol in entry_symbols}
+    finder.watch_source_counts = source_counts
 
     if not finder.is_data_valid():
         logger.error("Invalid data in UsaStockFinder")
@@ -1297,11 +1313,12 @@ def _prepare_finder_and_candidates(
     buy_items = [symbol for symbol in buy_items if symbol in entry_symbol_set]
     not_sell_items = [symbol for symbol in not_sell_items if symbol in entry_symbol_set]
     funnel_stage_counts = {
-        "initial_input_symbols": len(raw_entry_symbols),
-        "tradability_excluded_symbols": len(raw_entry_symbols) - len(entry_symbols),
+        "initial_input_symbols": len(combined_symbols),
+        "tradability_excluded_symbols": len(combined_symbols) - len(entry_symbols),
         "exchange_eligible_symbols": len(entry_symbols),
         "trend_eligible_symbols": len(buy_items),
     }
+    funnel_stage_counts.update(source_counts)
     return finder, buy_items, not_sell_items, entry_symbol_set, funnel_stage_counts
 
 
@@ -1839,6 +1856,14 @@ def main() -> None:
         current_holdings_detail=current_holdings_detail,
     )
     funnel_stage_counts["final_buy_candidates"] = len(buy_items)
+    funnel_stage_counts["affordable_new_entries"] = sum(
+        symbol not in set(us_stock_holdings) and info.get("shares_to_buy", 0) > 0
+        for symbol, info in (share_quantities or {}).items()
+    )
+    funnel_stage_counts["safety_exclusions"] = (
+        funnel_stage_counts["tradability_excluded_symbols"]
+        + funnel_stage_counts["trend_eligible_symbols"] - len(buy_items)
+    )
     log_buy_funnel(funnel_stage_counts)
     buy_candidate_records = _build_buy_candidate_records(
         buy_items, getattr(finder, "source_pool_by_symbol", None)
@@ -1846,9 +1871,13 @@ def main() -> None:
     if buy_candidate_records:
         logger.info("Final buy candidates with source pools: %s", buy_candidate_records)
 
+    actionable_buy_items = buy_items
+    if any(source == "trend_expansion" for source in getattr(finder, "source_pool_by_symbol", {}).values()):
+        actionable_buy_items = [symbol for symbol in buy_items
+                                if (share_quantities or {}).get(symbol, {}).get("shares_to_buy", 0) > 0]
     telegram_message = generate_telegram_message(
         us_stock_holdings,
-        buy_items,
+        actionable_buy_items,
         not_sell_items,
         share_quantities,
         sell_quantities,

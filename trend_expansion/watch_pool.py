@@ -135,7 +135,7 @@ def build_watch_pool(*, listing_dir: Path, core_csv: Path, core_asof_date: str,
             symbol = listing["symbol"]
             row = {"symbol": symbol, "source_pool": "trend_expansion", "asof_timestamp": cutoff,
                    "core_overlap": symbol.replace(".", "-") in core_set, "ohlcv_validity": "not_evaluated",
-                   "verification": {"status": "not_evaluated"}, "reason": None}
+                   "verification": {"status": "not_evaluated"}, "listing": dict(listing), "reason": None}
             audit.append(row)
             if row["core_overlap"]:
                 row["reason"] = "core_overlap"
@@ -189,7 +189,8 @@ def build_watch_pool(*, listing_dir: Path, core_csv: Path, core_asof_date: str,
     watch.extend({**{key: row[key] for key in _COLUMNS if key in row}, "asof_date": asof_date,
                   "universe_type": "quarterly_watch", "verification_status": "verified"} for row in selected)
     reasons = dict(sorted(Counter(row["reason"] for row in audit).items()))
-    metadata = {"schema_version": 1, "research_only": True, "asof_date": asof_date,
+    metadata = {"schema_version": 2, "finalist_verification": "SEC_operating_common_equity",
+                "research_only": True, "asof_date": asof_date,
                 "session_date": session_date, "asof_timestamp": cutoff, "rebalance_cadence": "quarterly_manual",
                 "parameters": asdict(params), "resource_limits": asdict(cache.limits),
                 "lineage": lineage, "raw_sources": dict(sorted(cache.used.items())),

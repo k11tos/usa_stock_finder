@@ -178,6 +178,15 @@ class StrategyConfig:
     )
 
 
+class TrendExpansionConfig:
+    """Opt-in local quarterly watch; rollback requires only ENABLED=False."""
+
+    ENABLED = os.getenv("TREND_EXPANSION_ENABLED", "False").lower() == "true"
+    ARTIFACT_DIR = os.getenv("TREND_EXPANSION_ARTIFACT_DIR", "")
+    ACTIVATION_REVIEW = os.getenv("TREND_EXPANSION_ACTIVATION_REVIEW", "")
+    MAX_NAMES = os.getenv("TREND_EXPANSION_MAX_NAMES", "50")
+
+
 class InvestmentConfig:
     """Investment calculation parameters."""
 
@@ -284,6 +293,12 @@ def get_config() -> dict[str, Any]:
             "event_quarantine_max_drawdown_from_post_gap_high_pct": (
                 StrategyConfig.EVENT_QUARANTINE_MAX_DRAWDOWN_FROM_POST_GAP_HIGH_PCT
             ),
+        },
+        "trend_expansion": {
+            "enabled": TrendExpansionConfig.ENABLED,
+            "artifact_dir": TrendExpansionConfig.ARTIFACT_DIR,
+            "activation_review": TrendExpansionConfig.ACTIVATION_REVIEW,
+            "max_names": TrendExpansionConfig.MAX_NAMES,
         },
         "investment": {
             "reserve_ratio": InvestmentConfig.RESERVE_RATIO,
