@@ -650,3 +650,130 @@ def test_daily_bar_captured_before_close_is_not_a_completed_bar():
     result = replay(bundle)
     assert result["daily"][1]["exclusions"] == {"observation_before_bar_close": 1}
     assert result["daily"][1]["data_complete"] is False
+
+
+@pytest.mark.parametrize("symbol", ["AAA", "BBB"])
+@pytest.mark.parametrize(("day", "available", "reason"), [
+    ("2023-12-01", "2023-12-01T22:00:00Z", ""),
+    ("2024-01-03", "2024-01-03T22:00:00Z", ""),  # exclusive 365-day lower bound
+    ("2024-01-04", "2024-01-04T22:00:00Z", "ohlcv_api_error"),
+    ("2025-01-02", "2025-01-02T22:00:00Z", "ohlcv_api_error"),
+    ("2025-01-02", "2025-01-03T14:00:00Z", "ohlcv_api_error"),  # signal cutoff inclusive
+    ("2025-01-02", "2025-01-03T14:00:01Z", ""),
+    ("2025-01-03", "2025-01-03T13:00:00Z", ""),  # future session, even if available
+])
+def test_bar_errors_only_affect_required_asof_window(symbol, day, available, reason):
+    bundle = sample_bundle()
+    # Error rows deliberately have no OHLCV payload. Out-of-window provider
+    # failures cannot poison a complete pair; required-window failures must.
+    bundle["bars"].append({'symbol': symbol, 'date': day, 'available_at': available,
+                           'error': "provider_request_failed"})
+    result = replay(bundle)
+    assert result["coverage"][0]["comparable_inputs"] is True
+    assert all(row["paired_complete_day"] == (not reason) for row in result["daily"])
+    for row in result["daily"]:
+        affected = bool(reason) and (symbol == "AAA" or row["cap"] != 0)
+        assert row["exclusions"] == ({reason: 1} if affected else {})
+        assert row["data_complete"] == (not affected)
+        assert row["data_failure_count"] == int(affected)
+        if affected:
+            assert row["cash_cause"] == "data_unavailable"
+            assert row["signal_capacity_gap_dollars"] is None
+            assert row["signal_scarcity"] is False
+        else:
+            assert row["capacity_entries"] == (1 if row["cap"] == 0 else 2)
+    assert all(row["capacity_days"] == (0 if reason else 1) for row in result["quarterly"])
+    assert all(row["paired_complete_day"] == (not reason) for row in result["source_daily"])
+    assert all(row["capacity_days"] == (0 if reason else 1) for row in result["source_quarterly"])
+
+
+@pytest.mark.parametrize("kind", ["duplicate", "before_close", "corrupt"])
+def test_obsolete_integrity_failures_do_not_affect_current_window(kind):
+    bundle = sample_bundle()
+    old = dict(bundle["bars"][-1], date="2024-01-03", available_at="2024-01-03T22:00:00Z")
+    if kind == "duplicate":
+        bundle["bars"].append(dict(old))
+    elif kind == "before_close":
+        old["available_at"] = "2024-01-03T15:00:00Z"
+    else:
+        old["close"] = "corrupt"
+    expected = replay(sample_bundle())
+    bundle["bars"].append(old)
+    assert replay(bundle) == expected
+
+
+@pytest.mark.parametrize(("change", "reason"), [
+    ("gap", "history_gap_or_suspension"), ("warmup", "insufficient_history"),
+    ("missing_column", "invalid_ohlcv"), ("range", "invalid_ohlc_range"),
+])
+def test_old_history_cannot_repair_missing_or_corrupt_required_data(change, reason):
+    bundle = sample_bundle()
+    # Plenty of obsolete history cannot satisfy the daily MA warmup.
+    old = [dict(bundle["bars"][-1], date=day.date().isoformat(),
+                available_at=day.date().isoformat() + "T22:00:00Z")
+           for day in pd.bdate_range(end="2024-01-03", periods=252)]
+    if change == "gap":
+        bundle["bars"] = [row for row in bundle["bars"] if row["symbol"] != "BBB"
+                          or not "2024-06-03" <= row["date"] <= "2024-06-07"]
+    elif change == "warmup":
+        bundle["bars"] = bundle["bars"][:252] + bundle["bars"][-150:]
+    elif change == "missing_column":
+        for row in bundle["bars"]:
+            if row["symbol"] == "BBB":
+                del row["volume"]
+    else:
+        bundle["bars"][-1]["low"] = 100
+    bundle["bars"] += old
+    result = replay(bundle)
+    assert result["daily"][1]["exclusions"] == {reason: 1}
+    assert result["daily"][1]["data_complete"] is False
+    assert all(not row["paired_complete_day"] for row in result["daily"])
+    assert all(row["capacity_days"] == 0 for row in result["quarterly"])
+
+
+@pytest.mark.parametrize(("asof", "reason"), [
+    ("2024-12-27T14:00:00Z", ""),  # exactly seven elapsed days, inclusive
+    ("2024-12-27T09:00:00-05:00", ""),  # same instant in exchange-local offset
+    ("2024-12-27T13:59:59Z", "stale_metadata"),
+    ("2024-12-27T08:00:00Z", "stale_metadata"),
+    ("2024-12-27T14:00:01Z", ""),
+    ("2025-01-03T14:00:00Z", ""),
+    ("2025-01-03T14:00:01Z", "missing_asof_metadata"),
+])
+def test_metadata_full_elapsed_freshness_and_paired_diagnostics(asof, reason):
+    bundle = sample_bundle()
+    bundle["metadata"][-1].update(asof_at=asof, available_at=asof)
+    result = replay(bundle)
+    affected = result["daily"][1]
+    assert affected["exclusions"] == ({reason: 1} if reason else {})
+    assert affected["data_complete"] == (not reason)
+    assert affected["data_failure_count"] == int(bool(reason))
+    assert all(row["paired_complete_day"] == (not reason) for row in result["daily"])
+    assert all(row["capacity_days"] == (0 if reason else 1) for row in result["quarterly"])
+    if reason:
+        assert affected["cash_cause"] == "data_unavailable"
+        assert affected["signal_capacity_gap_dollars"] is None
+    else:
+        assert affected["capacity_entries"] == 2
+
+
+@pytest.mark.parametrize("field", ["asof_at", "available_at"])
+def test_future_metadata_never_overrides_available_fresh_observation(field):
+    bundle = sample_bundle()
+    expected = replay(bundle)
+    future = dict(bundle["metadata"][-1], error="future_provider_failure")
+    future[field] = "2025-01-03T14:00:01Z"
+    bundle["metadata"].append(future)
+    assert replay(bundle) == expected
+
+
+@pytest.mark.parametrize("field", ["asof_at", "available_at"])
+@pytest.mark.parametrize("invalid", [None, "NaT", "not-a-timestamp", "2025-01-03T13:00:00", "missing"])
+def test_invalid_metadata_timestamps_keep_structural_rejection(field, invalid):
+    bundle = sample_bundle()
+    if invalid == "missing":
+        del bundle["metadata"][-1][field]
+    else:
+        bundle["metadata"][-1][field] = invalid
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        replay(bundle)

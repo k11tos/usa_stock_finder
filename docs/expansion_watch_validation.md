@@ -161,12 +161,20 @@ original/supplemental source lineage and security failures are retained.
 At each daily signal time, only bars at/before `bar_date`, available by the
 signal, are used. Daily bars must predate the signal's UTC day (the production
 scheduled run uses a previously completed U.S. session), with <=4 calendar days
-between signal day and bar day. No same-close signal/fill is assumed. A one-year
-window constructs a download-free UsaStockFinder. This replay fails closed on
+between signal day and bar day. No same-close signal/fill is assumed. The replay's
+existing window is `(bar_date - 365 days, bar_date]`, including across leap years;
+live downloading requests Yahoo's `period="1y"`. This change preserves the replay
+boundary rather than changing that lookback approximation. Window and as-of
+selection precede provider-error, close-time and integrity checks, so obsolete
+errors cannot invalidate a current session. The window constructs a download-free
+UsaStockFinder. This replay fails closed on
 nonfinite/zero/boolean/inconsistent OHLCV, duplicates, large unexplained history
 gaps, insufficient MA history, stale final sessions, metadata older than seven
-days or missing cooldown state. These conservative research data guards can
-exclude observations live code might process; they are diagnosed, not silently
+elapsed days or missing cooldown state. Exactly seven days is fresh; seven days
+plus any positive duration is stale. Explicitly zoned timestamps are compared in
+UTC, and future metadata is unavailable. Missing observations and invalid
+timestamp rejection retain their existing handling. These conservative research
+data guards can exclude observations live code might process; they are diagnosed, not silently
 reported as failed trends. Short missing sessions can still be mistaken for
 holidays; use a captured session calendar to review coverage.
 
@@ -347,3 +355,47 @@ the conclusion remains **INCONCLUSIVE**; no historical data or metrics were
 invented. Production candidate selection, entries/exits, quantities, Telegram,
 B-plan, schedules, Stage C cap 50 and research $100/caps 30/50/100 contracts are
 unchanged. Stage E remains inactive.
+
+## PR #174 review 5610735801 follow-up (2026-10-22)
+
+PR HEAD matched reviewed commit `378479f94b40ba850778ae6e2b1ce5695640a671`.
+Both findings were independently verified as **valid**:
+
+- P1: historical API errors, duplicate bars and premature close observations
+  were checked before the existing trailing 365-day window. Window selection
+  now precedes these checks. Required-window API errors and corrupt/missing
+  data still fail closed; obsolete errors no longer exclude complete pairs.
+- P2: `.days` truncated metadata age, accepting ages between seven and eight
+  days. Full elapsed duration now enforces the inclusive seven-day threshold.
+  As-of/availability filtering, UTC normalization and invalid timestamps keep
+  their existing handling.
+
+Added 40 offline deterministic regression cases covering both source pools,
+old/required/future errors, exclusive lower and inclusive signal cutoffs, leap-year
+window boundaries, obsolete integrity failures, required data gaps and warmup,
+missing columns, corrupt ranges, exact metadata ages and timezone equivalence,
+future observations and missing/invalid timestamps. Replay and paired capacity
+exclusions, completeness flags and denominators are checked end to end. Against
+the original implementation, the selected boundary tests produced six expected
+failures and 15 passes; all pass with the fix.
+
+Validation with `/workspace/venvs/usa_stock_finder/bin/python`:
+
+- Replay suite: **122 passed**; the documented eight-file focused suite:
+  **523 passed**.
+- Full `python -m pytest -q`: **1,638 passed, 35 subtests passed**.
+- `pylint $(git ls-files '*.py')`: **10.00/10**, exit 0.
+- `python -m compileall -q .` and `git diff --check`: passed.
+- Two fresh documented coverage CLI runs: all nine outputs byte-identical;
+  all 11 implementation hashes verified. Only the checked-in comparison JSON
+  changed, recording the new replay source hash.
+- Reviewed-commit [PR Check 39566043602](https://github.com/k11tos/usa_stock_finder/actions/runs/39566043602)
+  passed tests, lint and both Docker architectures. This precedes the follow-up
+  and does not establish its hosted CI result.
+
+No genuine historical inputs were supplied; coverage remains zero and the
+research conclusion remains **INCONCLUSIVE**. The replay's 365-day approximation
+of Yahoo's live one-year request and its existing short-gap tolerance remain.
+No production selection, entry/exit, execution, sizing, quantities, Telegram,
+B-plan or schedule changed. Core priority, caps 30/50/100, Stage C cap 50 and
+fixed $100 research assumptions remain unchanged. Stage E remains inactive.

@@ -176,9 +176,12 @@ def _offline_finder(bars: list[dict], symbol: str, session: dict) -> tuple[UsaSt
         return None, "bar_not_complete_before_signal"
     if (cutoff.date() - bar_day).days > 4:
         return None, "stale_signal_session"
+    # Preserve the daily replay's trailing 365-day window, exclusive at the
+    # lower bound. Validate only bars the live daily analysis would consume.
+    window_start = bar_day - timedelta(days=365)
     try:
         selected = [row for row in bars if row["symbol"] == symbol
-                    and date.fromisoformat(row["date"]) <= bar_day
+                    and window_start < date.fromisoformat(row["date"]) <= bar_day
                     and _timestamp(row["available_at"]) <= cutoff]
     except (ValueError, TypeError, KeyError):
         return None, "invalid_bar_date_or_availability"
@@ -194,9 +197,7 @@ def _offline_finder(bars: list[dict], symbol: str, session: dict) -> tuple[UsaSt
         return None, "duplicate_bar"
     if frame.iloc[-1]["date"] != session["bar_date"]:
         return None, "stale_ohlcv"
-    # Match live's trailing one-calendar-year input. The 252-bar admission
-    # hypothesis belongs to Stage C, not the daily template.
-    frame = frame.loc[frame["date"] > (bar_day - timedelta(days=365)).isoformat()]
+    # The 252-bar admission hypothesis belongs to Stage C, not the daily template.
     columns = ["open", "high", "low", "close", "volume"]
     if any(name not in frame for name in columns):
         return None, "invalid_ohlcv"
@@ -237,7 +238,7 @@ def evaluate_daily_symbol(bundle: dict, symbol: str, session: dict) -> dict:  # 
     latest = max(metadata, key=lambda row: _timestamp(row["asof_at"]))
     if latest.get("error"):
         return {**result, "reason": "metadata_api_error"}
-    if (cutoff - _timestamp(latest["asof_at"])).days > 7:
+    if cutoff - _timestamp(latest["asof_at"]) > pd.Timedelta(days=7):
         return {**result, "reason": "stale_metadata"}
     allowed, reason = is_tradable_common_stock(latest["values"])
     if not allowed:

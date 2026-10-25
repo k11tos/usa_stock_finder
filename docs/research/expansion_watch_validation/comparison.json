@@ -19,7 +19,7 @@
   "daily": [],
   "implementation_sha256": {
     "backtests/watch_pool_inputs.py": "92839e1bfb6adbbf1551df671ddb40d840a8f96ab89427c4b02404a8d49353de",
-    "backtests/watch_pool_replay.py": "a8ba923bf8a1113e7163c718e48608ba32039d4e9018c19572b3e00266bd89d8",
+    "backtests/watch_pool_replay.py": "5bbe7d544e792c913e82fc8c4421e9564201d82605c4aa1fcb207ab1e1a5b0a5",
     "config.py": "b49903d11d1e84ee3b44f8baf76ddcae5d04698dcddff09061e98a8089bc498f",
     "main.py": "9964bf6ff80a998a20584c5b069c275d251176f582f7f0da5fa10d19718baaec",
     "stock_analysis.py": "f748277ffa4c931a4a047318c0c97de91a66fd7fb684ae7b4e2dfad1647a3f31",
