@@ -4,6 +4,9 @@
 - **Stages A/B plus Stage C research-only quarterly watch-pool construction**.
 - **No production behavior changes**; the live candidate loader does not read
   these outputs.
+- Stage D now has an [offline signal/cash-capacity replay and coverage report](expansion_watch_validation.md).
+  Comparable portfolio performance remains unavailable without historical inputs
+  and a validated holdings/exit lifecycle; Stage E remains blocked pending review.
 
 ## Stage A symbol snapshot
 
