@@ -1,6 +1,13 @@
 # Trend Expansion Pool Design (Future Data Source)
 
 ## Status
+
+The opt-in live integration is described in [live rollout](live_expansion_rollout.md).
+It defaults OFF. Merged Stage D #174 concludes INCONCLUSIVE; genuine evidence
+and deployed sizing reconciliation (#175) still block activation.
+Stage C now publishes schema v2 with explicit finalist/listing evidence. Historical
+research-only statements below describe the original Stage C delivery.
+
 - **Stages A/B plus Stage C research-only quarterly watch-pool construction**.
 - **No production behavior changes**; the live candidate loader does not read
   these outputs.
