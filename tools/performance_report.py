@@ -20,11 +20,13 @@ import matplotlib.pyplot as plt  # pylint: disable=wrong-import-position,ungroup
 if __package__:
     from .broker_equity import load_broker_equity
     from .krw_benchmarks import compare_benchmarks
-    from .krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, interval_volatility, load_external_flow_ledger
+    from .krw_twr import (DEFAULT_OBSERVATION_CALENDAR, DEFAULT_KRW_FLOWS, calculate_twr,
+                          interval_volatility, load_external_flow_ledger, load_observation_calendar)
 else:  # Support the existing `python tools/performance_report.py` entry point.
     from broker_equity import load_broker_equity
     from krw_benchmarks import compare_benchmarks
-    from krw_twr import DEFAULT_KRW_FLOWS, calculate_twr, interval_volatility, load_external_flow_ledger
+    from krw_twr import (DEFAULT_OBSERVATION_CALENDAR, DEFAULT_KRW_FLOWS, calculate_twr,
+                         interval_volatility, load_external_flow_ledger, load_observation_calendar)
 
 PERFORMANCE_DATA_SOURCES = ("legacy_usd", "broker_krw")
 RETURN_CHARTS = ("cumulative_return.png", "drawdown.png", "excess_return.png")
@@ -630,7 +632,9 @@ def _build_broker_krw_report(args: argparse.Namespace, output_dir: Path) -> bool
     daily = loaded.daily
     ledger = load_external_flow_ledger(getattr(args, "krw_external_flows", DEFAULT_KRW_FLOWS))
     twr, metrics = calculate_twr(daily, ledger, start_date=args.start_date, end_date=args.end_date,
-                                 rejected_records=loaded.rejected_records)
+                                 rejected_records=loaded.rejected_records,
+                                 calendar=load_observation_calendar(getattr(
+                                     args, "krw_observation_calendar", DEFAULT_OBSERVATION_CALENDAR)))
     twr.to_csv(output_dir / "twr_curve.csv", index=False)
     if daily.empty:
         loaded.warnings.append("No valid broker KRW observations found for the selected period.")
@@ -982,6 +986,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-source", choices=PERFORMANCE_DATA_SOURCES, default="legacy_usd")
     parser.add_argument("--trades", default=DEFAULT_TRADES)
     parser.add_argument("--cash-flows", default=DEFAULT_CASH_FLOWS)
+    parser.add_argument("--krw-observation-calendar", default=DEFAULT_OBSERVATION_CALENDAR)
     parser.add_argument("--krw-external-flows", default=DEFAULT_KRW_FLOWS)
     parser.add_argument("--benchmarks", nargs="+", default=DEFAULT_BENCHMARKS)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)

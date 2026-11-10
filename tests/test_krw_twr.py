@@ -13,7 +13,7 @@ import pytest
 from telegram_utils import build_performance_summary_message
 from tools import performance_report
 from tools.broker_equity import AMOUNT_FIELDS, EXPECTED_SOURCE, HEADERS, load_broker_equity
-from tools.krw_twr import FLOW_HEADERS, calculate_twr, load_external_flow_ledger
+from tools.krw_twr import CALENDAR_HEADERS, FLOW_HEADERS, calculate_twr, load_external_flow_ledger
 
 
 def stamp(day):
@@ -52,6 +52,17 @@ def write_csv(path, headers, rows):
         writer.writerows(rows)
 
 
+def write_test_calendar(path, scheduled_days):
+    """Synthetic schedule evidence only; never derive a production calendar from snapshots."""
+    write_csv(path, CALENDAR_HEADERS, [
+        {"date": day.strftime("%Y-%m-%d"),
+         "collection": "scheduled" if day.day in scheduled_days else "closed",
+         "verification_status": "verified", "source": "synthetic collector schedule",
+         "description": "Explicit test-only collection policy"}
+        for day in pd.date_range("2026-01-01", "2026-01-31")
+    ])
+
+
 @pytest.fixture
 def inputs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -63,6 +74,8 @@ def inputs(tmp_path, monkeypatch):
 def compute(inputs, snapshots, ledger_rows, **kwargs):
     equity_path, ledger_path = inputs
     write_csv(equity_path, HEADERS, snapshots)
+    write_test_calendar(equity_path.with_name("krw_observation_calendar.csv"),
+                        {pd.Timestamp(row["run_date"]).day for row in snapshots})
     if ledger_rows is not None:
         write_csv(ledger_path, FLOW_HEADERS, ledger_rows)
     loaded = load_broker_equity(kwargs.get("start_date"), kwargs.get("end_date"))

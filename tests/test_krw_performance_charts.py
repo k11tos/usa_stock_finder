@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from PIL import Image
-from test_krw_twr import attestation, flow, snapshot, write_csv
+from test_krw_twr import attestation, flow, snapshot, write_csv, write_test_calendar
 
 from performance_report_runner import run_performance_report_safely
 from tools import krw_benchmarks, performance_report
@@ -26,6 +26,7 @@ def scenario(tmp_path, monkeypatch):
     equity_path, ledger_path = folder / "broker_equity_snapshots.csv", folder / "krw_external_flows.csv"
     write_csv(equity_path, HEADERS, [snapshot(1, 100), snapshot(2, 160), snapshot(3, 144)])
     write_csv(ledger_path, FLOW_HEADERS, [attestation(), flow(50), attestation(3)])
+    write_test_calendar(folder / "krw_observation_calendar.csv", {1, 2, 3})
     dates = pd.date_range("2025-12-31", periods=3)
     quotes = {"SPY": pd.Series([100., 110., 99.], index=dates),
               "IWM": pd.Series([200., 220., 242.], index=dates),
@@ -202,6 +203,7 @@ def test_full_output_contract_twr_charts_html_and_publishing(scenario, monkeypat
 def test_weekend_only_report_keeps_valid_twr_chart_without_daily_returns(scenario, monkeypatch):
     args, _, equity_path, ledger_path = scenario
     args.benchmarks = []
+    write_test_calendar(equity_path.with_name("krw_observation_calendar.csv"), {9, 12})
     write_csv(equity_path, HEADERS, [snapshot(9, 100), snapshot(12, 105)])
     write_csv(ledger_path, FLOW_HEADERS, [attestation(12, interval_start="2026-01-09T16:00:00+09:00")])
     capture = MagicMock()
@@ -217,6 +219,7 @@ def test_weekend_only_report_keeps_valid_twr_chart_without_daily_returns(scenari
 def test_weekend_report_preserves_benchmark_dates_and_marks_mixed_volatility_na(scenario, monkeypatch):
     args, quotes, equity_path, ledger_path = scenario
     args.report_run_id = "stage7"
+    write_test_calendar(equity_path.with_name("krw_observation_calendar.csv"), {8, 9, 12, 13})
     write_csv(equity_path, HEADERS, [snapshot(8, 100), snapshot(9, 110), snapshot(12, 99), snapshot(13, 108.9)])
     write_csv(ledger_path, FLOW_HEADERS,
               [attestation(9), attestation(12, interval_start="2026-01-09T16:00:00+09:00"), attestation(13)])
@@ -310,3 +313,15 @@ def test_legacy_switch_removes_stage5_artifacts_and_never_splices(scenario, monk
         assert summary["cumulative_return_pct"] == pytest.approx((1000 / 900 - 1) * 100)
         for name in ("benchmark_curve.csv", "twr_curve.csv", "charts/twr_volatility.png", "charts/raw_equity_krw.png"):
             assert not (bundle / name).exists()
+
+
+@pytest.mark.parametrize("symbol,cause", [("KRW=X", "missing quotes"), ("SPY", "stale quote")])
+def test_comparison_reports_precise_unavailable_cause(scenario, symbol, cause):
+    scenario[1][symbol] = (pd.Series(dtype=float) if symbol == "KRW=X" else
+                           pd.Series([100.], index=pd.to_datetime(["2025-12-20"])))
+    _, audit, metrics, warnings = compare_scenario(scenario)
+    assert metrics["cumulative_return_SPY_pct"] is None
+    assert cause in " ".join(metrics["benchmark_unavailable_reasons"]["SPY"])
+    assert cause in " ".join(warnings)
+    column = "fx_unavailable_reason" if symbol == "KRW=X" else "benchmark_unavailable_reason"
+    assert audit[audit.asset == "SPY"][column].str.contains(cause, regex=False).all()
