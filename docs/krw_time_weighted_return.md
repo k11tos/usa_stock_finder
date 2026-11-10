@@ -1,7 +1,7 @@
-# Cash-flow-aware KRW performance — Stage 7
+# Cash-flow-aware KRW performance — explicit observation calendar
 
-Stage 7 permits verified returns between consecutive actual observations across
-weekends and holidays. Stage 5's historical-FX comparisons and report status
+Verified returns between consecutive actual observations across weekends and
+holidays require both a reviewed collection calendar and complete flow evidence. Stage 5's historical-FX comparisons and report status
 contracts remain; see [validated KRW charts](validated_krw_charts.md).
 
 ## Accounting boundary (defined before implementation)
@@ -97,16 +97,50 @@ assumed end-of-day time for such events.
 
 Returns use consecutive actual validated broker observations, preserving their
 fetch timestamps and dates. Friday-to-Monday, holidays and longer gaps are valid
-only with complete verified flow evidence matching **both exact timestamps for
+only with explicit verified calendar coverage and complete verified flow evidence matching **both exact timestamps for
 the entire interval**. Separate shorter ledger intervals cannot substitute for
 that evidence. No snapshots, daily paths or zero flows are inferred.
 
-Missing weekdays produce diagnostics (they may be holidays or failed runs; no
-trading-calendar API is used). Gaps exceeding four KST calendar days also produce
-an unusually-long-gap diagnostic. These warnings alone neither invalidate a
-verified interval nor establish flow completeness. Requested endpoints must still
-have actual valuations, including explicitly requested weekend dates. Python does
-not filter weekend execution or observations; production Cron remains unchanged.
+### Explicit observation calendar
+
+`--krw-observation-calendar` defaults to `data/live/krw_observation_calendar.csv`.
+This is a **collector schedule in KST**, not a US exchange session calendar.
+The read-only CSV has the exact header:
+
+```csv
+date,collection,verification_status,source,description
+2026-01-09,scheduled,verified,synthetic cron schedule,Friday collection
+2026-01-10,closed,verified,synthetic cron schedule,Saturday no collection
+2026-01-11,closed,verified,synthetic cron schedule,Sunday no collection
+2026-01-12,scheduled,verified,synthetic cron schedule,Monday collection
+```
+
+Every date from opening through closing observation, including weekends, must
+have exactly one `scheduled` or `closed` row with `verified` status and nonempty
+source/description. Maintain this schedule from independently reviewed Cron,
+timezone and holiday exception evidence, **never from observed snapshot absence**.
+No built-in weekend or holiday inference and no network calendar lookup occurs.
+A US closure or Korean holiday justifies `closed` only when the collector's
+reviewed operating policy actually skips that KST date. If Cron still runs,
+the date remains `scheduled`, regardless of market closure. Unknown future
+holiday decisions must not be pre-approved as closed.
+
+Missing/unreadable/empty/malformed calendars, duplicate dates or pending rows
+fail closed. Missing date coverage, a skipped scheduled date, or a snapshot on
+a declared closed date invalidates the affected interval. A scheduled missing
+snapshot invalidates full-period TWR/MDD even when the entire flow interval is
+verified zero. Reconcile the calendar or recover the real snapshot; never
+fabricate valuations or relabel a failed execution as closed. Invalid calendar
+rows conservatively reject the whole calendar even outside the selected period.
+This policy models one selected daily observation, not intraday retry counts or
+exact execution times. Existing broker selection retains identical duplicates
+once and selects the latest valid daily run; the flow ledger must match that
+selected timestamp. Conflicting duplicate run IDs remain rejected.
+
+Weekday gaps and gaps exceeding four calendar days still produce diagnostics;
+calendar validation, rather than these warnings, determines eligibility.
+Requested endpoints must have actual valuations, including explicitly requested
+weekend dates. No collection schedule or production Cron is changed.
 
 `interval_return` is the full boundary-adjusted return. `interval_days` is actual
 elapsed time in 24-hour days; `calendar_days` is the difference in KST dates.
@@ -133,7 +167,7 @@ Otherwise expanding volatility is shown only on valid intervals, with its sample
 count and incomplete-period scope. Valid-sample volatility can remain available
 when TWR is incomplete; it is not a full-period metric in that case.
 
-A return invalidated by timestamps, equity or flow evidence permanently breaks
+A return invalidated by calendar coverage, timestamps, equity or flow evidence permanently breaks
 the index for the selected period. Later independently valid interval returns may
 be displayed and used in eligible valid-sample volatility, but are never joined
 across an invalid interval. Full-period
@@ -164,7 +198,8 @@ TWR +8.9% and observed MDD -10%, even when one interval spans a weekend.
 ```bash
 python tools/performance_report.py --data-source broker_krw \
   --krw-external-flows data/live/krw_external_flows.csv \
-  --output outputs/performance_krw --publish-latest --history
+  --krw-observation-calendar /reviewed/krw_observation_calendar.csv \
+  --output /separate/krw_preview
 ```
 
 The optional runner uses the default ledger path. Existing source/collection
@@ -185,3 +220,44 @@ Volatility exposes `volatility_interval_days`, `volatility_convention`,
 stale TWR artifacts; legacy USD calculations are unchanged.
 Candidate selection, buy/sell decisions, sizing and notification ordering are
 unchanged. Tests use synthetic data only; no broker queries or notifications.
+
+## Safe operational verification
+
+Keep `legacy_usd` as the default and keep existing operational outputs. Do not
+switch the runner automatically. Use a separate Preview output directory; avoid
+`--publish-latest` against an operational directory. Calendar/ledger maintenance
+is an independent manual review; this implementation never writes either input.
+A user's statement that no flows occurred does not generate complete/verified
+rows. Reconcile every exact selected timestamp interval before approving rows.
+The 2026-10-20–11-10 absence of flows therefore remains unknown in reports until
+separate verified evidence is supplied; no live data was read or modified here.
+
+For offline verification, create **synthetic** snapshots, calendar and ledger
+under a temporary working directory with `data/live/` (the broker input path is
+fixed relative to cwd). Mock `tools.krw_benchmarks.fetch_series` for SPY, IWM and
+KRW=X; never call the broker or external price service. Run the report with
+`data_source=broker_krw` into a separate directory and check:
+
+1. Normal weekday/weekend and reviewed US/Korean closure intervals validate,
+   with exact fetch timestamps in `twr_curve.csv` and matching ledger boundaries.
+2. A scheduled missing observation invalidates full-period TWR/MDD. Later valid
+   rows never restart the index or bridge the failure.
+3. Missing/pending flow evidence invalidates TWR even when the calendar is valid;
+   intrainterval flows remain N/A without pre/post-flow valuations.
+4. Check `returns_validated`, `twr_unavailable_reasons`, interval counts and
+   `observation_calendar_policy` in `performance_summary.json`. Flow completeness
+   is independent from schedule validity. Mixed-duration volatility remains N/A.
+5. Compare SPY/IWM only when both adjusted USD prices and historical USD/KRW
+   cover every observation within the unchanged four-calendar-day freshness
+   bound, with no lookahead. `benchmark_unavailable_reasons` identifies the
+   observation date and missing/stale/invalid/provider cause; `benchmark_curve.csv`
+   retains source dates and per-series reasons. No partial-period rebasing.
+6. Compare snapshot/flow input bytes before and after. Preserve originals and
+   legacy outputs. Review Preview before considering any separate rollout.
+
+Synthetic regressions: `pytest tests/test_krw_twr.py
+ tests/test_krw_observation_calendar.py tests/test_krw_performance_charts.py
+ tests/test_performance_report.py tests/test_broker_equity_report.py
+ tests/test_broker_equity_snapshots.py tests/test_live_performance_logger.py`.
+No intrainterval MDD can be inferred; calendar evidence can be wrong or expire,
+and differing fetch times/weekends usually preclude annualized volatility.

@@ -15,6 +15,9 @@ from pathlib import Path
 
 import pandas as pd
 
+DEFAULT_OBSERVATION_CALENDAR = "data/live/krw_observation_calendar.csv"
+CALENDAR_HEADERS = ["date", "collection", "verification_status", "source", "description"]
+
 DEFAULT_KRW_FLOWS = "data/live/krw_external_flows.csv"
 FLOW_HEADERS = [
     "record_id", "interval_start", "interval_end", "effective_at", "amount_krw",
@@ -50,6 +53,58 @@ def _timestamp(value: str) -> pd.Timestamp:
     if pd.isna(stamp) or stamp.tzinfo is None:
         raise ValueError("timezone-aware timestamp required")
     return stamp.tz_convert("Asia/Seoul")
+
+
+@dataclass
+class ObservationCalendar:
+    """Reviewed KST collection dates, independent of exchange trading sessions."""
+
+    days: dict = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+    def interval_reason(self, start: pd.Timestamp, end: pd.Timestamp) -> str:
+        """Require complete date coverage and no skipped scheduled observation."""
+        if self.warnings:
+            return self.warnings[0]
+        for day in pd.date_range(start.date(), end.date()):
+            key = day.strftime("%Y-%m-%d")
+            state = self.days.get(key)
+            if state is None:
+                return f"Observation calendar coverage unknown on {key}; interval TWR is N/A."
+            if day.date() in {start.date(), end.date()}:
+                if state != "scheduled":
+                    return f"Unexpected observation on closed collection date {key}; reconcile calendar."
+            elif state == "scheduled":
+                return f"Missing scheduled observation on {key}; interval TWR is N/A."
+        return ""
+
+
+def load_observation_calendar(path: str | Path = DEFAULT_OBSERVATION_CALENDAR) -> ObservationCalendar:
+    """No inferred weekends or holidays: every selected KST date needs reviewed evidence."""
+    result = ObservationCalendar()
+    try:
+        with Path(path).open(encoding="utf-8", newline="") as handle:
+            fcntl.flock(handle, fcntl.LOCK_SH)
+            reader = csv.DictReader(handle, strict=True)
+            if reader.fieldnames != CALENDAR_HEADERS:
+                raise ValueError("invalid calendar header")
+            for row in reader:
+                if None in row or any(not isinstance(row.get(key), str) or not row[key].strip()
+                                      for key in CALENDAR_HEADERS):
+                    raise ValueError("incomplete calendar row")
+                day = pd.Timestamp(row["date"])
+                if day.strftime("%Y-%m-%d") != row["date"] or row["date"] in result.days:
+                    raise ValueError("invalid or duplicate date")
+                if row["collection"] not in {"scheduled", "closed"} or row["verification_status"] != "verified":
+                    raise ValueError("unknown collection schedule")
+                result.days[row["date"]] = row["collection"]
+        if not result.days:
+            raise ValueError("empty calendar")
+    except (OSError, UnicodeError, csv.Error, ValueError, TypeError, OverflowError):
+        return ObservationCalendar(warnings=[
+            "Observation calendar missing, unreadable or unverified; collection schedule/holiday coverage is unknown."
+        ])
+    return result
 
 
 def _parse_row(raw: dict) -> dict:
@@ -150,7 +205,8 @@ def _interval_flows(ledger: ExternalFlowLedger, start: pd.Timestamp, end: pd.Tim
     return status, start_flow, end_flow, ""
 
 
-def _interval_result(previous: dict, current: dict, ledger: ExternalFlowLedger) -> dict:
+def _interval_result(previous: dict, current: dict, ledger: ExternalFlowLedger,
+                     calendar: ObservationCalendar) -> dict:
     start, end = _timestamp(previous["fetched_at_kst"]), _timestamp(current["fetched_at_kst"])
     status, start_flow, end_flow, reason = _interval_flows(ledger, start, end)
     result = {
@@ -167,13 +223,17 @@ def _interval_result(previous: dict, current: dict, ledger: ExternalFlowLedger) 
     missing = pd.bdate_range(start.normalize() + pd.Timedelta(days=1), end.normalize() - pd.Timedelta(days=1))
     warnings = []
     if len(missing):
-        warnings.append("Missing weekday observations (may include market holidays): " +
+        warnings.append("Weekday dates without observations (subject to explicit calendar validation): " +
                         ", ".join(missing.strftime("%Y-%m-%d")) + ".")
     if result["calendar_days"] > LONG_GAP_DAYS:
         warnings.append(f"Unusually long observation gap: {result['calendar_days']} calendar days "
                         f"(threshold > {LONG_GAP_DAYS}).")
     if warnings:
         result["gap_warning"] = " ".join(warnings) + " No snapshots or flows inferred; verify the entire interval."
+    calendar_reason = calendar.interval_reason(start, end)
+    if calendar_reason:
+        result["reason"] = calendar_reason + (" " + reason if reason else "")
+        return result
     if reason:
         return result
     opening, closing = Fraction(str(previous["total_asset_krw"])), Fraction(str(current["total_asset_krw"]))
@@ -233,10 +293,12 @@ def interval_volatility(curve: pd.DataFrame) -> tuple[pd.Series, dict]:
 
 
 def calculate_twr(daily: pd.DataFrame, ledger: ExternalFlowLedger, *, start_date: str | None = None,
-                  end_date: str | None = None, rejected_records: bool = False) -> tuple[pd.DataFrame, dict]:
+                  end_date: str | None = None, rejected_records: bool = False,
+                  calendar: ObservationCalendar | None = None) -> tuple[pd.DataFrame, dict]:
     """Keep later valid returns, but never restart/link an index after an invalid interval."""
+    calendar = calendar if calendar is not None else load_observation_calendar()
     rows = []
-    reasons = list(ledger.warnings)
+    reasons = list(ledger.warnings) + list(calendar.warnings)
     observations = daily.to_dict("records")
     if len(observations) < 2:
         reasons.append("At least two validated broker observations are required.")
@@ -260,7 +322,7 @@ def calculate_twr(daily: pd.DataFrame, ledger: ExternalFlowLedger, *, start_date
         rows[0].update(twr_index=None, drawdown_pct=None)
     for previous, current in zip(observations, observations[1:]):
         try:
-            row = _interval_result(previous, current, ledger)
+            row = _interval_result(previous, current, ledger, calendar)
         except (ValueError, TypeError, OverflowError, ZeroDivisionError):
             row = dict.fromkeys(CURVE_COLUMNS)
             row.update(run_date=current["run_date"], flow_status="unknown", return_valid=False,
@@ -295,7 +357,8 @@ def calculate_twr(daily: pd.DataFrame, ledger: ExternalFlowLedger, *, start_date
         flow_status = "verified_nonzero" if "verified_nonzero" in statuses else "verified_zero"
     _, volatility_metrics = interval_volatility(curve)
     summary = {
-        "report_kind": "krw_time_weighted_return", "returns_validated": complete,
+        "report_kind": "krw_time_weighted_return",
+        "observation_calendar_policy": "explicit_verified_kst_dates_v1", "returns_validated": complete,
         "external_cash_flow_completeness": flow_status, "timing_convention": TIMING_CONVENTION,
         "cumulative_return_pct": float((index / 100 - 1) * 100) if complete else None,
         "max_drawdown_pct": float(curve["drawdown_pct"].min()) if complete else None,
