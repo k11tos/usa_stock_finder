@@ -504,7 +504,10 @@ def _format_buy_entry(
             msg = f"  ✅ 신규 매수: {item}"
             msg += f"\n     매수 수량: {shares}주"
 
-        msg += f"\n     투자 금액: ${investment:,.2f}"
+        msg += f"\n     목표 투자금: ${investment:,.2f}"
+        msg += f"\n     예상 매수금액: ${info.get('actual_investment', shares * price):,.2f}"
+        if "remaining_cash" in info:
+            msg += f"\n     잔여 매수 가능 현금(유보금 제외): ${info['remaining_cash']:,.2f}"
         msg += f"\n     현재가: ${price:.2f}"
         return msg
 
@@ -643,7 +646,7 @@ def log_buy_funnel(stage_counts: dict[str, Any]) -> list[str]:
 
 
 def generate_telegram_message(
-    prev_items: list[str],
+    prev_items: list[str],  # pylint: disable=unused-argument
     buy_items: list[str],
     _not_sell_items: list[str],  # pylint: disable=unused-argument
     share_quantities: dict[str, dict[str, Any]] | None = None,
@@ -681,11 +684,10 @@ def generate_telegram_message(
     message = [str(date.today())]
     has_changes = False
 
-    # Generate buy messages with investment details
-    # new_buy_items (prev_items에 없는 것)만 표시하되, share_quantities가 있으면 상세 정보 표시
-    # 매수 수량이 0인 종목은 share_quantities에 포함되지 않으므로 필터링
+    # Only funded positive quantities are actionable. Persisted tracking is not ownership.
     new_buy_items = [
-        item for item in buy_items if item not in prev_items and (not share_quantities or item in share_quantities)
+        item for item in dict.fromkeys(buy_items) if item in (share_quantities or {})
+        and share_quantities[item].get("shares_to_buy", 0) > 0
     ]
 
     # buy_items 전체를 표시하되, 실제 변경사항(new_buy_items 또는 매도 신호)이 있을 때만 메시지 생성
@@ -766,287 +768,104 @@ def calculate_investment_per_stock(
     additional_cash: float = 0.0,
     account_balance: dict[str, float] | None = None,
 ) -> dict[str, float] | None:
+    """Return fixed targets, not executable cash allocations.
+
+    Legacy min/max/additional_cash arguments remain accepted for call compatibility
+    but cannot override the approved $100 policy. Unconfirmed sales are excluded.
+    Actual cash allocation happens in calculate_share_quantities using prices.
     """
-    Calculate investment amount per stock based on available cash and buy signals.
-
-    This function:
-    1. Fetches account balance and available cash
-    2. Calculates investment amount per stock using configured distribution strategy
-    3. Applies reserve ratio to keep some cash reserved
-    4. Applies min/max investment constraints
-
-    Args:
-        buy_items (list[str]): List of stock symbols recommended for buying
-        reserve_ratio (float | None): Ratio of cash to reserve (None = use config default)
-        min_investment (float | None): Minimum investment amount per stock (None = use config default)
-        max_investment (float | None): Maximum investment amount per stock (None = use config default)
-        additional_cash (float): Additional cash to add to buyable_cash (e.g., from sell proceeds). Default: 0.0
-        account_balance (dict[str, float] | None): Optional pre-fetched account balance to reuse.
-
-    Returns:
-        dict[str, float] | None: Dictionary mapping stock symbols to investment amounts,
-                                 or None if account balance cannot be fetched or no buy signals
-
-    Note:
-        - Supports equal distribution or proportional distribution strategies
-        - Applies reserve ratio to keep emergency funds
-        - Respects min/max investment constraints
-        - Returns None if account balance fetch fails
-        - Automatically excludes stocks that cannot afford minimum investment
-        - Additional cash (e.g., from sell proceeds) is added to buyable_cash before calculation
-    """
+    del reserve_ratio, min_investment, max_investment, additional_cash
     if not buy_items:
-        logger.warning("No buy signals to calculate investment amounts")
         return None
-
-    # Use config defaults if not provided
-    if reserve_ratio is None:
-        reserve_ratio = InvestmentConfig.RESERVE_RATIO
-    if min_investment is None:
-        min_investment = InvestmentConfig.MIN_INVESTMENT
-    if max_investment is None or max_investment == 0:
-        max_investment = InvestmentConfig.MAX_INVESTMENT if InvestmentConfig.MAX_INVESTMENT > 0 else None
-
     if account_balance is None:
         try:
             account_balance = fetch_account_balance()
-        except APIError as e:
-            logger.error("Failed to fetch account balance: %s", str(e))
+        except APIError as exc:
+            logger.error("Failed to fetch account balance: %s", exc)
             return None
-
-    if not account_balance:
-        logger.error("Failed to fetch account balance")
+    if not account_balance or _confirmed_buy_budget(account_balance) <= 0:
         return None
+    return dict.fromkeys(buy_items, InvestmentConfig.TARGET_INVESTMENT)
 
-    available_cash = account_balance.get("available_cash", 0.0)
-    original_buyable_cash = account_balance.get("buyable_cash", available_cash)
-    buyable_cash = original_buyable_cash
-    total_balance = account_balance.get("total_balance", available_cash)
 
-    # 매도로 확보된 현금을 매수 가능 금액에 추가
-    if additional_cash > 0:
-        buyable_cash += additional_cash
-        logger.info(
-            "매도 금액을 매수 가능 금액에 반영 - 원래 buyable_cash=%.2f, 추가 현금=%.2f, 최종 buyable_cash=%.2f",
-            original_buyable_cash,
-            additional_cash,
-            buyable_cash,
-        )
-
-    if buyable_cash <= 0:
-        logger.warning(
-            "No buyable cash available (Available cash: %.2f, Original buyable cash: %.2f, "
-            "Additional cash: %.2f, Final buyable cash: %.2f)",
-            available_cash,
-            original_buyable_cash,
-            additional_cash,
-            buyable_cash,
-        )
-        return None
-
-    # Calculate total investment amount (excluding reserve)
-    total_investment = buyable_cash * (1 - reserve_ratio)
-    num_stocks = len(buy_items)
-
-    if num_stocks == 0:
-        logger.warning("No stocks to invest in")
-        return None
-
-    # Calculate investment per stock based on distribution strategy
-    if InvestmentConfig.DISTRIBUTION_STRATEGY == "proportional" and InvestmentConfig.PROPORTIONAL_PERCENTAGE > 0:
-        # Proportional distribution: each stock gets a percentage of total balance
-        investment_per_stock = total_balance * InvestmentConfig.PROPORTIONAL_PERCENTAGE
-        logger.info(
-            "Using proportional distribution: %.2f%% of total balance per stock",
-            InvestmentConfig.PROPORTIONAL_PERCENTAGE * 100,
-        )
-    else:
-        # Equal distribution: divide total investment equally among stocks
-        investment_per_stock = total_investment / num_stocks
-        logger.info("Using equal distribution strategy")
-
-    # Apply min/max constraints and filter affordable stocks
-    affordable_stocks = []
-    for symbol in buy_items:
-        stock_investment = investment_per_stock
-
-        # Apply max constraint
-        if max_investment and stock_investment > max_investment:
-            stock_investment = max_investment
-
-        # Check if meets minimum investment
-        if stock_investment >= min_investment:
-            affordable_stocks.append((symbol, stock_investment))
-        else:
-            logger.debug(
-                "Excluding stock %s: Investment amount %.2f < Minimum investment %.2f",
-                symbol,
-                stock_investment,
-                min_investment,
-            )
-
-    if not affordable_stocks:
-        logger.warning(
-            "Available cash (%s) is insufficient for minimum investment (%s) for any stock",
-            total_investment,
-            min_investment,
-        )
-        return None
-
-    # Create investment mapping
-    investment_map = {symbol: round(investment, 2) for symbol, investment in affordable_stocks}
-
-    logger.info(
-        "Investment calculation: Total: %s, Reserve: %s, Per stock: %s, Stocks: %d (original: %d)",
-        buyable_cash,
-        buyable_cash * reserve_ratio,
-        investment_per_stock,
-        len(investment_map),
-        num_stocks,
-    )
-
-    return investment_map
+def _confirmed_buy_budget(account_balance: dict[str, float]) -> float:
+    """Reserve-adjusted confirmed buying power; missing/invalid power fails closed."""
+    cash = account_balance.get("buyable_cash", 0.0)
+    reserve = InvestmentConfig.RESERVE_RATIO
+    if not math.isfinite(cash) or cash <= 0 or not math.isfinite(reserve) or not 0 <= reserve <= 1:
+        return 0.0
+    return cash * (1 - reserve)
 
 
 def calculate_share_quantities(
     investment_map: dict[str, float],
     finder: UsaStockFinder,
     current_holdings: list[dict[str, Any]] | None = None,
+    cash_budget: float | None = None,
 ) -> dict[str, dict[str, Any]] | None:
-    """
-    Calculate share quantities to buy/sell based on investment amounts and current prices.
+    """Allocate whole-share new positions in incoming candidate order.
 
-    This function:
-    1. Calculates number of shares to buy for each stock based on investment amount and current price
-    2. Compares with current holdings to determine additional buy or sell quantities
-    3. Returns detailed information including buy/sell quantities and current holdings
-
-    Args:
-        investment_map (dict[str, float]): Dictionary mapping stock symbols to investment amounts
-        finder (UsaStockFinder): Instance containing current stock prices
-        current_holdings (list[dict[str, Any]] | None): Current holdings detail from account.
-            If None, will fetch from account.
-
-    Returns:
-        dict[str, dict[str, Any]] | None: Dictionary mapping stock symbols to trading information.
-            Each value contains:
-            - "investment_amount": Investment amount for this stock
-            - "current_price": Current market price
-            - "shares_to_buy": Number of shares to buy
-            - "current_quantity": Current number of shares held (0 if not held)
-            - "additional_buy": Additional shares to buy (if already holding)
-            - "total_after_buy": Total shares after buying
-            Returns None if investment_map is empty or prices unavailable
-
-    Note:
-        - Uses current_price from finder
-        - Rounds down shares to buy (cannot buy fractional shares)
-        - If stock is already held, calculates additional buy quantity
-        - Returns None if prices are unavailable
+    Each target is capped at $100. Skip held names and targets whose full
+    whole-share cost cannot be funded; never shrink targets to consume cash.
+    Legacy callers without a budget must fetch confirmed broker buying power.
     """
     if not investment_map:
-        logger.warning("No investment map provided")
         return None
-
-    # Fetch current holdings if not provided
     if current_holdings is None:
         current_holdings = fetch_holdings_detail()
-
-    # Create a mapping of current holdings for quick lookup
-    holdings_map: dict[str, float] = {}
-    if current_holdings:
-        for holding in current_holdings:
-            symbol = holding.get("symbol", "")
-            quantity = holding.get("quantity", 0.0)
-            if symbol:
-                holdings_map[symbol] = quantity
-
-    result: dict[str, dict[str, Any]] = {}
-
-    for symbol, investment_amount in investment_map.items():
-        current_price = finder.current_price.get(symbol, 0.0)
-
-        if current_price <= 0:
-            logger.warning("Invalid price for %s: %s", symbol, current_price)
-            continue
-
-        # Calculate target total quantity (목표 총 보유 수량)
-        # 투자금으로 살 수 있는 최대 수량 (소수점 이하 절삭)
-        target_total_quantity = int(investment_amount / current_price)
-
-        if target_total_quantity <= 0:
-            logger.warning(
-                "Investment amount %s too small for %s at price %s", investment_amount, symbol, current_price
-            )
-            continue
-
-        # Get current holding quantity
-        current_quantity = holdings_map.get(symbol, 0.0)
-
-        # Calculate actual shares to buy
-        # 신규 매수: 현재 보유 없음 → 목표 수량 전체 매수
-        # 추가 매수: 현재 보유 있음 → (목표 수량 - 현재 보유)만큼 추가 매수
-        #            단, 이미 목표 수량 이상 보유 중이면 추가 매수 0
-        if current_quantity == 0:
-            shares_to_buy = target_total_quantity  # 신규 매수
-            is_new_buy = True
-        else:
-            shares_to_buy = max(target_total_quantity - int(current_quantity), 0)  # 추가 매수
-            is_new_buy = False
-
-        total_after_buy = int(current_quantity) + shares_to_buy
-
-        # Calculate actual investment amount (actual shares to buy * price)
-        actual_investment = shares_to_buy * current_price
-
-        # 매수 수량이 0인 경우 필터링 (이미 목표 수량 이상 보유 중인 경우)
-        if shares_to_buy <= 0:
-            logger.debug(
-                "%s: 매수 수량 0 - 목표 수량=%d주, 현재 보유=%d주, 추가 매수 불필요",
-                symbol,
-                target_total_quantity,
-                int(current_quantity),
-            )
-            continue
-
-        result[symbol] = {
-            "investment_amount": round(investment_amount, 2),
-            "current_price": round(current_price, 2),
-            "shares_to_buy": shares_to_buy,  # Actual shares to buy (신규 매수 or 추가 매수 수량)
-            "current_quantity": int(current_quantity),
-            "additional_buy": shares_to_buy,  # Same as shares_to_buy (kept for backward compatibility)
-            "total_after_buy": total_after_buy,
-            "actual_investment": round(actual_investment, 2),
-        }
-
-        # 명확한 로깅: 신규 매수 vs 추가 매수
-        if is_new_buy:
-            logger.debug(
-                "%s: 신규 매수 계산 - 투자금=$%.2f, 현재가=$%.2f, 매수 수량=%d주, 실제 투자금=$%.2f",
-                symbol,
-                investment_amount,
-                current_price,
-                shares_to_buy,
-                actual_investment,
-            )
-        else:
-            logger.debug(
-                "%s: 추가 매수 계산 - 투자금=$%.2f, 현재가=$%.2f, 목표 총 수량=%d주, 현재 보유=%d주, "
-                "추가 매수=%d주, 매수 후 총=%d주, 실제 투자금=$%.2f",
-                symbol,
-                investment_amount,
-                current_price,
-                target_total_quantity,
-                int(current_quantity),
-                shares_to_buy,
-                total_after_buy,
-                actual_investment,
-            )
-
-    if not result:
-        logger.warning("No valid share quantities calculated")
+    if current_holdings is None:
+        logger.warning("Buy sizing skipped: holdings unavailable")
+        return None
+    if cash_budget is None:
+        try:
+            cash_budget = _confirmed_buy_budget(fetch_account_balance() or {})
+        except APIError as exc:
+            logger.error("Failed to fetch buy budget: %s", exc)
+            return None
+    if not math.isfinite(cash_budget) or cash_budget <= 0:
+        logger.info("Buy sizing skipped: no confirmed cash budget")
         return None
 
+    held = {h.get("symbol") for h in current_holdings if h.get("quantity", 0) > 0}
+    remaining = cash_budget
+    result: dict[str, dict[str, Any]] = {}
+    for symbol, amount in investment_map.items():
+        if symbol in held:
+            logger.info("BUY_SKIP %s: existing holding; no automatic top-up", symbol)
+            continue
+        price = finder.current_price.get(symbol, 0.0)
+        if not math.isfinite(price) or price <= 0:
+            logger.info("BUY_SKIP %s: invalid price %s", symbol, price)
+            continue
+        target = min(amount, InvestmentConfig.TARGET_INVESTMENT)
+        if not math.isfinite(target) or target <= 0:
+            logger.info("BUY_SKIP %s: invalid target", symbol)
+            continue
+        shares = int(target / price)
+        if shares <= 0:
+            logger.info("BUY_SKIP %s: zero whole shares at target $%.2f, price $%.2f", symbol, target, price)
+            continue
+        spend = shares * price
+        if spend > remaining:
+            logger.info("BUY_SKIP %s: cost $%.2f exceeds remaining budget $%.2f", symbol, spend, remaining)
+            continue
+        remaining -= spend
+        result[symbol] = {
+            "investment_amount": round(target, 2),
+            "current_price": round(price, 2),
+            "shares_to_buy": shares,
+            "current_quantity": 0,
+            "additional_buy": shares,
+            "total_after_buy": shares,
+            "actual_investment": round(spend, 2),
+            "remaining_cash": round(remaining, 2),
+        }
+        logger.info("BUY_SIZE %s: target=$%.2f shares=%d spend=$%.2f remaining=$%.2f",
+                    symbol, target, shares, spend, remaining)
+    logger.info("BUY_BUDGET initial=$%.2f spend=$%.2f remaining=$%.2f",
+                cash_budget, cash_budget - remaining, remaining)
+    if not result:
+        return None
     return result
 
 
@@ -1661,46 +1480,24 @@ def _prepare_buy_sizing_inputs(
     share_quantities = None
     account_balance = None
 
+    # Expected sell proceeds are intentionally excluded until broker-confirmed.
+    del additional_cash_from_sell
     if buy_items:
         try:
             account_balance = fetch_account_balance()
         except APIError as exc:
-            logger.error("Failed to fetch account balance for buy sizing: %s", str(exc))
-            account_balance = None
-        if account_balance is None:
+            logger.error("Failed to fetch account balance for buy sizing: %s", exc)
+        if account_balance is not None:
             investment_map = calculate_investment_per_stock(
-                buy_items,
-                additional_cash=additional_cash_from_sell,
+                buy_items, additional_cash=0.0, account_balance=account_balance,
             )
-        else:
-            investment_map = calculate_investment_per_stock(
-                buy_items,
-                additional_cash=additional_cash_from_sell,
-                account_balance=account_balance,
-            )
-        if investment_map:
-            logger.info(
-                "Investment amounts calculated: %d stocks, total investment: %s",
-                len(investment_map),
-                sum(investment_map.values()),
-            )
-            share_quantities = calculate_share_quantities(
-                investment_map,
-                finder,
-                current_holdings=current_holdings_detail,
-            )
-            if share_quantities:
-                logger.info("Share quantities calculated for %d stocks", len(share_quantities))
-                filtered_count = len(investment_map) - len(share_quantities)
-                if filtered_count > 0:
-                    logger.info(
-                        "매수 수량 0인 종목 필터링 완료 - 원래: %d개, 필터링 후: %d개 (제외: %d개)",
-                        len(investment_map),
-                        len(share_quantities),
-                        filtered_count,
-                    )
-        else:
-            logger.warning("Failed to calculate investment amounts")
+            if investment_map:
+                share_quantities = calculate_share_quantities(
+                    investment_map, finder, current_holdings=current_holdings_detail,
+                    cash_budget=_confirmed_buy_budget(account_balance),
+                )
+                # Only funded recommendations reach reporting and persistence consumers.
+                investment_map = {s: investment_map[s] for s in (share_quantities or {})} or None
 
     return investment_map, share_quantities, account_balance
 

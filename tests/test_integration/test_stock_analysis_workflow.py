@@ -193,7 +193,10 @@ class TestStockAnalysisWorkflow(unittest.TestCase):
         buy_items = ["AAPL", "MSFT", "TSLA"]
         not_sell_items = ["AAPL", "MSFT", "GOOGL"]
 
-        message = generate_telegram_message(prev_items, buy_items, not_sell_items)
+        message = generate_telegram_message(
+                prev_items, buy_items, not_sell_items,
+                {s: {"shares_to_buy": 1} for s in buy_items if s not in prev_items},
+            )
 
         # Verify message content
         self.assertIsNotNone(message)

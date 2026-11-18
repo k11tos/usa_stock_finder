@@ -184,7 +184,9 @@ class TestMainFunctions(unittest.TestCase):
         buy_items = ["AAPL", "MSFT", "TSLA"]
         not_sell_items = ["AAPL", "MSFT", "GOOGL"]
 
-        result = generate_telegram_message(prev_items, buy_items, not_sell_items)
+        result = generate_telegram_message(
+            prev_items, buy_items, not_sell_items, {"TSLA": {"shares_to_buy": 1}}
+        )
 
         # Should return a message with changes
         self.assertIsNotNone(result)
@@ -370,7 +372,7 @@ class TestMainFunctions(unittest.TestCase):
         self.assertEqual(excluded, [])
 
     def test_actual_holding_bypasses_quarantine_for_sizing_but_not_new_buy_telegram(self):
-        """Actual holdings intentionally bypass quarantine for additional-buy sizing."""
+        """Actual holdings bypass quarantine but never receive automatic top-ups."""
         symbol = "HELD"
         mock_finder = MagicMock()
         mock_finder.current_price = {symbol: 50.0}
@@ -381,15 +383,14 @@ class TestMainFunctions(unittest.TestCase):
             )
 
         shares = calculate_share_quantities(
-            {symbol: 500.0}, mock_finder, current_holdings=[{"symbol": symbol, "quantity": 1.0}]
+            {symbol: 500.0}, mock_finder, current_holdings=[{"symbol": symbol, "quantity": 1.0}], cash_budget=1000.0
         )
         message = generate_telegram_message([symbol], filtered, [], shares)
 
         self.assertEqual(filtered, [symbol])
         self.assertEqual(excluded, [])
         mock_finder.get_event_quarantine_metrics.assert_not_called()
-        self.assertEqual(shares[symbol]["current_quantity"], 1)
-        self.assertGreater(shares[symbol]["shares_to_buy"], 0)
+        self.assertIsNone(shares)
         self.assertIsNone(message)
 
     def test_normal_momentum_candidate_remains_eligible_after_event_quarantine(self):
@@ -636,8 +637,8 @@ class TestMainFunctions(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(len(result), 3)
-        # With default reserve_ratio (0.1), 9500 * 0.9 / 3 = 2850 per stock
-        expected_investment = 9500.0 * 0.9 / 3
+        # Targets are independent of cash and candidate count.
+        expected_investment = 100.0
         self.assertAlmostEqual(result["AAPL"], expected_investment, places=2)
         self.assertAlmostEqual(result["MSFT"], expected_investment, places=2)
         self.assertAlmostEqual(result["GOOGL"], expected_investment, places=2)
@@ -656,8 +657,8 @@ class TestMainFunctions(unittest.TestCase):
         result = calculate_investment_per_stock(buy_items, reserve_ratio=0.2)
 
         self.assertIsNotNone(result)
-        # With reserve_ratio=0.2, 10000 * 0.8 / 2 = 4000 per stock
-        expected_investment = 10000.0 * 0.8 / 2
+        # Reserve does not change the target. Actual allocation is price-aware.
+        expected_investment = 100.0
         self.assertAlmostEqual(result["AAPL"], expected_investment, places=2)
 
     @patch("main.ScheduleConfig.TIME_CHECK_ENABLED", False)
@@ -733,13 +734,10 @@ class TestMainFunctions(unittest.TestCase):
 
         buy_items = ["AAPL", "MSFT", "GOOGL", "TSLA"]
 
-        # With 1000 cash and 10% reserve = 900, divided by 4 = 225 per stock
-        # But min_investment is 300, so all stocks are below minimum.
-        # NOTE: A future behavior-change PR could consider reducing candidate count
-        # and recomputing sizing, but current behavior should remain unchanged here.
+        # Legacy minimum does not override the approved fixed target.
         result = calculate_investment_per_stock(buy_items, min_investment=300.0)
 
-        self.assertIsNone(result)
+        self.assertEqual(result, dict.fromkeys(buy_items, 100.0))
 
     @patch("main.fetch_account_balance")
     def test_calculate_investment_per_stock_with_max_investment(self, mock_fetch_balance):
@@ -755,13 +753,12 @@ class TestMainFunctions(unittest.TestCase):
         result = calculate_investment_per_stock(buy_items, max_investment=5000.0)
 
         self.assertIsNotNone(result)
-        # Without max, would be 9000, but max is 5000
-        self.assertLessEqual(result["AAPL"], 5000.0)
+        self.assertEqual(result["AAPL"], 100.0)
 
     @patch("main.fetch_account_balance")
     @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "equal")
-    def test_calculate_investment_per_stock_additional_cash_increases_buyable_cash(self, mock_fetch_balance):
-        """Additional cash should increase effective buyable cash before sizing."""
+    def test_calculate_investment_per_stock_additional_cash_does_not_change_targets(self, mock_fetch_balance):
+        """Expected sale proceeds do not change the fixed targets."""
         mock_fetch_balance.return_value = {
             "available_cash": 100.0,
             "buyable_cash": 100.0,
@@ -782,7 +779,7 @@ class TestMainFunctions(unittest.TestCase):
     @patch("main.InvestmentConfig.PROPORTIONAL_PERCENTAGE", 0.1)
     @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "proportional")
     def test_calculate_investment_per_stock_proportional_distribution(self, mock_fetch_balance):
-        """Proportional strategy should use total balance percentage per stock."""
+        """Legacy proportional settings cannot override fixed targets."""
         mock_fetch_balance.return_value = {
             "available_cash": 10000.0,
             "buyable_cash": 9000.0,
@@ -793,13 +790,13 @@ class TestMainFunctions(unittest.TestCase):
         result = calculate_investment_per_stock(buy_items, min_investment=100.0)
 
         self.assertIsNotNone(result)
-        self.assertEqual(result, {"AAPL": 5000.0, "MSFT": 5000.0, "GOOGL": 5000.0})
+        self.assertEqual(result, {"AAPL": 100.0, "MSFT": 100.0, "GOOGL": 100.0})
 
     @patch("main.fetch_account_balance")
     @patch("main.InvestmentConfig.PROPORTIONAL_PERCENTAGE", 0.2)
     @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "proportional")
     def test_calculate_investment_per_stock_proportional_distribution_with_max_cap(self, mock_fetch_balance):
-        """Proportional sizing should still respect max investment cap."""
+        """Legacy proportional and max settings cannot override fixed targets."""
         mock_fetch_balance.return_value = {
             "available_cash": 10000.0,
             "buyable_cash": 9000.0,
@@ -813,14 +810,14 @@ class TestMainFunctions(unittest.TestCase):
             max_investment=6000.0,
         )
 
-        self.assertEqual(result, {"AAPL": 6000.0, "MSFT": 6000.0})
+        self.assertEqual(result, {"AAPL": 100.0, "MSFT": 100.0})
 
     @patch("main.fetch_account_balance")
     @patch("main.InvestmentConfig.DISTRIBUTION_STRATEGY", "equal")
-    def test_calculate_investment_per_stock_equal_distribution_min_filtering_is_all_or_nothing(
+    def test_calculate_investment_per_stock_legacy_equal_settings_use_fixed_targets(
         self, mock_fetch_balance
     ):
-        """Equal-distribution min filtering currently behaves as all-or-nothing across candidates."""
+        """Legacy equal and minimum settings no longer suppress fixed targets."""
         mock_fetch_balance.return_value = {
             "available_cash": 500.0,
             "buyable_cash": 500.0,
@@ -834,10 +831,8 @@ class TestMainFunctions(unittest.TestCase):
             min_investment=200.0,
         )
 
-        # Under current implementation, all symbols receive the same target investment,
-        # so filtering by min investment is all-or-nothing.
-        # NOTE: Mixed-subset affordability could be explored in a future behavior-change PR.
-        self.assertIsNone(result)
+        # These are targets; actual costs are allocated during quantity calculation.
+        self.assertEqual(result, dict.fromkeys(buy_items, 100.0))
 
     @patch("main.fetch_account_balance")
     def test_calculate_investment_per_stock_no_balance(self, mock_fetch_balance):
@@ -868,18 +863,17 @@ class TestMainFunctions(unittest.TestCase):
 
         buy_items = ["AAPL", "MSFT"]
 
-        # With 50 cash, 10% reserve = 45, divided by 2 = 22.5 per stock
-        # But min_investment default is 100, so insufficient
+        # Targets remain $100; quantity calculation enforces available cash.
         result = calculate_investment_per_stock(buy_items, min_investment=100.0)
 
-        self.assertIsNone(result)
+        self.assertEqual(result, dict.fromkeys(buy_items, 100.0))
 
     @patch("main.fetch_holdings_detail")
     def test_calculate_share_quantities_success(self, mock_fetch_holdings):
         """Test calculate_share_quantities with successful calculation"""
         # Mock finder
         mock_finder = MagicMock()
-        mock_finder.current_price = {"AAPL": 150.0, "MSFT": 300.0}
+        mock_finder.current_price = {"AAPL": 50.0, "MSFT": 30.0}
 
         # Mock holdings
         mock_fetch_holdings.return_value = [
@@ -888,28 +882,13 @@ class TestMainFunctions(unittest.TestCase):
 
         investment_map = {"AAPL": 3000.0, "MSFT": 3000.0}
 
-        result = calculate_share_quantities(investment_map, mock_finder)
+        result = calculate_share_quantities(investment_map, mock_finder, cash_budget=10000.0)
 
-        self.assertIsNotNone(result)
-        self.assertIn("AAPL", result)
-        self.assertIn("MSFT", result)
-
-        # AAPL: 3000 / 150 = 20 shares (target total quantity)
-        # Currently holding 10 shares
-        # shares_to_buy = max(20 - 10, 0) = 10 shares (additional buy)
-        # total_after_buy = 10 + 10 = 20 shares
-        aapl_info = result["AAPL"]
-        self.assertEqual(aapl_info["shares_to_buy"], 10)  # Actual shares to buy (additional)
-        self.assertEqual(aapl_info["current_quantity"], 10)  # Currently holding
-        self.assertEqual(aapl_info["additional_buy"], 10)  # Additional shares to buy (same as shares_to_buy)
-        self.assertEqual(aapl_info["total_after_buy"], 20)  # Total after buying
-
-        # MSFT: 3000 / 300 = 10 shares (target total), not holding any
-        # shares_to_buy = 10 shares (new buy)
-        msft_info = result["MSFT"]
-        self.assertEqual(msft_info["shares_to_buy"], 10)  # New buy quantity
-        self.assertEqual(msft_info["current_quantity"], 0)  # Not holding
-        self.assertEqual(msft_info["total_after_buy"], 10)  # Total after buying
+        assert result is not None
+        self.assertNotIn("AAPL", result)  # Existing holding never topped up.
+        self.assertEqual(result["MSFT"]["shares_to_buy"], 3)
+        self.assertEqual(result["MSFT"]["actual_investment"], 90.0)
+        self.assertEqual(result["MSFT"]["current_quantity"], 0)
 
     def test_calculate_share_quantities_filters_symbol_when_existing_holding_above_target(self):
         """Symbol should be filtered out when current holding already exceeds target quantity."""
@@ -919,7 +898,7 @@ class TestMainFunctions(unittest.TestCase):
         investment_map = {"AAPL": 500.0}  # target_total_quantity = 5
         current_holdings = [{"symbol": "AAPL", "quantity": 8.0}]
 
-        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings, cash_budget=10000.0)
 
         self.assertIsNone(result)
 
@@ -931,7 +910,7 @@ class TestMainFunctions(unittest.TestCase):
         investment_map = {"AAPL": 1000.0}
         current_holdings = []
 
-        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings, cash_budget=10000.0)
 
         self.assertIsNone(result)
 
@@ -943,7 +922,7 @@ class TestMainFunctions(unittest.TestCase):
         investment_map = {"AAPL": 10.0}  # target_total_quantity = 0
         current_holdings = []
 
-        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings, cash_budget=10000.0)
 
         self.assertIsNone(result)
 
@@ -955,11 +934,12 @@ class TestMainFunctions(unittest.TestCase):
         investment_map = {"AAPL": 1000.0, "MSFT": 1000.0}
         current_holdings = []
 
-        result = calculate_share_quantities(investment_map, mock_finder, current_holdings)
+        result = calculate_share_quantities(investment_map, mock_finder, current_holdings, cash_budget=10000.0)
 
         self.assertIsNotNone(result)
+        assert result is not None
         self.assertEqual(list(result.keys()), ["AAPL"])
-        self.assertEqual(result["AAPL"]["shares_to_buy"], 10)
+        self.assertEqual(result["AAPL"]["shares_to_buy"], 1)
         self.assertNotIn("MSFT", result)
 
     @patch("main.fetch_holdings_detail")
@@ -1377,6 +1357,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_calculate_correlations.return_value = {"50": {"AAPL": 55.0, "MSFT": 52.0, "TSLA": 51.0}}
             mock_select_stocks.return_value = (["MSFT", "TSLA"], ["AAPL", "TSLA"])
             mock_in_cooldown.return_value = False
+            stack.enter_context(patch("main.fetch_account_balance", return_value={"buyable_cash": 1000.0}))
             mock_fetch_holdings_detail.return_value = [{"symbol": "AAPL", "quantity": 1.0}]
             mock_evaluate_sell.return_value = {}
             mock_calculate_sell_quantities.return_value = None
@@ -1397,7 +1378,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             mock_calculate_correlations.assert_called_once_with(mock_finder)
             mock_select_stocks.assert_called_once()
             mock_evaluate_sell.assert_called_once()
-            mock_calculate_investment.assert_called_once_with(["MSFT"], additional_cash=0.0)
+            mock_calculate_investment.assert_called_once_with(["MSFT"], additional_cash=0.0, account_balance=ANY)
             mock_generate_message.assert_called_once()
             mock_send_telegram.assert_called_once()
             mock_save_json.assert_called_once_with(["AAPL", "MSFT"], "data/data.json")
@@ -1431,7 +1412,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             stack.enter_context(patch("main.fetch_holdings_detail", return_value=[]))
             stack.enter_context(patch("main.evaluate_sell_decisions", return_value={}))
             stack.enter_context(patch("main.calculate_sell_quantities", return_value=None))
-            stack.enter_context(patch("main.fetch_account_balance", return_value=None))
+            stack.enter_context(patch("main.fetch_account_balance", return_value={"buyable_cash": 1000.0}))
             mock_calculate_investment = stack.enter_context(
                 patch("main.calculate_investment_per_stock", return_value={"MOMO": 500.0})
             )
@@ -1469,7 +1450,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
             main()
 
         self.assertEqual(mock_finder.has_valid_trend_template.call_count, 2)
-        mock_calculate_investment.assert_called_once_with(["MOMO"], additional_cash=0.0)
+        mock_calculate_investment.assert_called_once_with(["MOMO"], additional_cash=0.0, account_balance=ANY)
         mock_calculate_shares.assert_called_once()
         self.assertEqual(mock_calculate_shares.call_args.args[0], {"MOMO": 500.0})
         telegram_args = mock_generate_message.call_args.args
@@ -1495,7 +1476,7 @@ class TestMainOrchestrationSmoke(unittest.TestCase):
         )
         close_by_symbol = {
             prth: np.concatenate([pre_event_close, [130.0], pinned_close]),
-            momentum: np.linspace(50.0, 150.0, 260),
+            momentum: np.linspace(30.0, 90.0, 260),
         }
         ohlc_data: dict[tuple[str, str], np.ndarray] = {}
         for symbol, close in close_by_symbol.items():

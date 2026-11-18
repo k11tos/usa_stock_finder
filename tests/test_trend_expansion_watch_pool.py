@@ -1036,7 +1036,8 @@ def test_watch_affordability_proxy_does_not_change_daily_whole_share_sizing():
     from types import SimpleNamespace
     from main import calculate_share_quantities
     finder = SimpleNamespace(current_price={"LOW": 5, "CEILING": 90, "LATER": 101})
-    result = calculate_share_quantities({"LOW": 100, "CEILING": 100, "LATER": 100}, finder, current_holdings=[])
+    result = calculate_share_quantities(
+        {"LOW": 100, "CEILING": 100, "LATER": 100}, finder, current_holdings=[], cash_budget=1000)
     assert result["LOW"]["shares_to_buy"] == 20
     assert result["CEILING"]["shares_to_buy"] == 1
     assert result["CEILING"]["actual_investment"] == 90

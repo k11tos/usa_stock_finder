@@ -79,7 +79,10 @@ class TestTelegramIntegration(unittest.TestCase):
 
         # Generate Telegram message
         prev_items = ["AAPL"]  # MSFT를 제거하여 새로운 구매 항목 생성
-        message = generate_telegram_message(prev_items, buy_items, not_sell_items)
+        message = generate_telegram_message(
+                prev_items, buy_items, not_sell_items,
+                {s: {"shares_to_buy": 1} for s in buy_items if s not in prev_items},
+            )
 
         # Verify message content
         self.assertIsNotNone(message)
@@ -134,7 +137,8 @@ class TestTelegramIntegration(unittest.TestCase):
             with self.subTest(scenario=scenario["name"]):
                 # Generate message for scenario
                 message = generate_telegram_message(
-                    scenario["prev_items"], scenario["buy_items"], scenario["not_sell_items"]
+                    scenario["prev_items"], scenario["buy_items"], scenario["not_sell_items"],
+                    {s: {"shares_to_buy": 1} for s in scenario["buy_items"] if s not in scenario["prev_items"]}
                 )
 
                 # Verify message contains expected content
@@ -234,7 +238,8 @@ class TestTelegramIntegration(unittest.TestCase):
         for test_case in test_cases:
             with self.subTest(test_case=test_case["name"]):
                 message = generate_telegram_message(
-                    test_case["prev_items"], test_case["buy_items"], test_case["not_sell_items"]
+                    test_case["prev_items"], test_case["buy_items"], test_case["not_sell_items"],
+                    {s: {"shares_to_buy": 1} for s in test_case["buy_items"] if s not in test_case["prev_items"]}
                 )
 
                 if test_case["expected_result"] == "None":
@@ -317,7 +322,10 @@ class TestTelegramIntegration(unittest.TestCase):
             buy_items = prev_items + [f"NEW{i}"]
             not_sell_items = prev_items
 
-            message = generate_telegram_message(prev_items, buy_items, not_sell_items)
+            message = generate_telegram_message(
+                prev_items, buy_items, not_sell_items,
+                {s: {"shares_to_buy": 1} for s in buy_items if s not in prev_items},
+            )
             if message:
                 messages.append(message)
 

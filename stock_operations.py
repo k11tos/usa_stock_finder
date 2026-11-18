@@ -522,7 +522,7 @@ def fetch_account_balance() -> dict[str, Any] | None:
                 exchange_rate = _to_float(record.get("frst_bltn_exrt", 0))
                 if crcy_cd == "USD":
                     available_cash_usd += cash_usd
-                    buyable_cash_usd += buyable_usd if buyable_usd > 0 else cash_usd
+                    buyable_cash_usd += max(buyable_usd, 0.0)
                     currency_cash_krw += converted_krw
                     broker_raw_output2_frcr_evlu_amt2 += converted_krw
                     if exchange_rate > 0 and exchange_rate_krw_per_usd == 0.0:
@@ -559,7 +559,7 @@ def fetch_account_balance() -> dict[str, Any] | None:
             total_equity_usd = available_cash_usd + holdings_market_value_usd
             result = {
                 "available_cash_usd": available_cash_usd,
-                "buyable_cash_usd": buyable_cash_usd if buyable_cash_usd > 0 else available_cash_usd,
+                "buyable_cash_usd": buyable_cash_usd,
                 "currency_cash_krw": currency_cash_krw,
                 "exchange_rate_krw_per_usd": exchange_rate_krw_per_usd,
                 "holdings_market_value_usd": holdings_market_value_usd,
@@ -570,7 +570,7 @@ def fetch_account_balance() -> dict[str, Any] | None:
                 "broker_raw_output3": output3_records,
                 # Backward-compatible USD aliases.
                 "available_cash": available_cash_usd,
-                "buyable_cash": buyable_cash_usd if buyable_cash_usd > 0 else available_cash_usd,
+                "buyable_cash": buyable_cash_usd,
                 "total_balance": total_equity_usd,
             }
 

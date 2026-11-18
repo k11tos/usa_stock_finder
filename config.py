@@ -190,16 +190,20 @@ class TrendExpansionConfig:
 class InvestmentConfig:
     """Investment calculation parameters."""
 
+    # Approved fixed new-position target. No automatic or environment-driven adjustment.
+    TARGET_INVESTMENT = 100.0
+
     # Reserve ratio (percentage of cash to keep as reserve)
     RESERVE_RATIO = float(os.getenv("RESERVE_RATIO", "0.1"))  # 10%
 
+    # Legacy sizing settings retained for config compatibility; ignored by live fixed sizing.
     # Min/Max investment constraints
     MIN_INVESTMENT = float(os.getenv("MIN_INVESTMENT", "100.0"))  # $100 minimum
     MAX_INVESTMENT = float(os.getenv("MAX_INVESTMENT", "0.0"))  # 0 = no limit
 
     # Investment distribution strategy
-    # Options: "equal" (균등 분배), "proportional" (비율 기반 분배)
-    DISTRIBUTION_STRATEGY = os.getenv("DISTRIBUTION_STRATEGY", "equal")
+    # Legacy values "equal"/"proportional" are accepted but live sizing is always fixed.
+    DISTRIBUTION_STRATEGY = os.getenv("DISTRIBUTION_STRATEGY", "fixed")
 
     # For proportional distribution: percentage of account balance per stock
     PROPORTIONAL_PERCENTAGE = float(os.getenv("PROPORTIONAL_PERCENTAGE", "0.0"))  # 0 = equal distribution
@@ -301,6 +305,7 @@ def get_config() -> dict[str, Any]:
             "max_names": TrendExpansionConfig.MAX_NAMES,
         },
         "investment": {
+            "target_investment": InvestmentConfig.TARGET_INVESTMENT,
             "reserve_ratio": InvestmentConfig.RESERVE_RATIO,
             "min_investment": InvestmentConfig.MIN_INVESTMENT,
             "max_investment": InvestmentConfig.MAX_INVESTMENT,
