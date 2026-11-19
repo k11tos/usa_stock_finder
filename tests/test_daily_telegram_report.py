@@ -140,7 +140,7 @@ def assert_trade_details(message):
     for detail in (
         "신규 매수: MOMO",
         "매수 수량: 5주",
-        "투자 금액: $500.00",
+        "목표 투자금: $500.00",
         "현재가: $100.00",
         "매도 (절대 손절): TSLA",
         "매도 수량: 3주",
@@ -446,7 +446,7 @@ def test_telegram_failure_remains_observable_without_duplicate_sends(daily_run, 
 
 def test_legacy_funnel_argument_does_not_leak_into_telegram():
     lines = ["[Buy Funnel]", "Initial: 96", "매수 제외: PRTH"]
-    message = main.generate_telegram_message([], ["MOMO"], [], buy_funnel_lines=lines)
+    message = main.generate_telegram_message([], ["MOMO"], [], {"MOMO": {"shares_to_buy": 1}}, buy_funnel_lines=lines)
     assert "신규 매수: MOMO" in "\n".join(message)
     assert all(line not in message for line in lines)
     assert main.generate_telegram_message(["MOMO"], ["MOMO"], [], buy_funnel_lines=lines) is None

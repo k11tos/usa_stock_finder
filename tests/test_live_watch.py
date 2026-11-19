@@ -117,9 +117,9 @@ def test_daily_selection_real_safety_sizing_and_sources(admitted, monkeypatch):
     buy, hold = main.select_stocks(finder, {str(days): dict.fromkeys(combined, 60) for days in (50, 100, 200)})
     assert buy == ['CORE', 'FBRT', 'MOMO'] and not hold
     allocations = main.calculate_investment_per_stock(
-        buy, account_balance={'available_cash': 1000, 'total_balance': 1000})
+        buy, account_balance={'available_cash': 1000, 'buyable_cash': 1000, 'total_balance': 1000})
     assert allocations == dict.fromkeys(buy, 100.0)
-    quantities = main.calculate_share_quantities(allocations, finder, current_holdings=[])
+    quantities = main.calculate_share_quantities(allocations, finder, current_holdings=[], cash_budget=900)
     assert quantities['FBRT']['shares_to_buy'] == 3 and 'MOMO' not in quantities and 'FAIL' not in quantities
     rows = build_buy_signal_rows(
         run_id='fixture', run_date=DAY, share_quantities=quantities, source_pool_by_symbol=sources)
@@ -161,7 +161,8 @@ def test_real_daily_main_with_expansion_and_rollback(admitted, monkeypatch, enab
     # Real sell engine's holding persistence and priority have separate full-suite regressions.
     monkeypatch.setattr(main, '_prepare_sell_decisions_and_quantities', lambda *a: (
         {'OLD': SellDecision('OLD', SellReason.NONE, 0)}, None, 0, []))
-    monkeypatch.setattr(main, 'fetch_account_balance', lambda: {'available_cash': 1000, 'total_balance': 1000})
+    monkeypatch.setattr(main, 'fetch_account_balance', lambda: {
+        'available_cash': 1000, 'buyable_cash': 1000, 'total_balance': 1000})
     allocations = main.calculate_investment_per_stock
     sizing_inputs = []
     def record_sizing(symbols, **kwargs):
@@ -206,7 +207,8 @@ def test_default_and_false_do_not_read_artifacts(monkeypatch, value):
     assert combine_watch(original)[0] is original
 
 
-def test_cli_off_on_rollback_has_no_state_writes(admitted, monkeypatch, tmp_path):
+@pytest.mark.parametrize('strategy', [None, 'equal'])
+def test_cli_off_on_rollback_has_no_state_writes(admitted, monkeypatch, tmp_path, strategy):
     """The documented CLI prints admission only; fixture approval is never production evidence."""
     import os
     import subprocess
@@ -217,7 +219,10 @@ def test_cli_off_on_rollback_has_no_state_writes(admitted, monkeypatch, tmp_path
     monkeypatch.setenv('TREND_EXPANSION_ACTIVATION_REVIEW', str(tmp_path / 'review.json'))
     monkeypatch.setenv('MIN_INVESTMENT', '100')
     monkeypatch.setenv('MAX_INVESTMENT', '100')
-    monkeypatch.setenv('DISTRIBUTION_STRATEGY', 'equal')
+    if strategy is None:
+        monkeypatch.delenv('DISTRIBUTION_STRATEGY', raising=False)
+    else:
+        monkeypatch.setenv('DISTRIBUTION_STRATEGY', strategy)
     monkeypatch.setenv('TREND_EXPANSION_MAX_NAMES', '50')
     (tmp_path / 'holding_state.json').write_text('["OLD", "FBRT"]')
     (tmp_path / 'trades.csv').write_text('symbol,quantity\nOLD,3\n')
