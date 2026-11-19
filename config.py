@@ -203,7 +203,8 @@ class InvestmentConfig:
 
     # Investment distribution strategy
     # Legacy values "equal"/"proportional" are accepted but live sizing is always fixed.
-    DISTRIBUTION_STRATEGY = os.getenv("DISTRIBUTION_STRATEGY", "fixed")
+    # Preserve the legacy default required by the unchanged Expansion admission gate.
+    DISTRIBUTION_STRATEGY = os.getenv("DISTRIBUTION_STRATEGY", "equal")
 
     # For proportional distribution: percentage of account balance per stock
     PROPORTIONAL_PERCENTAGE = float(os.getenv("PROPORTIONAL_PERCENTAGE", "0.0"))  # 0 = equal distribution

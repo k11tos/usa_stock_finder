@@ -21,7 +21,11 @@ semantics and actual buying power still require operator verification.
 environment override. Existing `DISTRIBUTION_STRATEGY` (including explicit equal
 or proportional), `MIN_INVESTMENT`, `MAX_INVESTMENT`, and
 `PROPORTIONAL_PERCENTAGE` remain accepted for configuration compatibility but no
-longer affect live sizing. The old helper arguments remain accepted, including
+longer affect live sizing. The strategy default remains `equal` for compatibility
+with the unchanged Expansion admission gate. That gate still requires its
+existing min/max=$100 settings and operator-approved artifacts; fixed live sizing
+does not bypass those checks or enable Expansion.
+The old helper arguments remain accepted, including
 `additional_cash`, which is ignored. Reserve remains effective in the actual
 allocation path.
 

@@ -207,7 +207,8 @@ def test_default_and_false_do_not_read_artifacts(monkeypatch, value):
     assert combine_watch(original)[0] is original
 
 
-def test_cli_off_on_rollback_has_no_state_writes(admitted, monkeypatch, tmp_path):
+@pytest.mark.parametrize('strategy', [None, 'equal'])
+def test_cli_off_on_rollback_has_no_state_writes(admitted, monkeypatch, tmp_path, strategy):
     """The documented CLI prints admission only; fixture approval is never production evidence."""
     import os
     import subprocess
@@ -218,7 +219,10 @@ def test_cli_off_on_rollback_has_no_state_writes(admitted, monkeypatch, tmp_path
     monkeypatch.setenv('TREND_EXPANSION_ACTIVATION_REVIEW', str(tmp_path / 'review.json'))
     monkeypatch.setenv('MIN_INVESTMENT', '100')
     monkeypatch.setenv('MAX_INVESTMENT', '100')
-    monkeypatch.setenv('DISTRIBUTION_STRATEGY', 'equal')
+    if strategy is None:
+        monkeypatch.delenv('DISTRIBUTION_STRATEGY', raising=False)
+    else:
+        monkeypatch.setenv('DISTRIBUTION_STRATEGY', strategy)
     monkeypatch.setenv('TREND_EXPANSION_MAX_NAMES', '50')
     (tmp_path / 'holding_state.json').write_text('["OLD", "FBRT"]')
     (tmp_path / 'trades.csv').write_text('symbol,quantity\nOLD,3\n')
